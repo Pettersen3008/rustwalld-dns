@@ -1,0 +1,45 @@
+[Unit]
+Description=Rustwall local DNS policy and security engine
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=rustwalld-dns
+Group=rustwalld-dns
+ExecStart=/opt/rustwalld-dns/current/bin/rustwalld-dns --config /etc/rustwalld-dns/config.toml
+EnvironmentFile=/etc/rustwalld-dns/service.env
+Environment=RUST_LOG=info
+WorkingDirectory=/var/lib/rustwalld-dns
+StateDirectory=rustwalld-dns
+StateDirectoryMode=0750
+UMask=0077
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+KillSignal=SIGTERM
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

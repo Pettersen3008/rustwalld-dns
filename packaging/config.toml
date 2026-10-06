@@ -1,0 +1,20 @@
+# Listener changes need a restart. Policy changes use the console/API after bootstrap.
+dns_listen = "127.0.0.1:5353"
+api_listen = "127.0.0.1:8080"
+database = "/var/lib/rustwalld-dns/rustwalld.sqlite"
+web_root = "/opt/rustwalld-dns/current/web"
+
+[policy]
+default_policy = "default"
+allowed_clients = ["127.0.0.1/32", "::1/128"]
+
+[[policy.upstreams]]
+name = "default"
+addresses = ["1.1.1.1:53", "9.9.9.9:53"]
+timeout_ms = 1500
+
+[[policy.policies]]
+name = "default"
+upstream = "default"
+lists = []
+rewrites = []

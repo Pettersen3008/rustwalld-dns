@@ -1,0 +1,12 @@
+{
+  "pihole": {
+    "tag": "2026.09.0",
+    "image": "pihole/pihole@sha256:5b9c8cf51de7d6d3f2240dbe72baf5f06e1fd39cb4d77a99fab4fa13e23bd1be",
+    "release": "https://github.com/pi-hole/docker-pi-hole/releases/tag/2026.09.0"
+  },
+  "adguard": {
+    "tag": "v0.107.79",
+    "image": "adguard/adguardhome@sha256:aba9e3bf0613be3ba3755e1fc311b126e2c24bec25e18b6483894a88283074f0",
+    "release": "https://github.com/AdguardTeam/AdGuardHome/releases/tag/v0.107.79"
+  }
+}

@@ -1,0 +1,38 @@
+[package]
+name = "resolver"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+hickory-proto.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+rand = "0.9"
+tokio-util.workspace = true
+serde.workspace = true
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+webpki-roots = "1"
+h2 = "0.4"
+http = "1"
+bytes = "1"
+hashbrown.workspace = true
+
+[dev-dependencies]
+criterion = "0.8"
+rcgen = "0.14"
+
+[[bench]]
+name = "cache"
+harness = false
+
+[[bench]]
+name = "tls"
+harness = false
+
+[[bench]]
+name = "https"
+harness = false

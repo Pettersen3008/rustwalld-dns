@@ -1,0 +1,37 @@
+# Optional management console, relative to this configuration file:
+# web_root = "web/dist"
+dns_listen = "127.0.0.1:5353"
+api_listen = "127.0.0.1:8080"
+database = "rustwalld.sqlite"
+dns_cache_entries = 4096
+decision_cache_entries = 16384
+max_inflight = 256
+max_udp_queries = 512
+max_tcp_connections = 128
+event_queue = 4096
+history_rows = 100000
+filter_files = []
+
+[policy]
+default_policy = "default"
+bindings = []
+allowed_clients = [
+    "127.0.0.1/32",
+    "::1/128",
+]
+assertions = []
+
+[[policy.policies]]
+name = "default"
+upstream = "default"
+lists = []
+rewrites = []
+
+[[policy.upstreams]]
+name = "default"
+addresses = [
+    "1.1.1.1:53",
+    "9.9.9.9:53",
+]
+timeout_ms = 1500
+

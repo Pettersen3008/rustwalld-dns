@@ -1,0 +1,16 @@
+[package]
+name = "policy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+filtering = { path = "../filtering", version = "0.1" }
+resolver = { path = "../resolver", version = "0.1" }
+hickory-proto.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+ipnet = { version = "2", features = ["serde"] }

@@ -1,0 +1,31 @@
+[package]
+name = "dns-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+hickory-proto.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+resolver = { path = "../resolver", version = "0.1" }
+policy = { path = "../policy", version = "0.1" }
+filtering = { path = "../filtering", version = "0.1" }
+arc-swap.workspace = true
+
+[dev-dependencies]
+criterion = "0.8"
+allocation-counter = "0.8"
+h2 = "0.4"
+http = "1"
+bytes = "1"
+rcgen = "0.14"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+
+[[bench]]
+name = "engine"
+harness = false

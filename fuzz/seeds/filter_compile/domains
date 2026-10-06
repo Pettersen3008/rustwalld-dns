@@ -1,0 +1,5 @@
+=ads.example
+EXAMPLE.com
+@@safe.example.com
+0.0.0.0 hosts.test other.test
+||track.test^

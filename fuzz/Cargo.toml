@@ -1,0 +1,69 @@
+[package]
+name = "rustwalld-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+members = ["."]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+hickory-proto = "0.26.3"
+filtering = { path = "../crates/filtering" }
+resolver = { path = "../crates/resolver" }
+policy = { path = "../crates/policy" }
+rustwalld-dns = { path = "../crates/app" }
+http = "1"
+
+[[bin]]
+name = "download_config"
+path = "fuzz_targets/download_config.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dns_message"
+path = "fuzz_targets/dns_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "policy_check"
+path = "fuzz_targets/policy_check.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "filter_compile"
+path = "fuzz_targets/filter_compile.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tls_config"
+path = "fuzz_targets/tls_config.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "doh_response"
+path = "fuzz_targets/doh_response.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cache_lookup"
+path = "fuzz_targets/cache_lookup.rs"
+test = false
+doc = false
+bench = false

@@ -1,0 +1,34 @@
+[workspace]
+members = ["crates/dns-core", "crates/resolver", "crates/filtering", "crates/policy", "crates/app"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+hickory-proto = "0.26.3"
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "signal"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+thiserror = "2"
+tracing = "0.1"
+serde = { version = "1", features = ["derive", "rc"] }
+arc-swap = "1"
+hashbrown = { version = "0.17.1", default-features = false, features = ["inline-more"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+# Same optimization as release, with symbols for local CPU-stack attribution.
+[profile.profiling]
+inherits = "release"
+debug = 2

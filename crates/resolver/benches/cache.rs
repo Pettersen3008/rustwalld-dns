@@ -1,0 +1,58 @@
+#![allow(clippy::unwrap_used)]
+use criterion::{Criterion, criterion_group, criterion_main};
+use hickory_proto::{
+    op::{Message, Query},
+    rr::{Name, RData, Record, RecordType, rdata::A},
+};
+use resolver::{
+    cache::BoundedCache,
+    response_cache::{CacheKey, ResponseCache},
+};
+use std::time::Instant;
+fn bench(c: &mut Criterion) {
+    let mut request = Message::query();
+    request.add_query(Query::query(
+        Name::from_ascii("bench.example.").unwrap(),
+        RecordType::A,
+    ));
+    let key = CacheKey::new(&request, 0, 1).unwrap();
+    let mut response = request.into_response();
+    response.add_answer(Record::from_rdata(
+        key.query.name().clone(),
+        3600,
+        RData::A(A("192.0.2.1".parse().unwrap())),
+    ));
+    let cache = ResponseCache::new(1000);
+    let now = Instant::now();
+    cache.insert(key.clone(), response, now);
+    c.bench_function("response_cache_hit_message_clone", |b| {
+        b.iter(|| std::hint::black_box(cache.get(std::hint::black_box(&key), now)))
+    });
+    let cache = BoundedCache::new(8192);
+    for key in 0..1024_u64 {
+        cache.insert(key, key);
+    }
+    let mut cursor = 0_u64;
+    c.bench_function("bounded_cache_working_set_hit", |b| {
+        b.iter(|| {
+            cursor = (cursor + 1) % 1024;
+            std::hint::black_box(cache.get(std::hint::black_box(&cursor)))
+        })
+    });
+    assert_eq!(cache.len(), 1024);
+    let cache = BoundedCache::new(1024);
+    let mut cursor = 0_u64;
+    for _ in 0..20000 {
+        cache.insert(cursor, cursor);
+        cursor += 1;
+    }
+    c.bench_function("bounded_cache_fifo_churn", |b| {
+        b.iter(|| {
+            cursor = cursor.wrapping_add(1);
+            cache.insert(std::hint::black_box(cursor), cursor);
+        })
+    });
+    assert!(cache.len() <= 1024);
+}
+criterion_group!(benches, bench);
+criterion_main!(benches);

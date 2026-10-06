@@ -1,0 +1,17 @@
+/target/
+/fuzz/target/
+*.sqlite*
+
+/fuzz/corpus/
+/fuzz/artifacts/
+.tmp*/
+
+/web/node_modules/
+/web/dist/
+/web/test-results/
+/web/playwright-report/
+/web/*.tsbuildinfo
+
+__pycache__/
+
+/web/target/

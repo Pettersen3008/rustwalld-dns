@@ -1,0 +1,134 @@
+name: CI
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - run: cargo test --locked -p dns-core --example cpu_probe
+      - run: cargo bench --workspace --no-run --locked
+      - run: cargo install cargo-audit cargo-deny --locked
+      - run: cargo audit
+      - run: cargo deny check
+  fuzz:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo install cargo-fuzz --locked
+      - run: |
+          mkdir -p fuzz/corpus/dns_message fuzz/corpus/filter_compile fuzz/corpus/tls_config fuzz/corpus/doh_response fuzz/corpus/policy_check
+          cp fuzz/seeds/dns_message/* fuzz/corpus/dns_message/
+          cp fuzz/seeds/filter_compile/* fuzz/corpus/filter_compile/
+          cp fuzz/seeds/tls_config/* fuzz/corpus/tls_config/
+          cp fuzz/seeds/doh_response/* fuzz/corpus/doh_response/
+          cp fuzz/seeds/policy_check/* fuzz/corpus/policy_check/
+      - run: cargo fuzz run dns_message -- -max_total_time=20 -max_len=4096
+      - run: cargo fuzz run filter_compile -- -max_total_time=20 -max_len=8192
+      - run: cargo fuzz run tls_config -- -max_total_time=20 -max_len=65536
+      - run: cargo fuzz run doh_response -- -max_total_time=20 -max_len=65544
+      - run: cargo fuzz run policy_check -- -max_total_time=20 -max_len=4096
+      - run: |
+          mkdir -p fuzz/corpus/cache_lookup
+          cp fuzz/seeds/cache_lookup/* fuzz/corpus/cache_lookup/
+          cargo fuzz run cache_lookup -- -max_total_time=20 -max_len=4096
+      - run: |
+          mkdir -p fuzz/corpus/download_config
+          cp fuzz/seeds/download_config/* fuzz/corpus/download_config/
+          cargo fuzz run download_config -- -max_total_time=20 -max_len=4096
+  benchmarks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo bench -p filtering --bench matching --locked -- --warm-up-time 1 --measurement-time 2 --sample-size 20
+      - run: cargo bench -p resolver --bench cache --locked -- --warm-up-time 1 --measurement-time 2 --sample-size 20
+      - run: cargo bench -p resolver --bench tls --locked -- --warm-up-time 1 --measurement-time 2 --sample-size 20
+      - run: cargo bench -p resolver --bench https --locked -- --warm-up-time 1 --measurement-time 2 --sample-size 20
+      - run: cargo bench -p dns-core --bench engine --locked -- --warm-up-time 1 --measurement-time 2 --sample-size 20
+      - run: cargo run --release --locked -p filtering --example footprint -- 1000000 > target/filter-footprint.txt
+      - run: cargo build --release --locked -p dns-core --example cpu_probe
+      - run: python3 scripts/cpu-probe.py --iterations 10000 --batches 1 --output target/cpu-query-ci.json
+      - name: CPU probe rejects accidental upstream work
+        run: |
+          if target/release/examples/cpu_probe --scenario cache --iterations 10000 --batches 1 --inject-cache-miss true > target/cpu-query-rejection.log 2>&1; then
+            echo 'unexpected upstream work was incorrectly measured as local CPU'
+            exit 1
+          fi
+          python3 -c "from pathlib import Path; assert 'probe failed or attempted upstream work' in Path('target/cpu-query-rejection.log').read_text()"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: criterion-baseline
+          path: |
+            target/criterion
+            target/filter-footprint.txt
+            target/cpu-query-ci.json
+            target/cpu-query-rejection.log
+
+  console:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: cargo build -p rustwalld-dns --locked
+      - run: npm --prefix web ci
+      - run: npm --prefix web run format:check
+      - run: npm --prefix web run build
+      - run: npm --prefix web exec -- playwright install --with-deps chromium
+      - run: npm --prefix web test
+      - run: npm --prefix web audit
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: console-browser-evidence
+          path: web/test-results
+
+  deployment:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: cargo build -p rustwalld-dns --release --locked --example resilience --example encrypted_resilience --example control_soak
+      - run: python3 scripts/release.py
+      - run: python3 -m unittest discover -s scripts/tests -v
+      - run: scripts/deployment-smoke.sh target/releases/*.tar.gz
+      - run: target/release/examples/resilience --binary target/release/rustwalld-dns --rules 2000 --duration-ms 300 --output target/resilience-ci.json
+      - run: target/release/examples/encrypted_resilience --binary target/release/rustwalld-dns --duration-ms 300 --output target/encrypted-resilience-ci.json
+      - run: target/release/examples/control_soak --binary target/release/rustwalld-dns --phase-ms 300 --cycles 2 --rules 2000 --output target/control-soak-ci.json > target/control-soak-ci.log 2>&1
+      - name: Correctness gate rejects corrupted fixture answers
+        run: |
+          if target/release/examples/control_soak --binary target/release/rustwalld-dns --phase-ms 300 --cycles 1 --rules 2000 --inject-wrong-answer > target/control-soak-rejection.log 2>&1; then
+            echo 'corrupted answers were incorrectly accepted'
+            exit 1
+          fi
+          python3 -c "from pathlib import Path; assert 'cached.test: timeout=false, wrong=true' in Path('target/control-soak-rejection.log').read_text()"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deployment-bundle-and-evidence
+          path: |
+            target/releases
+            target/resilience-ci.json
+            target/encrypted-resilience-ci.json
+            target/control-soak-ci.json
+            target/control-soak-ci.log
+            target/control-soak-rejection.log

@@ -1,8 +1,8 @@
 //! Offline file loading and diagnostic presentation, outside the DNS executor.
 use crate::config::Config;
 use clap::ValueEnum;
-use filtering::Action;
-use policy::{AssertionFailure, CheckReport, PolicySnapshot};
+use rustwalld_dns_filter::Action;
+use rustwalld_dns_policy::{AssertionFailure, CheckReport, PolicySnapshot};
 use std::{error::Error, io::Write, path::Path};
 
 #[derive(Clone, Copy, Default, ValueEnum)]

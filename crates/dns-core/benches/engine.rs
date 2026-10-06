@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used)]
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use dns_core::telemetry::Telemetry;
 use hickory_proto::op::Message;
+use rustwalld_dns_core::telemetry::Telemetry;
 use std::time::Instant;
 #[path = "support/fixtures.rs"]
 mod fixtures;
@@ -22,7 +22,7 @@ fn bench(c: &mut Criterion) {
         c.bench_function(name, |b| {
             b.iter(|| {
                 let snapshot = engine.active.load();
-                std::hint::black_box(snapshot.select(std::hint::black_box(address)).policy.id)
+                std::hint::black_box(snapshot.select(std::hint::black_box(address)).policy.id())
             })
         });
     }
@@ -50,7 +50,7 @@ fn bench(c: &mut Criterion) {
     }
     assert_eq!(
         engine
-            .resolver
+            .resolver()
             .metrics
             .upstream_lookups
             .load(std::sync::atomic::Ordering::Relaxed),
@@ -81,7 +81,7 @@ fn bench(c: &mut Criterion) {
         });
         assert_eq!(
             engine
-                .resolver
+                .resolver()
                 .metrics
                 .upstream_lookups
                 .load(std::sync::atomic::Ordering::Relaxed),
@@ -106,7 +106,7 @@ fn bench(c: &mut Criterion) {
         let (engine, blocked, cached) = setup(Some(domain));
         if expired {
             assert!(
-                engine.active.load().policies[0]
+                engine.active.load().policies()[0]
                     .temporary_allow(
                         domain,
                         Instant::now() + std::time::Duration::from_secs(3601)
@@ -134,7 +134,7 @@ fn bench(c: &mut Criterion) {
         });
         assert_eq!(
             engine
-                .resolver
+                .resolver()
                 .metrics
                 .upstream_lookups
                 .load(std::sync::atomic::Ordering::Relaxed),
@@ -159,7 +159,7 @@ fn bench(c: &mut Criterion) {
     });
     assert_eq!(
         engine
-            .resolver
+            .resolver()
             .metrics
             .upstream_lookups
             .load(std::sync::atomic::Ordering::Relaxed),
@@ -174,7 +174,7 @@ fn bench(c: &mut Criterion) {
     ] {
         let (mut engine, blocked, cached) = setup(None);
         let (telemetry, mut receiver) = Telemetry::channel(1);
-        engine.telemetry = telemetry;
+        engine = engine.with_telemetry(telemetry);
         let bytes = if cached_path { cached } else { blocked };
         runtime.block_on(engine.answer(&bytes, client, false));
         if !full {
@@ -208,7 +208,7 @@ fn bench(c: &mut Criterion) {
         });
         assert_eq!(
             engine
-                .resolver
+                .resolver()
                 .metrics
                 .upstream_lookups
                 .load(std::sync::atomic::Ordering::Relaxed),

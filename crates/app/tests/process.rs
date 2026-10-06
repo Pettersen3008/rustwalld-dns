@@ -22,7 +22,7 @@ async fn binary_restart_keeps_absolute_exception_expiry_and_permanent_assertions
         loop {
             let (len, peer) = upstream.recv_from(&mut buffer).await.unwrap();
             let request = Message::from_vec(&buffer[..len]).unwrap();
-            let mut response = dns_core::reply(&request, ResponseCode::NoError);
+            let mut response = rustwalld_dns_core::reply(&request, ResponseCode::NoError);
             response.add_answer(Record::from_rdata(
                 request.queries[0].name().clone(),
                 60,
@@ -44,15 +44,15 @@ async fn binary_restart_keeps_absolute_exception_expiry_and_permanent_assertions
         config.api_listen.set_port(port());
     }
     config.policy.upstreams[0].addresses = vec![upstream_addr];
-    config.policy.policies[0].lists = vec![filtering::ListInput {
+    config.policy.policies[0].lists = vec![rustwalld_dns_filter::ListInput {
         name: "deny".into(),
-        action: filtering::Action::Block,
+        action: rustwalld_dns_filter::Action::Block,
         rules: "repair.test".into(),
     }];
-    config.policy.assertions = vec![policy::Assertion {
+    config.policy.assertions = vec![rustwalld_dns_policy::Assertion {
         client: "127.0.0.1".parse().unwrap(),
         domain: "repair.test".into(),
-        expected: filtering::Action::Block,
+        expected: rustwalld_dns_filter::Action::Block,
     }];
     let path = dir.path().join("config.toml");
     std::fs::write(&path, toml::to_string(&config).unwrap()).unwrap();
@@ -91,13 +91,13 @@ async fn binary_restart_keeps_absolute_exception_expiry_and_permanent_assertions
                 .as_secs()
                 + 3;
             let mut candidate = config.policy.clone();
-            candidate.policies[0]
-                .temporary_exceptions
-                .push(policy::TemporaryException {
+            candidate.policies[0].temporary_exceptions.push(
+                rustwalld_dns_policy::TemporaryException {
                     name: "repair".into(),
                     domain: "repair.test".into(),
                     expires_at,
-                });
+                },
+            );
             assert!(
                 client
                     .put(format!("{base}/api/v1/config"))
@@ -237,11 +237,13 @@ async fn binary_restores_revision_and_handles_sigterm() {
         .unwrap();
         if round == 0 {
             let mut policy = config.policy.clone();
-            policy.policies[0].lists.push(filtering::ListInput {
-                name: "lifecycle".into(),
-                action: filtering::Action::Block,
-                rules: "lifecycle.test".into(),
-            });
+            policy.policies[0]
+                .lists
+                .push(rustwalld_dns_filter::ListInput {
+                    name: "lifecycle".into(),
+                    action: rustwalld_dns_filter::Action::Block,
+                    rules: "lifecycle.test".into(),
+                });
             let response = client
                 .put(format!("{base}/api/v1/config"))
                 .bearer_auth(token)

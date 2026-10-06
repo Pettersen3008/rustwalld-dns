@@ -1,8 +1,8 @@
-use dns_core::ServerConfig;
-use policy::PolicyConfigSet;
+use rustwalld_dns_core::ServerConfig;
+use rustwalld_dns_policy::PolicyConfigSet;
 use serde::{Deserialize, Serialize};
 use std::{
-    io::{self, Read},
+    io::Read,
     net::SocketAddr,
     path::{Path, PathBuf},
 };
@@ -28,7 +28,7 @@ pub struct Config {
 pub struct FilterFile {
     pub policy: String,
     pub name: String,
-    pub action: filtering::Action,
+    pub action: rustwalld_dns_filter::Action,
     pub path: PathBuf,
 }
 impl Default for Config {
@@ -83,7 +83,7 @@ impl Config {
                 .iter_mut()
                 .find(|p| p.name == input.policy)
                 .ok_or("filter file refers to missing policy")?;
-            policy.lists.push(filtering::ListInput {
+            policy.lists.push(rustwalld_dns_filter::ListInput {
                 name: input.name.clone(),
                 action: input.action,
                 rules,
@@ -109,20 +109,33 @@ impl Config {
         {
             return Err("listener ports must be nonzero and distinct".into());
         }
-        for (name, value, max) in [
-            ("DNS cache", self.dns_cache_entries, 1000000),
-            ("decision cache", self.decision_cache_entries, 1000000),
-            ("inflight", self.max_inflight, 4096),
-            ("UDP admission", self.max_udp_queries, 16384),
-            ("TCP admission", self.max_tcp_connections, 4096),
-            ("event queue", self.event_queue, 65536),
-            ("history rows", self.history_rows, 1000000),
-        ] {
-            if value == 0 || value > max {
-                return Err(format!("{name} must be between 1 and {max}"));
-            }
+        rustwalld_dns_runtime::RuntimeConfig {
+            dns_cache_entries: self.dns_cache_entries,
+            decision_cache_entries: self.decision_cache_entries,
+            max_inflight: self.max_inflight,
+            max_udp_queries: self.max_udp_queries,
+            max_tcp_connections: self.max_tcp_connections,
+            event_queue: self.event_queue,
+            history_rows: self.history_rows,
+            ..Default::default()
         }
+        .validate_limits()?;
         validate_policy(&self.policy, self.dns_listen)
+    }
+    /// Resolved values for the optional durable runtime; no file I/O here.
+    pub fn into_runtime(self) -> rustwalld_dns_runtime::RuntimeConfig {
+        rustwalld_dns_runtime::RuntimeConfig {
+            dns_listen: self.dns_listen,
+            database: self.database,
+            dns_cache_entries: self.dns_cache_entries,
+            decision_cache_entries: self.decision_cache_entries,
+            max_inflight: self.max_inflight,
+            max_udp_queries: self.max_udp_queries,
+            max_tcp_connections: self.max_tcp_connections,
+            event_queue: self.event_queue,
+            history_rows: self.history_rows,
+            policy: self.policy,
+        }
     }
     pub fn server(&self) -> ServerConfig {
         ServerConfig {
@@ -133,30 +146,4 @@ impl Config {
         }
     }
 }
-pub fn validate_policy(config: &PolicyConfigSet, listen: SocketAddr) -> Result<(), String> {
-    crate::downloads::validate_config(config)?;
-    for profile in &config.upstreams {
-        for upstream in &profile.addresses {
-            if upstream.port() == listen.port()
-                && (listen.ip().is_unspecified()
-                    || upstream.ip() == listen.ip()
-                    || (listen.ip().is_loopback() && upstream.ip().is_loopback()))
-            {
-                return Err("upstream points at DNS listener".into());
-            }
-        }
-    }
-    // Broad client access must be explicit in PolicyConfigSet. Bindings do not grant access.
-    if !listen.ip().is_loopback()
-        && config
-            .allowed_clients
-            .iter()
-            .all(|n| n.addr().is_loopback())
-    {
-        return Err("non-loopback DNS requires explicit allowed client CIDRs".into());
-    }
-    Ok(())
-}
-pub fn invalid(message: String) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, message)
-}
+pub use rustwalld_dns_runtime::config::{invalid, validate_policy};

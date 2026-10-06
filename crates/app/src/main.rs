@@ -91,7 +91,7 @@ fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
     };
     if args.check_config {
         config.validate().map_err(rustwalld_dns::config::invalid)?;
-        policy::PolicySnapshot::compile(config.policy, 1)?;
+        rustwalld_dns_policy::PolicySnapshot::compile(config.policy, 1)?;
         println!("configuration and required assertions passed");
         return Ok(ExitCode::SUCCESS);
     }
@@ -115,12 +115,29 @@ fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
         .max_blocking_threads(4)
         .enable_all()
         .build()?;
-    let result = control_runtime.block_on(rustwalld_dns::run(
-        config,
-        token,
-        dns_runtime.handle().clone(),
-    ));
+    let result = control_runtime.block_on(async {
+        let stop = tokio_util::sync::CancellationToken::new();
+        let run = rustwalld_dns::run(config, token, dns_runtime.handle().clone(), stop.clone());
+        tokio::pin!(run);
+        tokio::select! {
+            result=&mut run=>result,
+            signal=shutdown_signal()=>{stop.cancel();run.await?;signal.map_err(Into::into)},
+        }
+    });
     control_runtime.shutdown_timeout(std::time::Duration::from_secs(2));
     dns_runtime.shutdown_timeout(std::time::Duration::from_secs(2));
     result.map(|()| ExitCode::SUCCESS)
+}
+
+async fn shutdown_signal() -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        tokio::select! {result=tokio::signal::ctrl_c()=>result,_=terminate.recv()=>Ok(())}
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await
+    }
 }

@@ -1,5 +1,9 @@
 # Shared filter strings: measured memory reduction
 
+Automation note (2026-10-06): GitHub Actions and `.github/` were removed at
+the maintainer's request. References to CI below describe historical verification;
+run the documented commands locally and retain artifacts under `target/`.
+
 The completed release's next performance slice removes repeated domain and
 list-name allocations without changing matching semantics, hashing, policy
 generations or DNS parsing. Keep the change only with lower measured memory,
@@ -34,11 +38,11 @@ still includes allocator-retained compiler allocations, runtime and executable
 pages. Peak includes compiler transients. Do not call these snapshot-only bytes.
 
 ```sh
-cargo build --release --locked -p filtering --example footprint
+cargo build --release --locked -p rustwalld-dns-filter --example footprint
 for size in 100000 1000000 5000000 10000000; do
   target/release/examples/footprint "$size"
 done
-DNS_BENCH_SIZES=100000,1000000,5000000,10000000 cargo bench --locked -p filtering --bench matching -- --sample-size 20 --warm-up-time 1 --measurement-time 1
+DNS_BENCH_SIZES=100000,1000000,5000000,10000000 cargo bench --locked -p rustwalld-dns-filter --bench matching -- --sample-size 20 --warm-up-time 1 --measurement-time 1
 ```
 
 The additional `working_set` benchmark cycles over 8,192 precomputed names

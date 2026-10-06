@@ -3,7 +3,7 @@ use hickory_proto::{
     op::Message,
     rr::{RData, Record, rdata::A},
 };
-use resolver::UpstreamTransport;
+use rustwalld_dns_resolver::UpstreamTransport;
 use std::{
     net::SocketAddr,
     sync::{

@@ -1,10 +1,10 @@
 //! Standalone maintenance: no daemon runtime, API token or DNS executor involved.
 use crate::store::SCHEMA_VERSION;
-use policy::{PolicyConfigSet, PolicySnapshot};
 use rusqlite::{
     Connection, OpenFlags,
     backup::{Backup, StepResult},
 };
+use rustwalld_dns_policy::{PolicyConfigSet, PolicySnapshot};
 use serde::Serialize;
 use std::{
     error::Error,

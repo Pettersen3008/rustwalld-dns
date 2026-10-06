@@ -1,5 +1,9 @@
 # Release exit gates and appliance comparison
 
+Automation note (2026-10-06): GitHub Actions and `.github/` were removed at
+the maintainer's request. References to CI below describe historical verification;
+run the documented commands locally and retain artifacts under `target/`.
+
 The v0.1 feature and redesign scope is complete. Stop adding features to this
 release. Exit gates are a reproducible common-behavior comparison, native
 deployment/upgrade/restore validation and a 24–72-hour representative-network

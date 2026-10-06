@@ -3,8 +3,8 @@ use bytes::Bytes;
 use http_body_util::{BodyExt, Empty};
 use hyper::{Request, StatusCode, client::conn::http1, header};
 use hyper_util::rt::TokioIo;
-use policy::{DownloadStamp, FilterSource, MAX_DOWNLOAD_BYTES, PolicyConfigSet};
 use ring::digest;
+use rustwalld_dns_policy::{DownloadStamp, FilterSource, MAX_DOWNLOAD_BYTES, PolicyConfigSet};
 use std::{
     net::SocketAddr,
     sync::Arc,
@@ -103,7 +103,8 @@ pub enum Fetch {
 }
 
 // Stop at the API limit without allocating a second serialized configuration.
-pub(crate) fn validate_size(config: &PolicyConfigSet) -> Result<(), String> {
+/// Validate that a reviewed configuration fits the management envelope.
+pub fn validate_size(config: &PolicyConfigSet) -> Result<(), String> {
     struct LimitedSize(usize);
     impl std::io::Write for LimitedSize {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -142,7 +143,9 @@ pub fn validate_config(config: &PolicyConfigSet) -> Result<(), String> {
     }
     for source in &config.filter_sources {
         if source.refresh_interval_secs.is_some_and(|interval| {
-            !(policy::MIN_REFRESH_INTERVAL..=policy::MAX_REFRESH_INTERVAL).contains(&interval)
+            !(rustwalld_dns_policy::MIN_REFRESH_INTERVAL
+                ..=rustwalld_dns_policy::MAX_REFRESH_INTERVAL)
+                .contains(&interval)
         }) {
             return Err("refresh interval must be 300 seconds through 30 days".into());
         }
@@ -162,21 +165,21 @@ pub fn validate_config(config: &PolicyConfigSet) -> Result<(), String> {
     Ok(())
 }
 pub(crate) fn validate_candidate(
-    snapshot: &policy::PolicySnapshot,
+    snapshot: &rustwalld_dns_policy::PolicySnapshot,
     index: usize,
 ) -> Result<(), String> {
     let source = snapshot
-        .config
+        .config()
         .filter_sources
         .get(index)
         .ok_or("unknown refresh source")?;
     let stats = snapshot
-        .policies
+        .policies()
         .iter()
-        .find(|policy| policy.name == source.policy)
+        .find(|policy| policy.name() == source.policy)
         .and_then(|policy| {
             policy
-                .filters
+                .filters()
                 .stats
                 .iter()
                 .find(|stats| stats.name == source.list)
@@ -185,7 +188,7 @@ pub(crate) fn validate_candidate(
     if stats.raw == 0 {
         return Err("downloaded list has no rules".into());
     }
-    validate_size(&snapshot.config)?;
+    validate_size(snapshot.config())?;
     Ok(())
 }
 
@@ -417,9 +420,9 @@ mod tests {
     use super::*;
     fn config() -> PolicyConfigSet {
         let mut config = PolicyConfigSet::default();
-        config.policies[0].lists = vec![filtering::ListInput {
+        config.policies[0].lists = vec![rustwalld_dns_filter::ListInput {
             name: "remote".into(),
-            action: filtering::Action::Block,
+            action: rustwalld_dns_filter::Action::Block,
             rules: "ads.test\n".into(),
         }];
         config.filter_sources = vec![FilterSource {
@@ -557,7 +560,7 @@ mod tests {
     fn source_url_pins_trust_fingerprints_counts_and_legacy_shape_are_validated() {
         let original = config();
         assert!(validate_config(&original).is_ok());
-        assert!(policy::PolicySnapshot::compile(original.clone(), 1).is_ok());
+        assert!(rustwalld_dns_policy::PolicySnapshot::compile(original.clone(), 1).is_ok());
         for url in [
             "http://lists.test/a",
             "file:///etc/passwd",
@@ -595,11 +598,11 @@ mod tests {
         assert!(validate_config(&config).is_ok());
         let mut config = original.clone();
         config.filter_sources.push(config.filter_sources[0].clone());
-        assert!(policy::PolicySnapshot::compile(config, 1).is_err());
+        assert!(rustwalld_dns_policy::PolicySnapshot::compile(config, 1).is_err());
         let mut config = original.clone();
         config.filter_sources[0].list = "missing".into();
         assert!(validate_config(&config).is_err());
-        assert!(policy::PolicySnapshot::compile(config, 1).is_err());
+        assert!(rustwalld_dns_policy::PolicySnapshot::compile(config, 1).is_err());
         let mut config = original.clone();
         config.filter_sources[0].bootstrap_ips = vec![];
         assert!(validate_config(&config).is_err());
@@ -610,11 +613,11 @@ mod tests {
         config.filter_sources[0]
             .bootstrap_ips
             .push("::ffff:127.0.0.1".parse().unwrap());
-        assert!(policy::PolicySnapshot::compile(config, 1).is_err());
+        assert!(rustwalld_dns_policy::PolicySnapshot::compile(config, 1).is_err());
         let mut config = original.clone();
         config.filter_sources = vec![config.filter_sources[0].clone(); 65];
         assert!(validate_config(&config).is_err());
-        assert!(policy::PolicySnapshot::compile(config, 1).is_err());
+        assert!(rustwalld_dns_policy::PolicySnapshot::compile(config, 1).is_err());
         let value = serde_json::to_value(PolicyConfigSet::default()).unwrap();
         assert!(value.get("filter_sources").is_none());
         for interval in [
@@ -622,16 +625,20 @@ mod tests {
             299,
             300,
             86400,
-            policy::MAX_REFRESH_INTERVAL,
-            policy::MAX_REFRESH_INTERVAL + 1,
+            rustwalld_dns_policy::MAX_REFRESH_INTERVAL,
+            rustwalld_dns_policy::MAX_REFRESH_INTERVAL + 1,
             u64::MAX,
         ] {
             let mut config = original.clone();
             config.filter_sources[0].refresh_interval_secs = Some(interval);
-            let valid =
-                (policy::MIN_REFRESH_INTERVAL..=policy::MAX_REFRESH_INTERVAL).contains(&interval);
+            let valid = (rustwalld_dns_policy::MIN_REFRESH_INTERVAL
+                ..=rustwalld_dns_policy::MAX_REFRESH_INTERVAL)
+                .contains(&interval);
             assert_eq!(validate_config(&config).is_ok(), valid);
-            assert_eq!(policy::PolicySnapshot::compile(config, 1).is_ok(), valid);
+            assert_eq!(
+                rustwalld_dns_policy::PolicySnapshot::compile(config, 1).is_ok(),
+                valid
+            );
         }
         assert!(
             serde_json::to_value(&original).unwrap()["filter_sources"][0]

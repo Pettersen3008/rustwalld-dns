@@ -3,6 +3,10 @@
 Build a local-first DNS policy/security engine. Work in complete tested slices.
 The checklist and decisions are in docs/roadmap.md and docs/architecture.md.
 
+This repository intentionally has no CI/CD or `.github/` folder. Run verification
+locally and retain generated evidence under ignored `target/`. Do not add hosted
+workflows unless the maintainer explicitly changes this preference.
+
 DNS correctness, security and predictable latency take priority over throughput.
 Use Hickory for DNS protocol handling. Profile before changing the parser or
 introducing custom tries, lock-free containers, io_uring or zero-copy machinery.

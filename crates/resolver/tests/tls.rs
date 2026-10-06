@@ -7,7 +7,7 @@ use hickory_proto::{
     op::{Message, MessageType, OpCode, Query},
     rr::{Name, RecordType},
 };
-use resolver::{FailureKind, Forwarder, UpstreamTransport};
+use rustwalld_dns_resolver::{FailureKind, Forwarder, UpstreamTransport};
 use std::{
     sync::{Arc, atomic::Ordering},
     time::Duration,

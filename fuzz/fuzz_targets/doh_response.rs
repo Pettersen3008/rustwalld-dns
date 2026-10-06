@@ -48,5 +48,5 @@ fuzz_target!(|data: &[u8]| {
     } else {
         StatusCode::OK
     };
-    let _ = resolver::https::decode_response(&query, status, &headers, &data[9..]);
+    let _ = rustwalld_dns_resolver::https::decode_response(&query, status, &headers, &data[9..]);
 });

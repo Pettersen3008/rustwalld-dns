@@ -1,5 +1,9 @@
 # Conditional downloaded-list retrieval
 
+Automation note (2026-10-06): GitHub Actions and `.github/` were removed at
+the maintainer's request. References to CI below describe historical verification;
+run the documented commands locally and retain artifacts under `target/`.
+
 Goal: reduce scheduled-check transfers and control-plane work without changing
 DNS policy evaluation. Complete when validator/content isolation, HTTP 304,
 changed-content shadow gates, failures, console evidence, restart recovery and
@@ -117,9 +121,9 @@ Reproduce (build examples separately from the production binary):
 ```sh
 cargo build --release --locked -p rustwalld-dns --example conditional_retrieval
 TMPDIR="$PWD/target/tool-tmp" target/release/examples/conditional_retrieval
-cargo bench --locked -p dns-core --bench engine -- --sample-size 20 --warm-up-time 1 --measurement-time 2 --save-baseline conditional-before
+cargo bench --locked -p rustwalld-dns-core --bench engine -- --sample-size 20 --warm-up-time 1 --measurement-time 2 --save-baseline conditional-before
 # Apply change, then compare in quiet conditions:
-cargo bench --locked -p dns-core --bench engine -- --sample-size 20 --warm-up-time 1 --measurement-time 2 --baseline conditional-before
+cargo bench --locked -p rustwalld-dns-core --bench engine -- --sample-size 20 --warm-up-time 1 --measurement-time 2 --baseline conditional-before
 ```
 
 Browser verification uses disk-backed `TMPDIR="$PWD/../target/tool-tmp"` from

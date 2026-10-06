@@ -1,7 +1,7 @@
 //! Control-plane diagnostics only; no unchecked snapshot leaves this module.
 use crate::{Assertion, PolicyConfigSet, PolicyError, PolicySnapshot};
-use filtering::{Decision, Matcher, Source};
 use ipnet::IpNet;
+use rustwalld_dns_filter::{Decision, Matcher, Source};
 use serde::Serialize;
 
 const MAX_REPORTED_SOURCES: usize = 16;
@@ -20,7 +20,7 @@ pub struct CheckReport {
 #[derive(Debug, Serialize)]
 pub struct PolicyListStats {
     pub policy: String,
-    pub lists: Vec<filtering::ListStats>,
+    pub lists: Vec<rustwalld_dns_filter::ListStats>,
 }
 
 #[cfg(test)]
@@ -28,7 +28,7 @@ mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
     use crate::{Binding, PolicyConfig, Rewrite};
-    use filtering::{Action, ListInput};
+    use rustwalld_dns_filter::{Action, ListInput};
 
     #[test]
     fn complete_reports_agree_with_strict_compilation_and_effective_policies() {
@@ -253,7 +253,7 @@ impl PolicySnapshot {
 
     fn check_assertion(&self, assertion: &Assertion) -> AssertionResult {
         let permitted = self.permits(assertion.client);
-        let Ok(domain) = filtering::normalize(&assertion.domain) else {
+        let Ok(domain) = rustwalld_dns_filter::normalize(&assertion.domain) else {
             return AssertionResult {
                 assertion: assertion.clone(),
                 permitted,

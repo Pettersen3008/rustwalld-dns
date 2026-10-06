@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used)]
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use filtering::{Action, FilterSnapshot, ListInput};
+use rustwalld_dns_filter::{Action, FilterSnapshot, ListInput};
 fn bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("filter");
     let sizes = std::env::var("DNS_BENCH_SIZES").unwrap_or_else(|_| "100000".into());

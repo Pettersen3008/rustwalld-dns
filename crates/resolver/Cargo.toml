@@ -1,8 +1,15 @@
 [package]
-name = "resolver"
+name = "rustwalld-dns-resolver"
+description = "Bounded DNS forwarding, caching and coalescing over UDP, TCP, TLS and HTTPS"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["dns", "security", "filtering"]
+categories = ["network-programming"]
+include = ["Cargo.toml", "README.md", "LICENSE-*", "src/**", "examples/**", "tests/**", "benches/**"]
 
 [lints]
 workspace = true

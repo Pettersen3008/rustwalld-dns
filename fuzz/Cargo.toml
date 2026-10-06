@@ -13,10 +13,10 @@ members = ["."]
 [dependencies]
 libfuzzer-sys = "0.4"
 hickory-proto = "0.26.3"
-filtering = { path = "../crates/filtering" }
-resolver = { path = "../crates/resolver" }
-policy = { path = "../crates/policy" }
-rustwalld-dns = { path = "../crates/app" }
+rustwalld-dns-filter = { path = "../crates/filtering" }
+rustwalld-dns-resolver = { path = "../crates/resolver" }
+rustwalld-dns-policy = { path = "../crates/policy" }
+rustwalld-dns-runtime = { path = "../crates/runtime" }
 http = "1"
 
 [[bin]]

@@ -1,12 +1,16 @@
 # DNS-over-HTTPS baseline
 
+Automation note (2026-10-06): GitHub Actions and `.github/` were removed at
+the maintainer's request. References to CI below describe historical verification;
+run the documented commands locally and retain artifacts under `target/`.
+
 Measured 2026-10-05 on AMD Ryzen 7 9800X3D (8 cores / 16 threads), Linux
 7.2.5-3-omarchy x86_64, rustc 1.98.1. Cargo release uses thin LTO and one codegen
 unit. The workstation is shared and unpinned. These are local transport exchange
 measurements, not appliance-wide latency percentiles or Internet resolver capacity.
 
 ```sh
-cargo bench -p resolver --bench https --locked -- \
+cargo bench -p rustwalld-dns-resolver --bench https --locked -- \
   --warm-up-time 1 --measurement-time 2 --sample-size 20
 ```
 

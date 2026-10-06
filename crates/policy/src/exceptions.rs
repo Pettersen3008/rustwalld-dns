@@ -79,7 +79,7 @@ impl Entries {
         let mut entries = HashMap::new();
         for (index, input) in inputs.iter().enumerate() {
             validate_name(&input.name)?;
-            let domain = filtering::normalize(&input.domain)?;
+            let domain = rustwalld_dns_filter::normalize(&input.domain)?;
             if !names.insert(&input.name)
                 || !domains.insert(domain.clone())
                 || !(1..=253_402_300_799).contains(&input.expires_at)
@@ -223,7 +223,7 @@ mod tests {
     #[test]
     fn permanent_assertions_cannot_be_satisfied_by_an_exception_and_counts_are_bounded() {
         use crate::{Assertion, PolicyConfigSet, PolicySnapshot};
-        use filtering::{Action, ListInput};
+        use rustwalld_dns_filter::{Action, ListInput};
         let mut config = PolicyConfigSet::default();
         config.policies[0].lists = vec![ListInput {
             name: "deny".into(),

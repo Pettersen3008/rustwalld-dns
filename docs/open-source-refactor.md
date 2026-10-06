@@ -1,9 +1,11 @@
 # Reusable libraries and open-source preparation
 
-Status: proposed implementation plan, 2026-10-06. This document authorizes no
-publication or deployment. Implementation proceeds in independently verified
-slices. Native deployment and the 24–72-hour network soak remain pending release
-gates; this refactor does not satisfy or remove them.
+Status: implementation delivered in verified slices, 2026-10-06; final matched
+performance/recovery verification is recorded in [refactor-results.md](refactor-results.md).
+The approved scope retains native deployment and the 24–72-hour network soak as
+pending release gates. At the maintainer's request, the development repository is
+private under Pettersen3008, with no `.github/` folder or CI/CD. Checks are local
+commands/scripts; registry publication and native activation remain separate.
 
 ## Goal and completion criteria
 
@@ -35,11 +37,12 @@ No work in `~/Work/rustwalld` is part of this plan. Integration is demonstrated
 by an independent consumer fixture in this repository. Compatibility with that
 project's actual dependency graph and lifecycle remains unverified.
 
-## Repository findings
+## Baseline repository findings
 
-These observations come from source inspection, not a fresh verification run.
+These observations describe the pre-refactor checkout. The baseline commit is
+`d7fc877`; the delivered structure and verification are recorded separately.
 
-| Current package | Existing responsibility | Main preparation issue |
+| Baseline package | Existing responsibility | Main preparation issue |
 | --- | --- | --- |
 | `filtering` | Normalization, list compilation, exact/suffix rules, provenance | Generic name; public API documentation and consumer examples |
 | `resolver` | UDP/TCP/TLS/HTTPS forwarding, bounded caches, coalescing, endpoint admission | Generic name; exposed cache/metrics implementation details |
@@ -79,11 +82,11 @@ Specific change points:
 
 ## Recommended package boundaries
 
-Use a consistent project prefix. These names are proposals; registry availability
-has not been checked. Keep short, responsibility-based module and type names
+The implementation uses a consistent project prefix. Registry availability and
+ownership must be confirmed before future publication. Keep short, responsibility-based module and type names
 inside each package.
 
-| Proposed package | Location | Public role |
+| Delivered package | Location | Public role |
 | --- | --- | --- |
 | `rustwalld-dns-filter` | `crates/filtering` | Standalone immutable filter compiler and matcher |
 | `rustwalld-dns-resolver` | `crates/resolver` | Standalone bounded upstream resolver |
@@ -95,7 +98,7 @@ inside each package.
 Keep the current directories during the package rename to reduce tooling churn.
 Keep the binary `rustwalld-dns`, its environment variables, installed paths,
 systemd unit and browser product identity unchanged. Update Cargo selectors,
-Rust imports, fuzz manifests, CI, scripts, examples and documentation together.
+Rust imports, fuzz manifests, scripts, examples and documentation together.
 
 Dependency direction, where an arrow means "depends on":
 
@@ -303,15 +306,15 @@ matched DNS failure/reload measurements retain behavior and bounds.
 - Rework README around "run the appliance", "embed the engine" and "use a
   component". Keep operational contracts and measured limitations accessible.
 - Add crate READMEs, checked doctests, CONTRIBUTING, security reporting guidance,
-  a changelog and a documented API/versioning/support policy. Use a confirmed
-  reporting channel and actual project URL rather than placeholders.
+  a changelog and a documented API/versioning/support policy. Use the private repository issues during restricted development; configure
+  private disclosure before making the project public.
 - Select and test an honest MSRV from code and dependency requirements; keep it
   separate from the pinned performance/release toolchain. Add appropriate stable,
-  MSRV, documentation and external-consumer CI checks.
+  MSRV, documentation and external-consumer local checks (CI was declined).
 - Define minimal package contents with licenses, READMEs and examples. Audit
   package contents for missing assets and unintended generated evidence.
 - Verify packages in dependency order. Before the new dependencies exist in a
-  registry, use an isolated local registry/source replacement to validate archives
+  registry, use Cargo's temporary local registry and extracted archive consumers to validate archives
   and their consumer graph; do not waive verification with `--no-verify` and
   describe that as publication readiness. Registry dry runs follow when registry
   dependency versions are available.
@@ -407,9 +410,23 @@ speedups. Its numerical targets and source-line goals are not requirements for
 this DNS project. The project's existing correctness/security/performance
 contract remains authoritative.
 
-## Immediate next implementation task
+## Delivered implementation
 
-Start with slice 0, then complete the package-only rename in slice 1. This produces
-a recoverable measured starting point and meaningful names before exposing new
-APIs. Leave algorithms, storage layout, transports, product behavior and Rustwalld
-integration unchanged during those slices.
+- Baseline commit, test inventory, production/harness identities and serial
+  matching/cache/TLS/HTTPS/engine/CPU/recovery measurements retained.
+- All five reusable package names and narrow dependency direction implemented.
+- Core, policy, HTTP routes and integration cases split by responsibility.
+- Immutable compiled snapshots, named engine bounds, separate checked controller,
+  durable high-water restoration and independent consumers implemented.
+- Typed revision service/store replies extracted; app and refresh workers share it.
+- Optional runtime accepts resolved values and caller-owned executors/cancellation;
+  executable owns process signals. Shutdown drains admitted durable staging.
+- Crate READMEs/doctests, embedding example, contributor/security/changelog/release
+  guides, tested Rust 1.95 floor, pinned measurement toolchain and verified archives.
+- No CI/CD: `.github/` removed following the maintainer's explicit preference.
+
+See [refactor-results.md](refactor-results.md) for final evidence and limitations.
+After refactor verification, the next operational work remains native host checks
+and a representative-network soak when the maintainer is ready. Rustwalld
+integration is possible through core or runtime but needs a separate authorized
+integration change in that project.

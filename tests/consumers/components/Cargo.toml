@@ -1,0 +1,14 @@
+[package]
+name = "components-consumer"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+rustwalld-dns-filter = { path = "../../../crates/filtering" }
+rustwalld-dns-resolver = { path = "../../../crates/resolver" }
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+hickory-proto = "0.26.3"

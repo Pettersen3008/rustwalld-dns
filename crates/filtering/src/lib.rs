@@ -1,4 +1,4 @@
-//! Pure compilation and immutable matching; no I/O in this crate.
+#![doc = include_str!("../README.md")]
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 

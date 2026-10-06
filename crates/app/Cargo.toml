@@ -1,41 +1,42 @@
 [package]
 name = "rustwalld-dns"
+description = "Standalone local DNS policy appliance with management console"
+publish = false
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 
 [lints]
 workspace = true
 
 [dependencies]
-resolver = { path = "../resolver", version = "0.1" }
-dns-core = { path = "../dns-core", version = "0.1" }
-policy = { path = "../policy", version = "0.1" }
-filtering = { path = "../filtering", version = "0.1" }
+rustwalld-dns-runtime = { path = "../runtime", version = "0.1" }
+rustwalld-dns-resolver = { path = "../resolver", version = "0.1" }
+rustwalld-dns-core = { path = "../dns-core", version = "0.1" }
+rustwalld-dns-policy = { path = "../policy", version = "0.1" }
+rustwalld-dns-filter = { path = "../filtering", version = "0.1" }
 tokio.workspace = true
 tokio-util.workspace = true
 serde.workspace = true
 tracing.workspace = true
 serde_json = "1"
 axum = "0.8.9"
-rusqlite = { version = "0.38", features = ["bundled", "backup"] }
 toml = "1"
 clap = { version = "4", features = ["derive"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 subtle = "2"
-tempfile = "3"
 tower-http = { version = "0.6", features = ["fs"] }
-hyper = { version = "1", features = ["client", "http1"] }
-hyper-util = { version = "0.1", features = ["tokio"] }
-http-body-util = "0.1"
-httpdate = "1.0.3"
-bytes = "1"
-url = "2"
-ring = "0.17"
-tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
-webpki-roots = "1"
+
 
 [dev-dependencies]
+httpdate = "1.0.3"
+rusqlite = { version = "0.38", features = ["bundled", "backup"] }
+tempfile = "3"
+bytes = "1"
+ring = "0.17"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
 reqwest = { version = "0.13", default-features = false, features = ["json"] }
 hickory-proto.workspace = true
 rcgen = "0.14"

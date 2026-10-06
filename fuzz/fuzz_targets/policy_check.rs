@@ -1,7 +1,7 @@
 #![no_main]
-use filtering::{Action, ListInput};
+use rustwalld_dns_filter::{Action, ListInput};
 use libfuzzer_sys::fuzz_target;
-use policy::{
+use rustwalld_dns_policy::{
     Assertion, Binding, BindingMetadata, PolicyConfigSet, PolicySnapshot, Rewrite,
     TemporaryException,
 };

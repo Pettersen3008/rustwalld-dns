@@ -1,20 +1,28 @@
 [package]
-name = "dns-core"
+name = "rustwalld-dns-core"
+description = "Embeddable bounded DNS policy engine and UDP/TCP server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["dns", "security", "filtering"]
+categories = ["network-programming"]
+include = ["Cargo.toml", "README.md", "LICENSE-*", "src/**", "examples/**", "tests/**", "benches/**"]
 
 [lints]
 workspace = true
 
 [dependencies]
+thiserror.workspace = true
 hickory-proto.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
-resolver = { path = "../resolver", version = "0.1" }
-policy = { path = "../policy", version = "0.1" }
-filtering = { path = "../filtering", version = "0.1" }
+rustwalld-dns-resolver = { path = "../resolver", version = "0.1" }
+rustwalld-dns-policy = { path = "../policy", version = "0.1" }
+rustwalld-dns-filter = { path = "../filtering", version = "0.1" }
 arc-swap.workspace = true
 
 [dev-dependencies]

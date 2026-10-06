@@ -1,4 +1,4 @@
-//! DNS forwarding; independent of application storage and management.
+#![doc = include_str!("../README.md")]
 use hickory_proto::op::{Message, MessageType};
 use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{

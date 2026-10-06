@@ -1,5 +1,9 @@
 # Management-failure resilience baseline
 
+Automation note (2026-10-06): GitHub Actions and `.github/` were removed at
+the maintainer's request. References to CI below describe historical verification;
+run the documented commands locally and retain artifacts under `target/`.
+
 Measured 2026-10-05 on a shared, unpinned workstation. These are observations for
 this workload, not absolute capacity claims or a strict network CI performance
 gate. Other build/fuzz activity was possible; no allocation or CPU/query claim.

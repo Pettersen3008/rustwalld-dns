@@ -1,5 +1,9 @@
 # Initial baseline — 2026-10-05
 
+Automation note (2026-10-06): GitHub Actions and `.github/` were removed at
+the maintainer's request. References to CI below describe historical verification;
+run the documented commands locally and retain artifacts under `target/`.
+
 Hardware: AMD Ryzen 7 9800X3D, 8 cores / 16 threads, 30 GiB RAM.
 Linux 7.2.5-3-omarchy; rustc 1.98.1; release profile with thin LTO and one
 codegen unit. Tokio DNS benchmark uses two worker threads. These short runs on a

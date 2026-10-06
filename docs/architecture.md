@@ -1,5 +1,9 @@
 # ADR 001: a small forwarding data plane
 
+Automation note (2026-10-06): GitHub Actions and `.github/` were removed at
+the maintainer's request. References to CI below describe historical verification;
+run the documented commands locally and retain artifacts under `target/`.
+
 Status: accepted, initial implementation. Goal: local-first DNS policy/security
 engine with a control plane that cannot stall DNS on storage or compilation.
 
@@ -9,13 +13,24 @@ sharded caches before considering packed tries, custom parsers or lock-free maps
 Tokio's sockets need no mutex around network I/O. Axum 0.8 will own the API.
 The resolved versions are recorded in Cargo.lock.
 
-Ownership: dns-core owns ingress/response synthesis and admission; resolver owns
-validated UDP/TCP forwarding, cache and coalescing; filtering owns normalized
-exact/suffix rules and provenance; policy compiles client prefixes, filter and
-upstream profiles into an immutable generation; app owns file/config loading,
-SQLite, HTTP, telemetry and lifecycle. No dependency from these four libraries
-back into app. A single ArcSwap promotion publishes a complete policy generation.
-An in-progress query retains its old Arc. Policy content is never mutated in place.
+Ownership: `rustwalld-dns-core` owns ingress, response synthesis and admission;
+`rustwalld-dns-resolver` owns validated forwarding, caches and coalescing;
+`rustwalld-dns-filter` owns normalized exact/suffix rules and provenance;
+`rustwalld-dns-policy` compiles client prefixes, filter/upstream profiles and
+assertions into immutable generations. The optional `rustwalld-dns-runtime`
+owns SQLite/history, typed revisions, downloads, scheduling and explicit lifecycle.
+App owns file/config loading, HTTP/console adapters and CLI formatting; its binary
+owns process signals and tracing setup. No DNS library depends on runtime or app.
+
+A separate `PolicyController` checks versions and generation high-water marks,
+then reserves publication without holding a mutex across I/O. The durable service
+persists first; reservation commit performs infallible ArcSwap publication.
+Aborting burns the identifier and leaves live state unchanged. Rollback compiles
+a fresh generation; startup includes retired durable identifiers and empty caches.
+Queries never acquire the control mutex and retain their original snapshot while
+an update is published. Compiled snapshot fields cannot be mutated externally.
+Active publication clears shadow state. See [embedding](embedding.md).
+
 Compiled temporary exceptions additionally have a bounded one-way expiry bit:
 observed wall-clock expiry cannot be reversed by a clock jump. Their absolute
 and monotonic deadlines do not depend on a control-plane timer. See

@@ -1,5 +1,9 @@
 # Scheduled list refreshes
 
+Automation note (2026-10-06): GitHub Actions and `.github/` were removed at
+the maintainer's request. References to CI below describe historical verification;
+run the documented commands locally and retain artifacts under `target/`.
+
 Opt-in periodic list checks yield a durable shadow candidate for review. Timers
 never promote live policy. This slice includes schedule editing/status/check-now,
 failure/conflict isolation, candidate persistence, restart/shutdown and validation

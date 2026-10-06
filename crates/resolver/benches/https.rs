@@ -6,7 +6,7 @@ use hickory_proto::{
     op::{Message, MessageType, OpCode, Query},
     rr::{Name, RecordType},
 };
-use resolver::Forwarder;
+use rustwalld_dns_resolver::Forwarder;
 use std::time::Duration;
 fn https(c: &mut Criterion) {
     let runtime = tokio::runtime::Runtime::new().unwrap();

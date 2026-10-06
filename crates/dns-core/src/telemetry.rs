@@ -1,4 +1,4 @@
-use filtering::Decision;
+use rustwalld_dns_filter::Decision;
 use std::{
     net::IpAddr,
     sync::{

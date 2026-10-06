@@ -1,11 +1,11 @@
 #![allow(clippy::unwrap_used)]
-use dns_core::telemetry::Telemetry;
-use policy::PolicyConfigSet;
 use rusqlite::Connection;
 use rustwalld_dns::{
     maintenance,
-    store::{Operation, Store},
+    store::{RevisionMode, Store},
 };
+use rustwalld_dns_core::telemetry::Telemetry;
+use rustwalld_dns_policy::PolicyConfigSet;
 use std::{path::Path, time::Duration};
 use tokio_util::sync::CancellationToken;
 
@@ -29,17 +29,12 @@ async fn schema_one_backup_restores_and_migrates_history_without_changing_revisi
     assert_eq!(maintenance::snapshot(&old, &restored).unwrap().schema, 1);
     assert_eq!(std::fs::read(&old).unwrap(), original);
     let (store, cancel, done) = initialize(&restored).await;
-    let boot = store
-        .call(Operation::Bootstrap {
-            config: "{}".into(),
-        })
-        .await
-        .unwrap();
-    assert_eq!(boot["active"], 7);
-    assert_eq!(boot["config"], config);
-    let queries = store.call(Operation::Queries { limit: 10 }).await.unwrap();
-    assert_eq!(queries[0]["domain"], "legacy.test");
-    assert_eq!(queries[0]["temporary_exception"], serde_json::Value::Null);
+    let boot = store.bootstrap("{}".into()).await.unwrap();
+    assert_eq!(boot.active, 7);
+    assert_eq!(boot.config, config);
+    let queries = store.queries(10).await.unwrap();
+    assert_eq!(queries[0].domain, "legacy.test");
+    assert_eq!(queries[0].temporary_exception, None);
     assert_eq!(maintenance::verify(&restored).unwrap().schema, 2);
     cancel.cancel();
     done.await.unwrap();
@@ -55,9 +50,7 @@ async fn initialize(path: &Path) -> (Store, CancellationToken, tokio::sync::ones
         .await
         .unwrap();
     store
-        .call(Operation::Bootstrap {
-            config: serde_json::to_string(&PolicyConfigSet::default()).unwrap(),
-        })
+        .bootstrap(serde_json::to_string(&PolicyConfigSet::default()).unwrap())
         .await
         .unwrap();
     (store, cancel, done)
@@ -68,20 +61,22 @@ async fn wal_snapshot_and_restore_preserve_runtime_revisions_without_clobbering(
     let source = dir.path().join("live.sqlite");
     let (store, cancel, done) = initialize(&source).await;
     let mut config = PolicyConfigSet::default();
-    config.policies[0].lists.push(filtering::ListInput {
-        name: "snapshot".into(),
-        action: filtering::Action::Block,
-        rules: "backup.test".into(),
-    });
-    for (id, mode) in [(2, "promoted"), (3, "shadow")] {
+    config.policies[0]
+        .lists
+        .push(rustwalld_dns_filter::ListInput {
+            name: "snapshot".into(),
+            action: rustwalld_dns_filter::Action::Block,
+            rules: "backup.test".into(),
+        });
+    for (id, mode) in [(2, RevisionMode::Promoted), (3, RevisionMode::Shadow)] {
         store
-            .call(Operation::Commit {
+            .commit(
                 id,
-                config: serde_json::to_string(&config).unwrap(),
-                mode: mode.into(),
-                actor: "test".into(),
-                diff: "policies".into(),
-            })
+                serde_json::to_string(&config).unwrap(),
+                mode,
+                "test".into(),
+                "policies".into(),
+            )
             .await
             .unwrap();
     }
@@ -111,15 +106,10 @@ async fn wal_snapshot_and_restore_preserve_runtime_revisions_without_clobbering(
     let restored = dir.path().join("restored.sqlite");
     maintenance::snapshot(&output, &restored).unwrap();
     let (restored_store, restored_stop, restored_done) = initialize(&restored).await;
-    let bootstrap = restored_store
-        .call(Operation::Bootstrap {
-            config: "{}".into(),
-        })
-        .await
-        .unwrap();
-    assert_eq!(bootstrap["active"], 2);
-    assert_eq!(bootstrap["shadow"], 3);
-    assert_eq!(bootstrap["next"], 4);
+    let bootstrap = restored_store.bootstrap("{}".into()).await.unwrap();
+    assert_eq!(bootstrap.active, 2);
+    assert_eq!(bootstrap.shadow, Some(3));
+    assert_eq!(bootstrap.next, 4);
     restored_stop.cancel();
     restored_done.await.unwrap();
     cancel.cancel();
@@ -153,10 +143,10 @@ async fn corrupt_future_or_assertion_failing_sources_never_publish_a_backup() {
         .pragma_update(None, "user_version", rustwalld_dns::store::SCHEMA_VERSION)
         .unwrap();
     let mut config = PolicyConfigSet::default();
-    config.assertions.push(policy::Assertion {
+    config.assertions.push(rustwalld_dns_policy::Assertion {
         client: "127.0.0.1".parse().unwrap(),
         domain: "unblocked.test".into(),
-        expected: filtering::Action::Block,
+        expected: rustwalld_dns_filter::Action::Block,
     });
     database
         .execute(

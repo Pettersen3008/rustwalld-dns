@@ -1,5 +1,9 @@
 # Borrowed decision-cache lookup
 
+Automation note (2026-10-06): GitHub Actions and `.github/` were removed at
+the maintainer's request. References to CI below describe historical verification;
+run the documented commands locally and retain artifacts under `target/`.
+
 Goal: eliminate the measured owned domain-key allocation on warm decision-cache
 hits, preserving normalized name matching, policy/generation partitioning,
 bounded FIFO shards, randomized hashing and owned telemetry. Done means matched
@@ -126,8 +130,8 @@ are in `target/borrowed-decision/benchmark-summary.json` and `*-pin-*.log`.
 Iteration times are not network percentiles or absolute throughput claims.
 
 ```sh
-cargo bench --locked -p dns-core --bench engine -- wire --save-baseline borrowed-decision-before --sample-size 30 --warm-up-time 1 --measurement-time 2
-cargo bench --locked -p resolver --bench cache -- --save-baseline borrowed-decision-before --sample-size 30 --warm-up-time 1 --measurement-time 2
+cargo bench --locked -p rustwalld-dns-core --bench engine -- wire --save-baseline borrowed-decision-before --sample-size 30 --warm-up-time 1 --measurement-time 2
+cargo bench --locked -p rustwalld-dns-resolver --bench cache -- --save-baseline borrowed-decision-before --sample-size 30 --warm-up-time 1 --measurement-time 2
 # Repeat the saved before/final binaries in both orders; engine uses the five
 # selected affected wire cases, while cache runs all three scenarios.
 taskset -c 6 target/borrowed-decision/engine-inline-bin --bench '^(decision_cache_blocked_wire|dns_cache_hit_wire|dns_cache_long_name_wire|dns_cache_dnssec_wire|decision_cache_blocked_with_exceptions_wire)$' --save-baseline borrowed-pin-inline-1 --sample-size 50 --warm-up-time 1 --measurement-time 3

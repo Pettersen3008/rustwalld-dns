@@ -1,6 +1,6 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use resolver::{Forwarder, UpstreamTransport};
+use rustwalld_dns_resolver::{Forwarder, UpstreamTransport};
 use std::{net::SocketAddr, time::Duration};
 fuzz_target!(|data: &[u8]| {
     if data.len() > 65536 {

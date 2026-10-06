@@ -1,5 +1,9 @@
 # Client and network metadata
 
+Automation note (2026-10-06): GitHub Actions and `.github/` were removed at
+the maintainer's request. References to CI below describe historical verification;
+run the documented commands locally and retain artifacts under `target/`.
+
 Goal: annotate existing IP/subnet policy bindings, make them searchable and
 reviewable in the console, and retain those annotations through revisions,
 shadow, promotion, backup, recovery and rollback. DNS admission, longest-prefix

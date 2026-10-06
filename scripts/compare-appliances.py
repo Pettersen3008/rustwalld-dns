@@ -122,7 +122,7 @@ timeout_ms = 2000
                 "cache_ttl_min": 0, "cache_ttl_max": 0, "cache_optimistic": False,
                 "use_private_ptr_resolvers": False, "local_ptr_upstreams": [],
                 "upstream_timeout": "2s"},
-        "filtering": {"protection_enabled": True, "filtering_enabled": True,
+        "rustwalld-dns-filter": {"protection_enabled": True, "filtering_enabled": True,
                       "blocking_mode": "nxdomain", "filters_update_interval": 0,
                       "blocked_response_ttl": 2, "rewrites": []},
         "filters": [{"enabled": True, "url": "/opt/adguardhome/work/fixture.txt", "name": "fixture", "id": 1}],

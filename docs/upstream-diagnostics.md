@@ -1,5 +1,9 @@
 # Upstream failure diagnostics
 
+Automation note (2026-10-06): GitHub Actions and `.github/` were removed at
+the maintainer's request. References to CI below describe historical verification;
+run the documented commands locally and retain artifacts under `target/`.
+
 A failed endpoint exchange used to disappear behind the final `Unavailable`
 error. Preserve a fixed set of reasons in the resolver and show their counters in
 `GET /api/v1/upstreams` and the console. DNS behavior, sequential fallback,

@@ -1,6 +1,6 @@
-//! Run one dataset per process: cargo run --release -p filtering --example footprint -- 1000000
+//! Run one dataset per process: cargo run --release -p rustwalld-dns-filter --example footprint -- 1000000
 //! Linux RSS/HWM include compiler transients retained by the allocator, not just the snapshot.
-use filtering::{Action, FilterSnapshot, ListInput};
+use rustwalld_dns_filter::{Action, FilterSnapshot, ListInput};
 use std::{error::Error, fmt::Write, time::Instant};
 
 fn main() -> Result<(), Box<dyn Error>> {

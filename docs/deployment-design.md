@@ -1,5 +1,9 @@
 # ADR 003: release, recovery and management-failure isolation
 
+Automation note (2026-10-06): GitHub Actions and `.github/` were removed at
+the maintainer's request. References to CI below describe historical verification;
+run the documented commands locally and retain artifacts under `target/`.
+
 Goal: a complete deployment slice without changing DNS protocol or matching.
 Done: deterministic bundle verified twice; staged and clean-container installation,
 upgrade and backup recovery; non-root service unit validated; real-process DNS

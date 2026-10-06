@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used)]
-use filtering::{Action, ListInput};
-use policy::{Assertion, UpstreamTransport};
 use rustwalld_dns::config::{Config, FilterFile};
+use rustwalld_dns_filter::{Action, ListInput};
+use rustwalld_dns_policy::{Assertion, UpstreamTransport};
 use serde_json::Value;
 use std::{
     net::{TcpListener, UdpSocket},
@@ -57,11 +57,11 @@ fn offline_text_json_and_exit_status_report_all_cases_without_runtime_io() {
         ..Default::default()
     };
     config.policy.upstreams[0].addresses = vec![upstream_tcp.local_addr().unwrap()];
-    config.policy.bindings = vec![policy::Binding {
+    config.policy.bindings = vec![rustwalld_dns_policy::Binding {
         name: "Work – 内部".into(),
         network: "127.0.0.1/32".parse().unwrap(),
         policy: "default".into(),
-        metadata: Some(policy::BindingMetadata {
+        metadata: Some(rustwalld_dns_policy::BindingMetadata {
             group: Some("Work".into()),
             owner: Some("Operator".into()),
             vlan: Some(20),

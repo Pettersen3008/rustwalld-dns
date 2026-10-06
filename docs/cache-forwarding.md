@@ -1,5 +1,9 @@
 # Construct forwarding requests only on admitted misses
 
+Automation note (2026-10-06): GitHub Actions and `.github/` were removed at
+the maintainer's request. References to CI below describe historical verification;
+run the documented commands locally and retain artifacts under `target/`.
+
 Goal: remove measured request cloning/normalization from DNS-cache hits and
 coalesced waiters, while preserving canonical upstream questions, DO/CD cache
 partitions, per-client EDNS sizing and existing bounded cancellation-safe work.
@@ -50,8 +54,8 @@ Compare before/after within a scenario; iteration times are not network latency
 percentiles or absolute throughput claims. No zero-allocation claim.
 
 ```sh
-cargo bench --locked -p dns-core --bench engine -- wire --save-baseline cache-forward-before --sample-size 30 --warm-up-time 1 --measurement-time 2
-cargo bench --locked -p dns-core --bench engine -- wire --baseline cache-forward-before --sample-size 30 --warm-up-time 1 --measurement-time 2
+cargo bench --locked -p rustwalld-dns-core --bench engine -- wire --save-baseline cache-forward-before --sample-size 30 --warm-up-time 1 --measurement-time 2
+cargo bench --locked -p rustwalld-dns-core --bench engine -- wire --baseline cache-forward-before --sample-size 30 --warm-up-time 1 --measurement-time 2
 ```
 
 | Scenario | Allocations before / after | Allocated bytes before / after | Mean ns before / after |

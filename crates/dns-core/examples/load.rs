@@ -1,12 +1,12 @@
 //! Reproducible loopback benchmark. No public DNS or application I/O.
 #![allow(clippy::unwrap_used)]
-use dns_core::{Engine, Server, ServerConfig, reply, telemetry::Telemetry};
-use filtering::{Action, ListInput};
 use hickory_proto::{
     op::{Message, Query, ResponseCode},
     rr::{Name, RData, Record, RecordType, rdata::A},
 };
-use policy::{PolicyConfigSet, PolicySnapshot};
+use rustwalld_dns_core::{Engine, Server, ServerConfig, reply, telemetry::Telemetry};
+use rustwalld_dns_filter::{Action, ListInput};
+use rustwalld_dns_policy::{PolicyConfigSet, PolicySnapshot};
 use std::{
     net::SocketAddr,
     sync::{
@@ -92,13 +92,16 @@ async fn main() {
         rules: "blocked.test".into(),
     });
     let (telemetry, _events) = Telemetry::channel(4096);
-    let engine = Arc::new(Engine::new(
+    let (engine, control) = Engine::controlled(
         PolicySnapshot::compile(config.clone(), 1).unwrap(),
-        4096,
-        4096,
-        256,
+        rustwalld_dns_core::EngineConfig {
+            cache_entries: 4096,
+            decision_entries: 4096,
+            max_inflight: 256,
+        },
         telemetry,
-    ));
+    );
+    let engine = Arc::new(engine);
     let server = Server::bind(
         ServerConfig {
             listen: "127.0.0.1:0".parse().unwrap(),
@@ -159,7 +162,7 @@ async fn main() {
     report("128_duplicate_misses", samples, start, exchanges);
     let before = hits.load(Ordering::Relaxed);
     let start = Instant::now();
-    let reload_engine = engine.clone();
+    let reload_control = control.clone();
     let reload = tokio::task::spawn_blocking(move || {
         let mut rules = String::from("blocked.test\n");
         for i in 0..100000 {
@@ -170,7 +173,14 @@ async fn main() {
         let started = Instant::now();
         let snapshot = PolicySnapshot::compile(config, 2).unwrap();
         let promotion = Instant::now();
-        reload_engine.active.store(Arc::new(snapshot));
+        reload_control
+            .prepare(
+                snapshot,
+                rustwalld_dns_core::PublicationTarget::Active,
+                reload_control.version(),
+            )
+            .unwrap()
+            .commit();
         println!(
             "reload compile_ms={} atomic_store_us={}",
             started.elapsed().as_millis(),
@@ -189,12 +199,12 @@ async fn main() {
         start,
         hits.load(Ordering::Relaxed) - before,
     );
-    assert!(engine.resolver.cache.len() <= 4096);
-    assert_eq!(engine.resolver.inflight(), 0);
+    assert!(engine.resolver().cache.len() <= 4096);
+    assert_eq!(engine.resolver().inflight(), 0);
     println!(
         "telemetry_dropped={}",
         engine
-            .telemetry
+            .telemetry()
             .metrics
             .dropped_events
             .load(Ordering::Relaxed)

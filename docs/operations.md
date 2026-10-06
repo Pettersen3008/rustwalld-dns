@@ -1,5 +1,9 @@
 # Install, upgrade and recover a Rustwall appliance
 
+Automation note (2026-10-06): GitHub Actions and `.github/` were removed at
+the maintainer's request. References to CI below describe historical verification;
+run the documented commands locally and retain artifacts under `target/`.
+
 The bundler accepts native x86_64/aarch64 Linux GNU builds; smoke evidence currently
 covers x86_64 Debian only. Runtime installation uses systemd and Python 3.11+.
 Build hosts need Rust, Node22.12+ and a C toolchain. Runtime hosts need compatible

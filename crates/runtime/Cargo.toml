@@ -1,0 +1,44 @@
+[package]
+name = "rustwalld-dns-runtime"
+description = "Optional durable lifecycle and reviewed policy management for rustwalld-dns"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["dns", "security", "filtering"]
+categories = ["network-programming"]
+include = ["Cargo.toml", "README.md", "LICENSE-*", "src/**", "examples/**", "tests/**", "benches/**"]
+
+[lints]
+workspace = true
+
+[dependencies]
+rustwalld-dns-resolver = { path = "../resolver", version = "0.1" }
+rustwalld-dns-core = { path = "../dns-core", version = "0.1" }
+rustwalld-dns-policy = { path = "../policy", version = "0.1" }
+rustwalld-dns-filter = { path = "../filtering", version = "0.1" }
+tokio.workspace = true
+tokio-util.workspace = true
+serde.workspace = true
+tracing.workspace = true
+serde_json = "1"
+rusqlite = { version = "0.38", features = ["bundled", "backup"] }
+tempfile = "3"
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+httpdate = "1.0.3"
+bytes = "1"
+url = "2"
+ring = "0.17"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+webpki-roots = "1"
+
+thiserror.workspace = true
+
+[dev-dependencies]
+rcgen = "0.14"
+h2 = "0.4"
+http = "1"

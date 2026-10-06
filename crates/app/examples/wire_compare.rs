@@ -1,6 +1,5 @@
 //! Isolated comparative fixture and bounded Hickory wire client, never public DNS.
 use clap::{Parser, Subcommand, ValueEnum};
-use dns_core::reply;
 use hickory_proto::{
     op::{Message, MessageType, Query, ResponseCode},
     rr::{
@@ -8,6 +7,7 @@ use hickory_proto::{
         rdata::{A, AAAA, CNAME, SOA},
     },
 };
+use rustwalld_dns_core::reply;
 use serde_json::json;
 use std::{
     error::Error,

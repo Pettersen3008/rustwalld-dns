@@ -1,8 +1,8 @@
 #![no_main]
-use filtering::{Action, ListInput};
+use rustwalld_dns_filter::{Action, ListInput};
 use libfuzzer_sys::fuzz_target;
-use policy::{DownloadStamp, FilterSource, PolicyConfigSet, PolicySnapshot};
-use rustwalld_dns::downloads::{Validators, sha256, validate_config};
+use rustwalld_dns_policy::{DownloadStamp, FilterSource, PolicyConfigSet, PolicySnapshot};
+use rustwalld_dns_runtime::downloads::{Validators, sha256, validate_config};
 
 fuzz_target!(|input: &str| {
     if input.len() > 4096 {
@@ -46,7 +46,7 @@ fuzz_target!(|input: &str| {
             1 => Some(299),
             2 => Some(300),
             3 => Some(86400),
-            4 => Some(policy::MAX_REFRESH_INTERVAL),
+            4 => Some(rustwalld_dns_policy::MAX_REFRESH_INTERVAL),
             _ => Some(u64::MAX),
         },
         download: Some(DownloadStamp {

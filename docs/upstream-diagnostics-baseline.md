@@ -1,5 +1,9 @@
 # Upstream diagnostics baseline
 
+Automation note (2026-10-06): GitHub Actions and `.github/` were removed at
+the maintainer's request. References to CI below describe historical verification;
+run the documented commands locally and retain artifacts under `target/`.
+
 Measured 2026-10-05 on AMD Ryzen 7 9800X3D (8 cores / 16 threads), Linux
 7.2.5-3-omarchy x86_64, rustc 1.98.1. Shared unpinned workstation; release thin
 LTO and one codegen unit. The saved pre-change daemon and the diagnostic daemon

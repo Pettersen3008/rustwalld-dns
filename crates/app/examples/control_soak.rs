@@ -12,8 +12,8 @@ use hickory_proto::{
     rr::{Name, RData, Record, RecordType, rdata::A},
 };
 use histogram::Histogram;
-use policy::{Assertion, DownloadStamp};
 use rustwalld_dns::{config::Config, downloads::sha256};
+use rustwalld_dns_policy::{Assertion, DownloadStamp};
 use serde_json::{Value, json};
 use std::{
     collections::HashSet,
@@ -561,7 +561,7 @@ async fn main() {
             let (size, peer) = upstream.recv_from(&mut bytes).await.unwrap();
             let query = Message::from_vec(&bytes[..size]).unwrap();
             count.fetch_add(1, Ordering::Relaxed);
-            let mut reply = dns_core::reply(&query, ResponseCode::NoError);
+            let mut reply = rustwalld_dns_core::reply(&query, ResponseCode::NoError);
             reply.add_answer(Record::from_rdata(
                 query.queries[0].name().clone(),
                 3600,
@@ -603,27 +603,27 @@ async fn main() {
             .collect::<String>()
     );
     config.policy.upstreams[0].addresses = vec![upstream_addr];
-    config.policy.policies[0].lists = vec![filtering::ListInput {
+    config.policy.policies[0].lists = vec![rustwalld_dns_filter::ListInput {
         name: "base".into(),
-        action: filtering::Action::Block,
+        action: rustwalld_dns_filter::Action::Block,
         rules: base_rules.clone(),
     }];
     config.policy.assertions = vec![
         Assertion {
             client: "127.0.0.1".parse().unwrap(),
             domain: "blocked.test".into(),
-            expected: filtering::Action::Block,
+            expected: rustwalld_dns_filter::Action::Block,
         },
         Assertion {
             client: "127.0.0.1".parse().unwrap(),
             domain: "cached.test".into(),
-            expected: filtering::Action::Allow,
+            expected: rustwalld_dns_filter::Action::Allow,
         },
     ];
     publisher.conditional.lock().unwrap().text = base_rules.clone();
     let mut source = publisher.source("/conditional");
     source.list = "base".into();
-    source.refresh_interval_secs = Some(policy::MAX_REFRESH_INTERVAL);
+    source.refresh_interval_secs = Some(rustwalld_dns_policy::MAX_REFRESH_INTERVAL);
     source.download = Some(DownloadStamp {
         retrieved_at: SystemTime::now()
             .duration_since(UNIX_EPOCH)

@@ -462,27 +462,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dns-core"
-version = "0.1.0"
-dependencies = [
- "allocation-counter",
- "arc-swap",
- "bytes",
- "criterion",
- "filtering",
- "h2",
- "hickory-proto",
- "http",
- "policy",
- "rcgen",
- "resolver",
- "tokio",
- "tokio-rustls",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
 name = "either"
 version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -521,16 +500,6 @@ name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
-
-[[package]]
-name = "filtering"
-version = "0.1.0"
-dependencies = [
- "criterion",
- "idna",
- "serde",
- "thiserror",
-]
 
 [[package]]
 name = "find-msvc-tools"
@@ -1270,18 +1239,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "policy"
-version = "0.1.0"
-dependencies = [
- "filtering",
- "hickory-proto",
- "ipnet",
- "resolver",
- "serde",
- "thiserror",
-]
-
-[[package]]
 name = "portable-atomic"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1482,26 +1439,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "resolver"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "criterion",
- "h2",
- "hashbrown 0.17.1",
- "hickory-proto",
- "http",
- "rand 0.9.5",
- "rcgen",
- "serde",
- "thiserror",
- "tokio",
- "tokio-rustls",
- "tokio-util",
- "webpki-roots",
-]
-
-[[package]]
 name = "ring"
 version = "0.17.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1619,21 +1556,19 @@ dependencies = [
  "axum",
  "bytes",
  "clap",
- "dns-core",
- "filtering",
  "h2",
  "hickory-proto",
  "http",
- "http-body-util",
  "httpdate",
- "hyper",
- "hyper-util",
- "policy",
  "rcgen",
  "reqwest",
- "resolver",
  "ring",
  "rusqlite",
+ "rustwalld-dns-core",
+ "rustwalld-dns-filter",
+ "rustwalld-dns-policy",
+ "rustwalld-dns-resolver",
+ "rustwalld-dns-runtime",
  "serde",
  "serde_json",
  "subtle",
@@ -1645,6 +1580,98 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "rustwalld-dns-core"
+version = "0.1.0"
+dependencies = [
+ "allocation-counter",
+ "arc-swap",
+ "bytes",
+ "criterion",
+ "h2",
+ "hickory-proto",
+ "http",
+ "rcgen",
+ "rustwalld-dns-filter",
+ "rustwalld-dns-policy",
+ "rustwalld-dns-resolver",
+ "thiserror",
+ "tokio",
+ "tokio-rustls",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "rustwalld-dns-filter"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "idna",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
+name = "rustwalld-dns-policy"
+version = "0.1.0"
+dependencies = [
+ "hickory-proto",
+ "ipnet",
+ "rustwalld-dns-filter",
+ "rustwalld-dns-resolver",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
+name = "rustwalld-dns-resolver"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "criterion",
+ "h2",
+ "hashbrown 0.17.1",
+ "hickory-proto",
+ "http",
+ "rand 0.9.5",
+ "rcgen",
+ "serde",
+ "thiserror",
+ "tokio",
+ "tokio-rustls",
+ "tokio-util",
+ "webpki-roots",
+]
+
+[[package]]
+name = "rustwalld-dns-runtime"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "h2",
+ "http",
+ "http-body-util",
+ "httpdate",
+ "hyper",
+ "hyper-util",
+ "rcgen",
+ "ring",
+ "rusqlite",
+ "rustwalld-dns-core",
+ "rustwalld-dns-filter",
+ "rustwalld-dns-policy",
+ "rustwalld-dns-resolver",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-rustls",
+ "tokio-util",
+ "tracing",
  "url",
  "webpki-roots",
 ]

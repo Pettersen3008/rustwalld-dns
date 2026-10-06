@@ -4,7 +4,7 @@ use hickory_proto::{
     op::{Message, Query},
     rr::{Name, RData, Record, RecordType, rdata::A},
 };
-use resolver::{
+use rustwalld_dns_resolver::{
     cache::BoundedCache,
     response_cache::{CacheKey, ResponseCache},
 };

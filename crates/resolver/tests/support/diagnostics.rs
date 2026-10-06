@@ -1,4 +1,4 @@
-use resolver::{FailureKind, UpstreamHealth};
+use rustwalld_dns_resolver::{FailureKind, UpstreamHealth};
 use std::sync::atomic::Ordering;
 
 pub fn reconciled(health: &UpstreamHealth) {

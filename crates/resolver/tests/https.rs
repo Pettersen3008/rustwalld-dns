@@ -8,7 +8,7 @@ use hickory_proto::{
     rr::{Name, RecordType},
 };
 use http::{HeaderMap, StatusCode, header};
-use resolver::{
+use rustwalld_dns_resolver::{
     FailureKind, Forwarder, UpstreamTransport,
     https::decode_response,
     response_cache::{CacheKey, ResponseCache},

@@ -1,5 +1,9 @@
 # ADR 002: local management console and revision-safe editing
 
+Automation note (2026-10-06): GitHub Actions and `.github/` were removed at
+the maintainer's request. References to CI below describe historical verification;
+run the documented commands locally and retain artifacts under `target/`.
+
 Goal: complete Phase 8 as a working console for existing backend capabilities.
 Done: production build served by Axum; real-browser authentication, query
 explanations and validate/shadow/promote/rollback verified against the real API.

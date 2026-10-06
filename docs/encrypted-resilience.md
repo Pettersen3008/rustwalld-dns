@@ -1,5 +1,9 @@
 # Encrypted upstream failure rehearsal
 
+Automation note (2026-10-06): GitHub Actions and `.github/` were removed at
+the maintainer's request. References to CI below describe historical verification;
+run the documented commands locally and retain artifacts under `target/`.
+
 Goal: exercise the real appliance under sustained blocked, cached and fresh DNS
 traffic while encrypted upstreams fail and durable policy revisions are promoted.
 Done means a repeatable local-only harness, short CI regression run, recorded

@@ -1,5 +1,9 @@
 # Performance contract and methodology
 
+Automation note (2026-10-06): GitHub Actions and `.github/` were removed at
+the maintainer's request. References to CI below describe historical verification;
+run the documented commands locally and retain artifacts under `target/`.
+
 Targets are not measured claims: local blocked p50 <20 us / p99 <100 us; DNS
 cache p99 <150 us. Never trade DNS correctness for these targets.
 

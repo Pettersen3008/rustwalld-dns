@@ -81,7 +81,7 @@ mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
     use crate::{Assertion, PolicyConfigSet, PolicySnapshot};
-    use filtering::Action;
+    use rustwalld_dns_filter::Action;
 
     fn binding(network: &str, group: &str) -> Binding {
         Binding {

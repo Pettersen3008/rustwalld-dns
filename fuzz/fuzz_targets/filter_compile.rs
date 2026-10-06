@@ -1,5 +1,5 @@
 #![no_main]
-use filtering::{Action, FilterSnapshot, ListInput};
+use rustwalld_dns_filter::{Action, FilterSnapshot, ListInput};
 use libfuzzer_sys::fuzz_target;
 fuzz_target!(|input: &str| {
     if input.len() > 8192 {

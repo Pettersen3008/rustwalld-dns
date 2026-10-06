@@ -1,5 +1,9 @@
 # Control-plane recovery soak
 
+Automation note (2026-10-06): GitHub Actions and `.github/` were removed at
+the maintainer's request. References to CI below describe historical verification;
+run the documented commands locally and retain artifacts under `target/`.
+
 Goal: exercise repeated conditional retrieval, shadow review/promotion and SQLite
 writer failures while real DNS clients keep receiving correct replies. Complete
 when bounded measurement memory, phase correctness/recovery, sampled resources,

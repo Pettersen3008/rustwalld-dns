@@ -1,5 +1,9 @@
 # CPU per local DNS query
 
+Automation note (2026-10-06): GitHub Actions and `.github/` were removed at
+the maintainer's request. References to CI below describe historical verification;
+run the documented commands locally and retain artifacts under `target/`.
+
 Goal: close the CPU/query measurement gap without changing the DNS data plane.
 Done means a reproducible local probe, validated CPU accounting and guards,
 shared Criterion fixtures, complete checks and retained results/limits.
@@ -47,8 +51,8 @@ Kernel counter semantics are documented in
 ## Reproduction and results
 
 ```sh
-cargo test --locked -p dns-core --example cpu_probe
-cargo build --release --locked -p dns-core --example cpu_probe
+cargo test --locked -p rustwalld-dns-core --example cpu_probe
+cargo build --release --locked -p rustwalld-dns-core --example cpu_probe
 python3 scripts/cpu-probe.py --cpu 2 --output target/cpu-query.json
 ```
 

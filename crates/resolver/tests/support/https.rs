@@ -7,7 +7,7 @@ use hickory_proto::{
         rdata::{A, SOA},
     },
 };
-use resolver::UpstreamTransport;
+use rustwalld_dns_resolver::UpstreamTransport;
 use std::{
     net::SocketAddr,
     sync::{

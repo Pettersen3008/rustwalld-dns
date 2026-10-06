@@ -129,7 +129,7 @@ change in this short run; no parser/cache optimization was introduced.
 Repeat with:
 
 ```sh
-cargo bench -p dns-core --bench engine --locked -- \
+cargo bench -p rustwalld-dns-core --bench engine --locked -- \
   --warm-up-time 1 --measurement-time 2 --sample-size 20 \
   --save-baseline temporary-after
 ```

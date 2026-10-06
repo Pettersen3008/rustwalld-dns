@@ -1,12 +1,12 @@
 #![allow(clippy::unwrap_used)]
-use dns_core::{Engine, reply, telemetry::Telemetry};
-use filtering::{Action, ListInput};
 use hickory_proto::{
     op::{Edns, Message, Query, ResponseCode},
     rr::{Name, RData, Record, RecordType, rdata::A},
 };
-use policy::{PolicyConfigSet, PolicySnapshot};
-use resolver::response_cache::CacheKey;
+use rustwalld_dns_core::{reply, telemetry::Telemetry};
+use rustwalld_dns_filter::{Action, ListInput};
+use rustwalld_dns_policy::{PolicyConfigSet, PolicySnapshot};
+use rustwalld_dns_resolver::response_cache::CacheKey;
 use std::time::Instant;
 pub fn setup(exception_domain: Option<&str>) -> (Engine, Vec<u8>, Vec<u8>) {
     let mut config = PolicyConfigSet {
@@ -17,11 +17,11 @@ pub fn setup(exception_domain: Option<&str>) -> (Engine, Vec<u8>, Vec<u8>) {
             ("2001:db8::1/128", "IPv6 laptop"),
         ]
         .into_iter()
-        .map(|(network, name)| policy::Binding {
+        .map(|(network, name)| rustwalld_dns_policy::Binding {
             network: network.parse().unwrap(),
             name: name.into(),
             policy: "default".into(),
-            metadata: Some(policy::BindingMetadata {
+            metadata: Some(rustwalld_dns_policy::BindingMetadata {
                 group: Some("g".repeat(128)),
                 owner: Some("o".repeat(128)),
                 vlan: Some(4094),
@@ -44,7 +44,7 @@ pub fn setup(exception_domain: Option<&str>) -> (Engine, Vec<u8>, Vec<u8>) {
     if let Some(domain) = exception_domain {
         config.policies[0]
             .temporary_exceptions
-            .push(policy::TemporaryException {
+            .push(rustwalld_dns_policy::TemporaryException {
                 name: "bench-exception".into(),
                 domain: domain.into(),
                 expires_at: std::time::SystemTime::now()
@@ -77,7 +77,7 @@ pub fn setup(exception_domain: Option<&str>) -> (Engine, Vec<u8>, Vec<u8>) {
         3600,
         RData::A(A("192.0.2.1".parse().unwrap())),
     ));
-    engine.resolver.cache.insert(
+    engine.resolver().cache.insert(
         CacheKey::new(&request, 0, 1).unwrap(),
         response,
         Instant::now(),
@@ -115,19 +115,30 @@ pub fn dnssec_cache(long_name: bool) -> (Engine, Vec<u8>) {
         3600,
         RData::A(A("192.0.2.1".parse().unwrap())),
     ));
-    assert!(engine.resolver.cache.insert(key, response, Instant::now()));
+    assert!(
+        engine
+            .resolver()
+            .cache
+            .insert(key, response, Instant::now())
+    );
     (engine, request.to_vec().unwrap())
 }
 pub fn rewrite() -> (Engine, Vec<u8>) {
     let (engine, blocked, _) = setup(None);
-    let mut config = engine.active.load().config.clone();
-    config.policies[0].rewrites.push(policy::Rewrite {
-        domain: "blocked.test".into(),
-        addresses: vec!["192.0.2.2".parse().unwrap()],
-        ttl: 60,
-    });
+    let mut config = engine.active.load().config().clone();
+    config.policies[0]
+        .rewrites
+        .push(rustwalld_dns_policy::Rewrite {
+            domain: "blocked.test".into(),
+            addresses: vec!["192.0.2.2".parse().unwrap()],
+            ttl: 60,
+        });
     engine.active.store(std::sync::Arc::new(
         PolicySnapshot::compile(config, 2).unwrap(),
     ));
     (engine, blocked)
 }
+
+#[path = "../../tests/support/engine.rs"]
+mod engine_support;
+pub use engine_support::TestEngine as Engine;

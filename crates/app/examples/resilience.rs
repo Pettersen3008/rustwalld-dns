@@ -165,7 +165,7 @@ async fn main() {
             let (len, peer) = upstream.recv_from(&mut bytes).await.unwrap();
             let request = Message::from_vec(&bytes[..len]).unwrap();
             count.fetch_add(1, Ordering::Relaxed);
-            let mut response = dns_core::reply(&request, ResponseCode::NoError);
+            let mut response = rustwalld_dns_core::reply(&request, ResponseCode::NoError);
             response.add_answer(Record::from_rdata(
                 request.queries[0].name().clone(),
                 3600,
@@ -192,9 +192,9 @@ async fn main() {
         config.dns_listen.set_port(port());
     }
     config.policy.upstreams[0].addresses = vec![upstream_addr];
-    config.policy.policies[0].lists = vec![filtering::ListInput {
+    config.policy.policies[0].lists = vec![rustwalld_dns_filter::ListInput {
         name: "base".into(),
-        action: filtering::Action::Block,
+        action: rustwalld_dns_filter::Action::Block,
         rules: "blocked.test".into(),
     }];
     let config_path = dir.path().join("config.toml");

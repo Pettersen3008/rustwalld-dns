@@ -1,5 +1,9 @@
 # Removing redundant query string copies
 
+Automation note (2026-10-06): GitHub Actions and `.github/` were removed at
+the maintainer's request. References to CI below describe historical verification;
+run the documented commands locally and retain artifacts under `target/`.
+
 Goal: reduce measured query allocations while preserving DNS replies, policy
 generation isolation, event contents and nonblocking telemetry. Complete with
 before/after allocator and timing evidence, protocol regressions, real-process
@@ -45,7 +49,7 @@ one queued event. Compare before/after within a scenario; different batching and
 destructor accounting make cross-scenario absolute times unsuitable comparisons.
 
 ```sh
-cargo bench --locked -p dns-core --bench engine -- wire --sample-size 20 --warm-up-time 1 --measurement-time 1
+cargo bench --locked -p rustwalld-dns-core --bench engine -- wire --sample-size 20 --warm-up-time 1 --measurement-time 1
 ```
 
 Local artifacts are under `target/query-alloc/`, including saved source/binary,

@@ -1,6 +1,6 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use resolver::cache::{BoundedCache, Equivalent};
+use rustwalld_dns_resolver::cache::{BoundedCache, Equivalent};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct Key {

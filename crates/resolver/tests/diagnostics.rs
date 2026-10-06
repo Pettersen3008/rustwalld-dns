@@ -6,7 +6,7 @@ use hickory_proto::{
     op::{Message, Query, ResponseCode},
     rr::{Name, RecordType},
 };
-use resolver::{FailureKind, Forwarder};
+use rustwalld_dns_resolver::{FailureKind, Forwarder};
 use std::{
     sync::{
         Arc,
@@ -101,7 +101,7 @@ async fn closed_tcp_endpoint_is_connection_failure() {
     let f = Forwarder::with_transport(
         vec![address],
         Duration::from_millis(200),
-        &resolver::UpstreamTransport::Tls {
+        &rustwalld_dns_resolver::UpstreamTransport::Tls {
             server_name: "resolver.test".into(),
             ca_pem: None,
             max_connections: 1,
@@ -125,12 +125,12 @@ async fn closed_tcp_endpoint_is_connection_failure() {
 #[test]
 fn local_encoding_errors_and_tls_protocol_errors_are_not_text_matched() {
     assert_eq!(
-        resolver::ResolveError::Encoding.failure_kind(),
+        rustwalld_dns_resolver::ResolveError::Encoding.failure_kind(),
         FailureKind::LocalError
     );
     let textual = std::io::Error::other("invalid peer certificate: expired");
     assert_eq!(
-        resolver::ResolveError::Io(textual).failure_kind(),
+        rustwalld_dns_resolver::ResolveError::Io(textual).failure_kind(),
         FailureKind::Connection
     );
     let typed = std::io::Error::new(
@@ -138,7 +138,7 @@ fn local_encoding_errors_and_tls_protocol_errors_are_not_text_matched() {
         tokio_rustls::rustls::Error::General("test protocol failure".into()),
     );
     assert_eq!(
-        resolver::ResolveError::Io(typed).failure_kind(),
+        rustwalld_dns_resolver::ResolveError::Io(typed).failure_kind(),
         FailureKind::TlsProtocol
     );
 }

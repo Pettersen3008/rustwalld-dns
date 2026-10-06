@@ -1,5 +1,5 @@
 #![allow(clippy::unwrap_used)]
-use policy::FilterSource;
+use rustwalld_dns_policy::FilterSource;
 use std::{
     net::SocketAddr,
     sync::{
@@ -140,7 +140,7 @@ impl Fixture {
                                 "/chunked" => b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n9\r\nads.test\n\r\n0\r\n\r\n".to_vec(),
                                 "/manyheaders" => format!("HTTP/1.1 200 OK\r\n{}Content-Length: 0\r\n\r\n", "X-Test: x\r\n".repeat(40)).into_bytes(),
                                 "/hugeheaders" => format!("HTTP/1.1 200 OK\r\nX-Test: {}\r\nContent-Length: 0\r\n\r\n", "x".repeat(70000)).into_bytes(),
-                                "/streambig" => {let body = "x".repeat(policy::MAX_DOWNLOAD_BYTES + 1); format!("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{}\r\n0\r\n\r\n", body.len(), body).into_bytes()},
+                                "/streambig" => {let body = "x".repeat(rustwalld_dns_policy::MAX_DOWNLOAD_BYTES + 1); format!("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{}\r\n0\r\n\r\n", body.len(), body).into_bytes()},
                                 path => {
                                     let body: &[u8] = match path {
                                         "/empty" => b"", "/comments" => b"! comment\n# comment\n", "/invalid" => b"bad..test\n",

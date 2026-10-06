@@ -14,8 +14,8 @@ use hickory_proto::{
     rr::{Name, RData, RecordType, rdata::A},
 };
 use histogram::Histogram;
-use policy::{Assertion, PolicyConfigSet, UpstreamTransport};
 use rustwalld_dns::config::Config;
+use rustwalld_dns_policy::{Assertion, PolicyConfigSet, UpstreamTransport};
 use serde_json::{Value, json};
 use std::{
     collections::HashSet,
@@ -296,8 +296,11 @@ async fn diagnostics(client: &reqwest::Client, base: &str) -> Value {
         for server in profile["servers"].as_array().unwrap() {
             assert_eq!(server["inflight"], 0, "{server}");
             let failures = server["failures"].as_object().unwrap();
-            assert_eq!(failures.len(), resolver::FailureKind::ALL.len());
-            for kind in resolver::FailureKind::ALL {
+            assert_eq!(
+                failures.len(),
+                rustwalld_dns_resolver::FailureKind::ALL.len()
+            );
+            for kind in rustwalld_dns_resolver::FailureKind::ALL {
                 assert!(failures.contains_key(json!(kind).as_str().unwrap()));
             }
             assert_eq!(
@@ -517,15 +520,15 @@ async fn run(args: &Args, https: bool) -> Value {
     }
     config.policy.upstreams[0].addresses = vec![endpoints[0].address(), endpoints[1].address()];
     config.policy.upstreams[0].timeout_ms = 80;
-    config.policy.policies[0].lists = vec![filtering::ListInput {
+    config.policy.policies[0].lists = vec![rustwalld_dns_filter::ListInput {
         name: "base".into(),
-        action: filtering::Action::Block,
+        action: rustwalld_dns_filter::Action::Block,
         rules: "blocked.test".into(),
     }];
     config.policy.assertions = vec![Assertion {
         client: "127.0.0.1".parse().unwrap(),
         domain: "blocked.test".into(),
-        expected: filtering::Action::Block,
+        expected: rustwalld_dns_filter::Action::Block,
     }];
     let path = dir.path().join("config.toml");
     std::fs::write(&path, toml::to_string(&config).unwrap()).unwrap();

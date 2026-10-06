@@ -1,6 +1,6 @@
 //! One bounded control-plane worker. Timers never promote production policy.
-use crate::{api::AppState, downloads};
-use policy::{FilterSource, PolicySnapshot};
+use crate::{ControlService, downloads};
+use rustwalld_dns_policy::{FilterSource, PolicySnapshot};
 use serde::Serialize;
 use std::{
     sync::{Arc, Mutex},
@@ -104,10 +104,10 @@ impl Runtime {
     fn synchronize(&mut self, snapshot: &PolicySnapshot, now: Instant, wall: u64) {
         // Rollback also allocates a new generation. A delayed status/begin call
         // carrying a retired Arc must never rewind deadlines or clear a new queue.
-        if self.generation >= snapshot.generation {
+        if self.generation >= snapshot.generation() {
             return;
         }
-        self.generation = snapshot.generation;
+        self.generation = snapshot.generation();
         if self
             .queued
             .is_some_and(|queued| queued.generation != self.generation)
@@ -116,7 +116,7 @@ impl Runtime {
         }
         let mut old = std::mem::take(&mut self.entries);
         self.entries = snapshot
-            .config
+            .config()
             .filter_sources
             .iter()
             .enumerate()
@@ -198,7 +198,7 @@ impl Refresher {
     pub fn enqueue(&self, snapshot: &PolicySnapshot, index: usize) -> Result<(), String> {
         let mut runtime = self.inner.lock().map_err(|_| "refresh state unavailable")?;
         runtime.synchronize(snapshot, Instant::now(), wall_now());
-        if runtime.generation != snapshot.generation {
+        if runtime.generation != snapshot.generation() {
             return Err("configuration changed before scheduling the check".into());
         }
         if runtime.running.is_some() || runtime.queued.is_some() {
@@ -208,7 +208,7 @@ impl Refresher {
             return Err("source has no active refresh schedule".into());
         }
         runtime.queued = Some(Queued {
-            generation: snapshot.generation,
+            generation: snapshot.generation(),
             source: index,
         });
         drop(runtime);
@@ -223,7 +223,7 @@ impl Refresher {
         let now = Instant::now();
         let mut runtime = self.inner.lock().map_err(|_| "refresh state unavailable")?;
         runtime.synchronize(&snapshot, now, wall_now());
-        if runtime.running.is_some() || runtime.generation != snapshot.generation {
+        if runtime.running.is_some() || runtime.generation != snapshot.generation() {
             return Ok(None);
         }
         let position = if let Some(queued) = runtime.queued.take() {
@@ -257,7 +257,7 @@ impl Refresher {
         let cached = entry.cached.clone();
         let index = entry.index;
         runtime.running = Some(Running {
-            generation: snapshot.generation,
+            generation: snapshot.generation(),
             source: index,
             policy: source.policy.clone(),
             list: source.list.clone(),
@@ -287,7 +287,7 @@ struct Job {
 impl Job {
     fn rules(&self) -> Result<&str, String> {
         self.snapshot
-            .config
+            .config()
             .policies
             .iter()
             .find(|policy| policy.name == self.source.policy)
@@ -305,7 +305,7 @@ impl Job {
             return Ok(None);
         };
         // Stamps have already been checked against stored text at publication.
-        let valid = cache.generation == Some(self.snapshot.generation)
+        let valid = cache.generation == Some(self.snapshot.generation())
             || self
                 .source
                 .download
@@ -317,7 +317,7 @@ impl Job {
             };
         if valid {
             let cache = self.cached.as_mut().ok_or("validator state missing")?;
-            cache.generation = Some(self.snapshot.generation);
+            cache.generation = Some(self.snapshot.generation());
             Ok(Some(cache.validators.clone()))
         } else {
             self.cached = None;
@@ -327,18 +327,18 @@ impl Job {
     fn finish(&mut self, outcome: Outcome, error: Option<String>) {
         if let Ok(mut runtime) = self.refresher.inner.lock() {
             if runtime.running.as_ref().is_some_and(|running| {
-                running.generation == self.snapshot.generation && running.source == self.index
+                running.generation == self.snapshot.generation() && running.source == self.index
             }) {
                 runtime.running = None;
             }
-            let current = runtime.generation == self.snapshot.generation;
+            let current = runtime.generation == self.snapshot.generation();
             if let Some(entry) = runtime
                 .entries
                 .iter_mut()
                 .find(|entry| same_source(&entry.source, &self.source))
             {
                 entry.last_checked = Some(wall_now());
-                entry.checked_generation = Some(self.snapshot.generation);
+                entry.checked_generation = Some(self.snapshot.generation());
                 entry.outcome = outcome;
                 entry.transfer = self.transfer;
                 if current && !matches!(outcome, Outcome::Deferred | Outcome::Cancelled) {
@@ -373,9 +373,9 @@ impl Drop for Job {
     }
 }
 
-async fn check(state: &Arc<AppState>, stop: &CancellationToken) -> Result<(), String> {
+async fn check(state: &Arc<ControlService>, stop: &CancellationToken) -> Result<(), String> {
     // A shadow is review work. Never replace it or run more checks while it exists.
-    if state.engine.shadow.load().is_some() {
+    if state.engine.shadow().is_some() {
         state.refreshes.discard_queued()?;
         return Ok(());
     }
@@ -384,7 +384,7 @@ async fn check(state: &Arc<AppState>, stop: &CancellationToken) -> Result<(), St
     }
     let Some(job) = state
         .refreshes
-        .begin(state.engine.active.load_full(), &state.downloads)?
+        .begin(state.engine.snapshot(), &state.downloads)?
     else {
         return Ok(());
     };
@@ -419,8 +419,8 @@ async fn check(state: &Arc<AppState>, stop: &CancellationToken) -> Result<(), St
     if stop.is_cancelled() {
         return Ok(());
     }
-    if state.engine.active.load().generation != job.snapshot.generation
-        || state.engine.shadow.load().is_some()
+    if state.engine.active().generation() != job.snapshot.generation()
+        || state.engine.shadow().is_some()
     {
         job.finish(
             Outcome::Deferred,
@@ -446,7 +446,7 @@ async fn check(state: &Arc<AppState>, stop: &CancellationToken) -> Result<(), St
     job.transfer = Some((200, stamp.bytes));
     let unchanged = job.rules()? == text;
     job.cached = validators.usable().then(|| Cached {
-        generation: unchanged.then_some(job.snapshot.generation),
+        generation: unchanged.then_some(job.snapshot.generation()),
         sha256: stamp.sha256.clone(),
         bytes: stamp.bytes,
         validators,
@@ -456,7 +456,7 @@ async fn check(state: &Arc<AppState>, stop: &CancellationToken) -> Result<(), St
         return Ok(());
     }
     let (mut job, config) = tokio::task::spawn_blocking(move || {
-        let mut config = job.snapshot.config.clone();
+        let mut config = job.snapshot.config().clone();
         let list = config
             .policies
             .iter_mut()
@@ -476,23 +476,28 @@ async fn check(state: &Arc<AppState>, stop: &CancellationToken) -> Result<(), St
     .map_err(|_| "refresh candidate preparation stopped")??;
     // Once compilation/commit starts, drain it before SQLite shutdown. stage_refresh
     // retains mutation admission until its durable commit and shadow publication end.
-    match crate::api::stage_refresh(state.clone(), config, job.index, job.snapshot.generation).await
+    match state
+        .stage_refresh(config, job.index, job.snapshot.generation())
+        .await
     {
         Ok(()) => job.finish(Outcome::Staged, None),
         Err(error) => {
-            let outcome = if matches!(error.0.as_u16(), 409 | 412) {
+            let outcome = if matches!(
+                error,
+                crate::ControlError::Conflict(_) | crate::ControlError::Stale
+            ) {
                 Outcome::Deferred
             } else {
                 Outcome::Failed
             };
             job.cached = None;
-            job.finish(outcome, Some(error.1));
+            job.finish(outcome, Some(error.to_string()));
         }
     }
     Ok(())
 }
 
-pub async fn run(state: Arc<AppState>, stop: CancellationToken) {
+pub async fn run(state: Arc<ControlService>, stop: CancellationToken) {
     loop {
         if stop.is_cancelled() {
             return;
@@ -512,12 +517,12 @@ pub async fn run(state: Arc<AppState>, stop: CancellationToken) {
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
-    use policy::{DownloadStamp, PolicyConfigSet};
+    use rustwalld_dns_policy::{DownloadStamp, PolicyConfigSet};
     fn config() -> PolicyConfigSet {
         let mut config = PolicyConfigSet::default();
-        config.policies[0].lists = vec![filtering::ListInput {
+        config.policies[0].lists = vec![rustwalld_dns_filter::ListInput {
             name: "test".into(),
-            action: filtering::Action::Block,
+            action: rustwalld_dns_filter::Action::Block,
             rules: "ads.test\n".into(),
         }];
         config.filter_sources = vec![FilterSource {
@@ -571,7 +576,7 @@ mod tests {
         job.finish(Outcome::Unchanged, None);
         drop(job);
         // A URL/trust/interval change starts with no validators.
-        let mut changed = newer.config.clone();
+        let mut changed = newer.config().clone();
         changed.filter_sources[0].url.push_str("?different");
         let third = Arc::new(PolicySnapshot::compile(changed, 3).unwrap());
         assert!(

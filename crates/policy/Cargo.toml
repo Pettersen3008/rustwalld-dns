@@ -1,15 +1,22 @@
 [package]
-name = "policy"
+name = "rustwalld-dns-policy"
+description = "Assertion-gated DNS policy compilation and client selection"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["dns", "security", "filtering"]
+categories = ["network-programming"]
+include = ["Cargo.toml", "README.md", "LICENSE-*", "src/**", "examples/**", "tests/**", "benches/**"]
 
 [lints]
 workspace = true
 
 [dependencies]
-filtering = { path = "../filtering", version = "0.1" }
-resolver = { path = "../resolver", version = "0.1" }
+rustwalld-dns-filter = { path = "../filtering", version = "0.1" }
+rustwalld-dns-resolver = { path = "../resolver", version = "0.1" }
 hickory-proto.workspace = true
 serde.workspace = true
 thiserror.workspace = true

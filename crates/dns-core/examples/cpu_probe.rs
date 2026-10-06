@@ -1,5 +1,5 @@
 //! Linux benchmark-only CPU accounting. No proc reads occur inside Engine.
-use dns_core::Engine;
+use fixtures::Engine;
 use hickory_proto::{
     op::{Message, MessageType, ResponseCode},
     rr::{RData, rdata::A},
@@ -62,9 +62,9 @@ impl Scenario {
     }
     fn counter(self, engine: &Engine) -> u64 {
         match self {
-            Self::Blocked => engine.telemetry.metrics.blocked.load(Ordering::Relaxed),
-            Self::Rewrite => engine.telemetry.metrics.rewrites.load(Ordering::Relaxed),
-            _ => engine.resolver.metrics.cache_hits.load(Ordering::Relaxed),
+            Self::Blocked => engine.telemetry().metrics.blocked.load(Ordering::Relaxed),
+            Self::Rewrite => engine.telemetry().metrics.rewrites.load(Ordering::Relaxed),
+            _ => engine.resolver().metrics.cache_hits.load(Ordering::Relaxed),
         }
     }
 }
@@ -225,7 +225,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             if std::hint::black_box(runtime.block_on(engine.answer(&bytes, client, false)))
                 .is_none()
                 || engine
-                    .resolver
+                    .resolver()
                     .metrics
                     .upstream_lookups
                     .load(Ordering::Relaxed)
@@ -237,13 +237,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         // This benchmark links no allocation-counter hooks. Criterion measures
         // allocations separately using these same fixtures.
         if options.inject_cache_miss && scenario == Scenario::Cache {
-            engine.resolver = resolver::Resolver::new(0, 1);
+            engine = engine.without_response_cache();
         }
         for batch in 1..=options.batches {
             let count = scenario.counter(&engine);
-            let requests = engine.telemetry.metrics.requests.load(Ordering::Relaxed);
+            let requests = engine.telemetry().metrics.requests.load(Ordering::Relaxed);
             let temporary = engine
-                .telemetry
+                .telemetry()
                 .metrics
                 .temporary_allows
                 .load(Ordering::Relaxed);
@@ -260,7 +260,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 )))
                 .is_none()
                     || engine
-                        .resolver
+                        .resolver()
                         .metrics
                         .upstream_lookups
                         .load(Ordering::Relaxed)
@@ -272,11 +272,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             let wall = start.elapsed().as_nanos();
             let cpu = CpuTicks::read()?.since(before)?;
             if scenario.counter(&engine) - count != options.iterations
-                || engine.telemetry.metrics.requests.load(Ordering::Relaxed) - requests
+                || engine.telemetry().metrics.requests.load(Ordering::Relaxed) - requests
                     != options.iterations
                 || (scenario == Scenario::Temporary
                     && engine
-                        .telemetry
+                        .telemetry()
                         .metrics
                         .temporary_allows
                         .load(Ordering::Relaxed)

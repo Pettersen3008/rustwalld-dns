@@ -1,5 +1,9 @@
 # Delivery checklist
 
+Automation note (2026-10-06): GitHub Actions and `.github/` were removed at
+the maintainer's request. References to CI below describe historical verification;
+run the documented commands locally and retain artifacts under `target/`.
+
 Complete and verify slices in order; no placeholder crates or endpoint responses.
 
 - [x] 0: architecture, dependency/RFC review, benchmark method
@@ -288,13 +292,16 @@ does not replace native/production observation or establish maximum capacity.
 
 ## Reusable libraries and open-source preparation
 
-The proposed behavior-preserving refactor is in open-source-refactor.md. Start
-with a recoverable source/performance baseline, then rename packages, organize
-modules, define checked embedding APIs and separate durable control services
-from HTTP/CLI adapters. Preserve existing tests, workloads and external formats;
-accept changes only with appropriate correctness and performance evidence.
+- [x] Preserve measured baseline and original cases; rename reusable packages.
+- [x] Organize core/policy/routes/tests and expose checked immutable embedding APIs.
+- [x] Extract typed durable services and explicit runtime lifecycle from HTTP/CLI.
+- [x] Verify independent/public consumers, archives, documentation and Rust 1.95.
+- [x] Complete matched timing/allocation/memory and local recovery verification.
 
-This is repository/library preparation, not additional v0.1 DNS features. Native
-deployment and the representative-network soak above remain pending release
-gates. Rustwalld integration is demonstrated through independent consumer
-fixtures in this repository; no changes to the Rustwalld project are planned.
+See [the approved design](open-source-refactor.md), [embedding](embedding.md) and
+[verification evidence](refactor-results.md). The private development repository
+has no CI/CD or `.github/` folder; checks are local commands/scripts.
+
+Native deployment and the representative-network soak above remain pending
+release gates. Actual Rustwalld integration needs a separate change in that
+project; no files in `~/Work/rustwalld` were changed.

@@ -17,9 +17,41 @@ the real appliance with local TLS/HTTPS outages and concurrent durable promotion
 It separates blocked queries, cache probes and fresh misses, checks recovery and
 connection retirement, and retains latency/resource evidence.
 
+## Use as a Rust library
+
+| Crate | Responsibility |
+| --- | --- |
+| [rustwalld-dns-filter](crates/filtering/README.md) | Pure immutable matching and provenance |
+| [rustwalld-dns-resolver](crates/resolver/README.md) | Bounded forwarding, caching and coalescing |
+| [rustwalld-dns-policy](crates/policy/README.md) | Assertion-gated snapshots and client policy selection |
+| [rustwalld-dns-core](crates/dns-core/README.md) | Embeddable engine, checked publication and UDP/TCP ingress |
+| [rustwalld-dns-runtime](crates/runtime/README.md) | Optional durable revisions, history, downloads and lifecycle |
+
+Core has no dependency on the app, Axum, SQLite or JSON. The optional runtime
+owns durable services; the host owns signals, executors and management adapters.
+[Embedding guidance](docs/embedding.md) explains integration and cancellation.
+Public examples and [independent consumers](tests/consumers) verify these APIs.
+These crates are prepared locally; registry publication is a separate step.
+
+```sh
+cargo run --locked -p rustwalld-dns-core --example embedded
+cargo doc --workspace --no-deps --locked --open
+python3 scripts/verify-consumers.py
+```
+
+To use the checkout before publication, add a path dependency such as
+`rustwalld-dns-core = { path = "../rustwalld-dns/crates/dns-core" }` to your host
+project. Rustwalld integration is possible through that API; its actual dependency
+graph and application lifecycle require a separate integration change. This
+refactor makes no changes in `~/Work/rustwalld`.
+
+See [CONTRIBUTING](CONTRIBUTING.md), [SECURITY](SECURITY.md),
+[CHANGELOG](CHANGELOG.md) and [release preparation](docs/releasing.md).
+
 ## Run
 
-Requires stable Rust and a C/C++ toolchain for bundled SQLite/fuzz builds.
+Requires Rust 1.95+ and a C/C++ toolchain for bundled SQLite/fuzz builds.
+The checked-in toolchain pins 1.98.1 for performance/release reproducibility.
 
 ```sh
 cargo run -p rustwalld-dns -- --print-default-config > config.toml
@@ -74,7 +106,7 @@ permissions, sandboxing and the limits of this initial Linux deployment support.
 
 ## Management console
 
-Build the console with Node 22.12+ (Node 24 LTS is used in CI):
+Build the console with Node 22.12+ (Node 24 was used for local verification):
 
 ```sh
 npm --prefix web ci
@@ -403,11 +435,11 @@ SQLite write lock, then a scheduled HTTPS body stalled after authentication.
 The scheduled phase caps its sample window at five seconds and verifies that
 shutdown closes the download. It checks response correctness, rejected publication, admission
 and telemetry drops, and records latency plus hardware/toolchain metadata.
-Latency is diagnostic, not a noisy CI performance gate.
+Latency is diagnostic; stable hardware is required for regression thresholds.
 
 The [filter memory comparison](docs/filter-memory.md) records fresh-process
-RSS/peak and broader matcher workloads. CI retains a one-million-rule footprint
-alongside Criterion results; logical payload estimates are not exact RSS.
+RSS/peak and broader matcher workloads. Retain footprint and Criterion artifacts
+locally; logical payload estimates are not exact RSS.
 
 The [query allocation comparison](docs/query-allocations.md) covers blocked,
 cached, rewritten and temporary-allow replies with closed/empty/full telemetry
@@ -422,7 +454,7 @@ and repeated CPU-pinned timing checks, including slightly slower cache results.
 The [CPU/query probe](docs/cpu-query.md) measures warmed local paths in a separate
 Linux executable with no allocation-counter hooks. It records process CPU ticks,
 quantization limits, hardware and binary identity, and rejects upstream work.
-Short CI runs verify accounting; longer quiet batches supply CPU estimates.
+Short local runs verify accounting; longer quiet batches supply CPU estimates.
 
 The [appliance comparison](docs/comparison.md) runs pinned Pi-hole, AdGuard Home
 and our daemon against the same generated rules and isolated local upstream.
@@ -444,12 +476,12 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --locked
 cargo bench --workspace
-DNS_BENCH_SIZES=100000,1000000,5000000,10000000 cargo bench -p filtering --bench matching
-cargo run --release --locked -p filtering --example footprint -- 1000000
-cargo run -p dns-core --release --example load
+DNS_BENCH_SIZES=100000,1000000,5000000,10000000 cargo bench -p rustwalld-dns-filter --bench matching
+cargo run --release --locked -p rustwalld-dns-filter --example footprint -- 1000000
+cargo run -p rustwalld-dns-core --release --example load
 python3 scripts/measure.py target/release/examples/load
-cargo test --locked -p dns-core --example cpu_probe
-cargo build --release --locked -p dns-core --example cpu_probe
+cargo test --locked -p rustwalld-dns-core --example cpu_probe
+cargo build --release --locked -p rustwalld-dns-core --example cpu_probe
 python3 scripts/cpu-probe.py --output target/cpu-query.json
 # Optionally add --cpu N for a CPU in the current process's allowed affinity.
 cargo install cargo-audit cargo-deny cargo-fuzz --locked
@@ -498,13 +530,13 @@ DNS mock resolvers and production UI assets. It uses local ports 18081 (HTTP),
 server. Desktop/mobile tests verify authentication, memory-only credentials,
 provenance, failed assertions, shadow/promotion/rollback against real DNS,
 conflicting editors, preserved drafts, telemetry errors and multiline editing.
-Screenshots and failure traces go to `web/test-results/` and CI artifacts.
+Screenshots and failure traces go to ignored `web/test-results/`.
 
 Tests use local mock upstreams and real DNS/HTTP requests. They cover spoofed replies,
 TCP fallback, TTL/negative semantics, cache partitioning, 1,000 coalesced waiters,
 initiator cancellation, overload, reload, shadow/rollback, idle connections and
-SQLite locking. Fuzzing runs separately from normal CI. CI stores Criterion
-artifacts; strict performance thresholds await a stable dedicated runner.
+SQLite locking. Run fuzzing separately from other local checks and retain Criterion
+artifacts under target/. There is no CI/CD or .github/ directory.
 
 See [architecture](docs/architecture.md), [benchmark method](docs/benchmarks.md),
 [measured baseline](docs/baseline.md), [console decisions](docs/management-ui.md),
@@ -530,6 +562,6 @@ TMPDIR="$PWD/target/tool-tmp" target/release/examples/control_soak --binary targ
 ```
 
 Build first, then measure with other build/test/browser/container jobs idle.
-Normal CI runs two short cycles; the manual Control-plane soak workflow exposes
-longer durations. No network latency or RSS threshold is claimed across machines.
+Use short cycles for local smoke verification and longer durations for measurement.
+No network latency or RSS threshold is claimed across machines.
 See [workload, bounds and evidence](docs/control-plane-soak.md).

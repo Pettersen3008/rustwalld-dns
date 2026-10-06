@@ -1,0 +1,149 @@
+//! Optional bounded control-plane work. Query snapshots never retain this pool.
+use crate::{Action, CompileError, FilterSnapshot, ListInput, Matcher, compile};
+use compile::{ParsedRules, Work};
+use rayon::{ThreadPool, ThreadPoolBuilder, prelude::*};
+use std::collections::HashMap;
+
+const BATCH_LINES: usize = 8192;
+const BATCH_BYTES: usize = 1024 * 1024;
+const PARSE_MIN_BYTES: usize = 64 * 1024;
+const INDEX_MIN_RULES: usize = 32768;
+
+#[derive(Debug, thiserror::Error)]
+pub enum PoolError {
+    #[error("compilation workers must be between 1 and 4")]
+    Workers,
+    #[error("could not start compilation workers: {0}")]
+    Start(#[from] rayon::ThreadPoolBuildError),
+}
+
+/// Owned compilation pool. Create once on the control plane and share as needed.
+/// Never call compilation or construct this pool from a DNS query task.
+pub struct ParallelCompiler {
+    pool: ThreadPool,
+}
+impl ParallelCompiler {
+    pub fn new(workers: usize) -> Result<Self, PoolError> {
+        if !(1..=4).contains(&workers) {
+            return Err(PoolError::Workers);
+        }
+        let pool = ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .thread_name(|index| format!("dns-compile-{index}"))
+            .build()?;
+        Ok(Self { pool })
+    }
+    pub fn compile(
+        &self,
+        lists: &[ListInput],
+        max_rules: usize,
+        max_bytes: usize,
+    ) -> Result<FilterSnapshot, CompileError> {
+        compile::build(lists, max_rules, max_bytes, self)
+    }
+}
+impl Work for ParallelCompiler {
+    fn parse(
+        &self,
+        list: &ListInput,
+        budget: usize,
+        mut consume: impl FnMut(usize, ParsedRules) -> Result<(), CompileError>,
+    ) -> Result<(), CompileError> {
+        if list.rules.len() < PARSE_MIN_BYTES {
+            return compile::Sequential.parse(list, budget, consume);
+        }
+        let mut lines = list.rules.lines().enumerate().peekable();
+        let mut raw = 0;
+        loop {
+            let mut batch = Vec::new();
+            let mut bytes = 0;
+            while let Some(&(index, line)) = lines.peek() {
+                let Some(content) = compile::content(line) else {
+                    lines.next();
+                    continue;
+                };
+                if raw == budget
+                    || batch.len() == BATCH_LINES
+                    || line.len() > BATCH_BYTES
+                    || bytes + line.len() > BATCH_BYTES
+                {
+                    break;
+                }
+                lines.next();
+                raw += 1;
+                bytes += line.len();
+                batch.push((index, content));
+            }
+            if !batch.is_empty() {
+                // Indexed collection retains input order. Commit and deduplicate
+                // below on the caller, never concurrently or by worker order.
+                let parsed: Vec<_> = self.pool.install(|| {
+                    batch
+                        .par_iter()
+                        .map(|&(index, line)| (index, crate::parse_rule(line, list.action)))
+                        .collect()
+                });
+                for (index, rules) in parsed {
+                    consume(index, rules)?;
+                }
+                continue;
+            }
+            let Some((index, line)) = lines.next() else {
+                return Ok(());
+            };
+            let Some(line) = compile::content(line) else {
+                continue;
+            };
+            if raw == budget {
+                return Err(CompileError::Limit);
+            }
+            // An oversized individual line follows the original parser alone;
+            // never expand several oversized hosts lines concurrently.
+            raw += 1;
+            consume(index, crate::parse_rule(line, list.action))?;
+        }
+    }
+    fn finish(&self, snapshot: &mut FilterSnapshot) {
+        if snapshot.rules.len() < INDEX_MIN_RULES {
+            return compile::Sequential.finish(snapshot);
+        }
+        let FilterSnapshot {
+            rules,
+            allow_suffix,
+            deny_suffix,
+            allow_exact,
+            deny_exact,
+            ..
+        } = snapshot;
+        self.pool.install(|| {
+            rules.par_iter_mut().for_each(|rule| {
+                let suffix = if rule.action == Action::Allow {
+                    &*allow_suffix
+                } else {
+                    &*deny_suffix
+                };
+                let candidate = if rule.matcher == Matcher::Exact {
+                    Some(rule.domain.as_ref())
+                } else {
+                    crate::parent(&rule.domain)
+                };
+                rule.redundant =
+                    candidate.is_some_and(|domain| crate::suffix_match(suffix, domain).is_some());
+            });
+            let exact = |action| {
+                let mut map = HashMap::new();
+                for rule in rules.iter().filter(|rule| {
+                    rule.action == action && rule.matcher == Matcher::Exact && !rule.redundant
+                }) {
+                    map.insert(rule.domain.clone(), rule.id);
+                }
+                map
+            };
+            let (allow, deny) = rayon::join(|| exact(Action::Allow), || exact(Action::Block));
+            *allow_exact = allow;
+            *deny_exact = deny;
+        });
+        allow_suffix.retain(|_, id| !rules[*id as usize].redundant);
+        deny_suffix.retain(|_, id| !rules[*id as usize].redundant);
+    }
+}

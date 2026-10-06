@@ -13,3 +13,10 @@ for name in ("core", "components", "runtime"):
         ["cargo", "test", "--manifest-path", str(manifest), "--locked", "--target-dir", str(ROOT / "target")],
     ):
         subprocess.run(command, cwd=ROOT, check=True)
+
+    if name in ("components", "runtime"):
+        for tool in ("clippy", "test"):
+            command = ["cargo", tool, "--manifest-path", str(manifest), "--all-features", "--locked", "--target-dir", str(ROOT / "target")]
+            if tool == "clippy":
+                command += ["--all-targets", "--", "-D", "warnings"]
+            subprocess.run(command, cwd=ROOT, check=True)

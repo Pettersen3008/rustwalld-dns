@@ -154,8 +154,10 @@ verify and retain. If a future profile identifies a safety-check bottleneck,
 first try a safe API; any proposed unsafe exception needs explicit invariants,
 malformed-input coverage, audit and measured benefit before changing the contract.
 
-Rayon is already a development-only transitive dependency of Criterion, not a
-production worker pool. A possible future use is parallel compilation of large
+At this slice's baseline, Rayon was a development-only transitive dependency of
+Criterion. The subsequent [bounded compilation experiment](parallel-compilation.md)
+adds an optional owned pool with measured memory/latency tradeoffs; default builds
+remain sequential. The original proposed use was parallel compilation of large
 filter inputs on the control executor. First profile parsing, IDNA normalization,
 deduplication, redundancy detection and map construction separately. Parallel
 parsing must preserve rule IDs, source order, limit/error behavior and provenance;

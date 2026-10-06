@@ -305,3 +305,13 @@ has no CI/CD or `.github/` folder; checks are local commands/scripts.
 Native deployment and the representative-network soak above remain pending
 release gates. Actual Rustwalld integration needs a separate change in that
 project; no files in `~/Work/rustwalld` were changed.
+
+## Bounded parallel compilation
+
+- [x] Preserve original compiler/shipping artifacts and measure sequential overhead.
+- [x] Add optional owned pools, ordered provenance and differential contract tests.
+- [x] Compare serial Criterion, fresh-process memory and local DNS during publication.
+- [x] Complete extended reload/recovery, dependency/fuzz/MSRV and public archive checks.
+
+See [parallel-compilation.md](parallel-compilation.md). Existing constructors and
+ordinary builds retain sequential behavior; parallel compilation is explicit.

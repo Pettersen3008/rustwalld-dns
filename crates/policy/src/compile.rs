@@ -24,6 +24,39 @@ impl PolicySnapshot {
     }
     // Never expose a snapshot that has not passed required assertions.
     pub(crate) fn build(config: PolicyConfigSet, generation: u64) -> Result<Self, PolicyError> {
+        Self::build_using(config, generation, FilterSnapshot::compile)
+    }
+    /// Compile through an owned bounded pool, preserving the assertion gate.
+    /// The caller must keep this synchronous work off the DNS executor.
+    #[cfg(feature = "parallel")]
+    pub fn compile_parallel(
+        config: PolicyConfigSet,
+        generation: u64,
+        compiler: &rustwalld_dns_filter::ParallelCompiler,
+    ) -> Result<Self, PolicyError> {
+        let snapshot = Self::build_parallel(config, generation, compiler)?;
+        snapshot.test_assertions()?;
+        Ok(snapshot)
+    }
+    #[cfg(feature = "parallel")]
+    pub(crate) fn build_parallel(
+        config: PolicyConfigSet,
+        generation: u64,
+        compiler: &rustwalld_dns_filter::ParallelCompiler,
+    ) -> Result<Self, PolicyError> {
+        Self::build_using(config, generation, |lists, rules, bytes| {
+            compiler.compile(lists, rules, bytes)
+        })
+    }
+    fn build_using(
+        config: PolicyConfigSet,
+        generation: u64,
+        compile_filters: impl Fn(
+            &[rustwalld_dns_filter::ListInput],
+            usize,
+            usize,
+        ) -> Result<FilterSnapshot, rustwalld_dns_filter::CompileError>,
+    ) -> Result<Self, PolicyError> {
         sources::validate(&config)?;
         let clock = exceptions::Clock::now();
         if generation == 0
@@ -97,7 +130,7 @@ impl PolicySnapshot {
                     "combined filter data exceeds 256 MiB".into(),
                 ));
             }
-            let filters = FilterSnapshot::compile(&input.lists, 10_000_000, 256 * 1024 * 1024)?;
+            let filters = compile_filters(&input.lists, 10_000_000, 256 * 1024 * 1024)?;
             if filters.stats.iter().any(|s| s.invalid > 0) {
                 return Err(PolicyError::Invalid(format!(
                     "policy {} has invalid filter rules",

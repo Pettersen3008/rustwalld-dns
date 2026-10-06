@@ -11,6 +11,9 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+parallel-compilation = ["rustwalld-dns-runtime/parallel-compilation", "rustwalld-dns-filter/parallel"]
+
 [dependencies]
 rustwalld-dns-runtime = { path = "../runtime", version = "0.1" }
 rustwalld-dns-resolver = { path = "../resolver", version = "0.1" }

@@ -25,6 +25,29 @@ mod tests {
         assert_eq!(filters.evaluate("safe.ads.test").action, Action::Allow);
         assert_eq!(filters.evaluate("child.exact.test").action, Action::Allow);
     }
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn explicitly_owned_pool_compiles_without_a_daemon_or_global_pool() {
+        let compiler = rustwalld_dns_filter::ParallelCompiler::new(2).unwrap();
+        let rules = (0..40000).map(|i| format!("=rule{i}.test\n")).collect();
+        let snapshot = compiler
+            .compile(
+                &[ListInput {
+                    name: "large".into(),
+                    action: Action::Block,
+                    rules,
+                }],
+                40000,
+                1024 * 1024,
+            )
+            .unwrap();
+        assert_eq!(snapshot.effective_rules(), 40000);
+        assert_eq!(snapshot.evaluate("rule39999.test").action, Action::Block);
+        assert_eq!(
+            snapshot.evaluate("child.rule39999.test").action,
+            Action::Allow
+        );
+    }
     #[tokio::test]
     async fn resolver_accepts_an_explicit_local_endpoint() {
         use hickory_proto::{

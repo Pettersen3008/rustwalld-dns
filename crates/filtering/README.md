@@ -22,3 +22,23 @@ subdomains. Invalid lines are reported in list statistics. Rule identifiers and
 provenance belong to this snapshot: preserve its lifetime when retaining results.
 Input rule and byte limits are explicit. This crate has no networking, database,
 HTTP or application dependency. Rust 1.95+, edition 2024; MIT OR Apache-2.0.
+
+The optional `parallel` feature adds an owned `ParallelCompiler`. Create one on
+the control plane, bound compilation admission, and reuse it for large lists.
+`FilterSnapshot::compile` remains sequential. Worker counts are explicitly bounded
+to 1–4; no global pool is used. IDs, provenance, errors and decisions match the
+sequential path. Small lists use sequential work; parallel parsing can retain
+extra allocator memory, so benchmark the workload and DNS latency on your host.
+
+```rust
+# #[cfg(feature = "parallel")]
+# fn example() -> Result<(), Box<dyn std::error::Error>> {
+use rustwalld_dns_filter::{Action, ListInput, ParallelCompiler};
+let compiler = ParallelCompiler::new(2)?;
+let filters = compiler.compile(&[ListInput {
+    name: "ads".into(), action: Action::Block, rules: "ads.test".into(),
+}], 100, 4096)?;
+assert_eq!(filters.evaluate("child.ads.test").action, Action::Block);
+# Ok(())
+# }
+```

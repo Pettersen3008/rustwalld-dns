@@ -57,6 +57,13 @@ cancellation, not a substitute for awaited drain. The host owns signals, global
 logging and HTTP authentication. A separate control executor protects DNS from
 filter compilation, management and disk failure.
 
+For large lists, enable filter/policy `parallel` or runtime `parallel-compilation`
+and construct one `ParallelCompiler` on the control plane. `compile_parallel` /
+`check_parallel` preserve policy gates; `Runtime::start_with_compiler` shares the
+owned pool across bootstrap, restoration and admitted edits. Existing constructors
+remain sequential. Bound concurrent compilation and leave CPU capacity for DNS;
+see [workload and memory measurements](parallel-compilation.md).
+
 `ControlService` exposes typed errors/results; the app adapter preserves current
 HTTP status codes and canonical ETags. Historical rollback reads a typed revision
 and stages its config under a new ID. No persistence trait or plugin system is

@@ -26,7 +26,15 @@ pub async fn run(
     let api_listen = config.api_listen;
     let dns_listen = config.dns_listen;
     let web_root = config.web_root.clone();
+    #[cfg(not(feature = "parallel-compilation"))]
     let runtime = Runtime::start(config.into_runtime(), dns_runtime).await?;
+    #[cfg(feature = "parallel-compilation")]
+    let runtime = Runtime::start_with_compiler(
+        config.into_runtime(),
+        dns_runtime,
+        Arc::new(rustwalld_dns_filter::ParallelCompiler::new(2)?),
+    )
+    .await?;
     let state = Arc::new(api::AppState {
         control: runtime.control().clone(),
         api_slots: Arc::new(Semaphore::new(32)),

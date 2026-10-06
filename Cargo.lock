@@ -1610,7 +1610,9 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "idna",
+ "rayon",
  "serde",
+ "serde_json",
  "thiserror",
 ]
 
@@ -1623,6 +1625,7 @@ dependencies = [
  "rustwalld-dns-filter",
  "rustwalld-dns-resolver",
  "serde",
+ "serde_json",
  "thiserror",
 ]
 

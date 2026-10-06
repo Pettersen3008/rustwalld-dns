@@ -45,6 +45,12 @@ project. Rustwalld integration is possible through that API; its actual dependen
 graph and application lifecycle require a separate integration change. This
 refactor makes no changes in `~/Work/rustwalld`.
 
+Large-list compilation has [an optional bounded Rayon backend](docs/parallel-compilation.md).
+Default builds remain sequential. For the standalone appliance, build with
+`--features parallel-compilation` to share an owned two-worker pool across startup
+and durable reloads. Measurements include compilation, peak RSS and DNS latency;
+choose the worker budget based on the deployment workload.
+
 See [CONTRIBUTING](CONTRIBUTING.md), [SECURITY](SECURITY.md),
 [CHANGELOG](CHANGELOG.md) and [release preparation](docs/releasing.md).
 
@@ -499,7 +505,14 @@ cp fuzz/seeds/tls_config/* fuzz/corpus/tls_config/
 cp fuzz/seeds/doh_response/* fuzz/corpus/doh_response/
 cp fuzz/seeds/policy_check/* fuzz/corpus/policy_check/
 cargo +nightly fuzz run dns_message -- -max_total_time=30 -max_len=4096
-cargo +nightly fuzz run filter_compile -- -max_total_time=30 -max_len=8192
+# Generate bounded large seeds locally to exercise parallel parsing/indexing.
+python3 - <<'PYSEEDS'
+from pathlib import Path
+corpus = Path("fuzz/corpus/filter_compile")
+(corpus / "parallel-index").write_text("# parallel\n" + "".join(f"=d{i}.t\n" for i in range(40000)))
+(corpus / "parallel-hosts").write_text("# hosts/IDNA\n" + "0.0.0.0 a.example bücher.example\n@@=safe.example\n" * 1400)
+PYSEEDS
+cargo +nightly fuzz run filter_compile -- -max_total_time=30 -max_len=524288
 cargo +nightly fuzz run tls_config -- -max_total_time=30 -max_len=65536
 cargo +nightly fuzz run doh_response -- -max_total_time=30 -max_len=65544
 cargo +nightly fuzz run policy_check -- -max_total_time=30 -max_len=4096

@@ -120,6 +120,16 @@ class Deployment(unittest.TestCase):
             manifest = installer.verify(bundle)
             self.assertEqual(manifest['target'], 'x86_64-unknown-linux-gnu' if os.uname().machine == 'x86_64' else 'aarch64-unknown-linux-gnu')
             self.assertTrue((bundle / 'bin/rustwalld-dns').stat().st_mode & 0o111)
+            self.assertEqual(manifest['features'], [])
+            # Explicit prebuilt mode identifies a distinct installable bundle;
+            # caller must supply the corresponding freshly built executable.
+            optional = release.build(directory, skip_build=True, parallel_compilation=True)
+            self.assertNotEqual(first, optional)
+            enabled = directory / 'optional'
+            enabled.mkdir()
+            with tarfile.open(optional) as archive:
+                archive.extractall(enabled, filter='data')
+            self.assertEqual(installer.verify(enabled)['features'], ['parallel-compilation'])
 
 
 if __name__ == '__main__':

@@ -75,6 +75,8 @@ def main():
             if args.offline:
                 command.append("--offline")
             run(command)
+            if name in ("components", "runtime"):
+                run(command + ["--all-features"])
             report["consumers"].append(name)
         (target / "crate-verification.json").write_text(json.dumps(report, indent=2) + "\n")
     print("All five library archives and three independent consumers verified.")

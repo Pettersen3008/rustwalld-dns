@@ -13,11 +13,12 @@ members = ["."]
 [dependencies]
 libfuzzer-sys = "0.4"
 hickory-proto = "0.26.3"
-rustwalld-dns-filter = { path = "../crates/filtering" }
+rustwalld-dns-filter = { path = "../crates/filtering", features = ["parallel"] }
 rustwalld-dns-resolver = { path = "../crates/resolver" }
 rustwalld-dns-policy = { path = "../crates/policy" }
 rustwalld-dns-runtime = { path = "../crates/runtime" }
 http = "1"
+serde_json = "1"
 
 [[bin]]
 name = "download_config"

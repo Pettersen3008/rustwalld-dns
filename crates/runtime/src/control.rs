@@ -5,7 +5,7 @@ use crate::{
     store::{ClearShadowReport, CommitReport, Revision, RevisionMode, Store},
 };
 use rustwalld_dns_core::{Engine, PolicyController, PolicyVersion, PublicationTarget};
-use rustwalld_dns_policy::{CheckReport, PolicyConfigSet, PolicySnapshot};
+use rustwalld_dns_policy::{CheckReport, PolicyConfigSet};
 use serde_json::Value;
 use std::{
     net::SocketAddr,
@@ -57,6 +57,7 @@ pub struct ControlService {
     pub mutation: Arc<Semaphore>,
     pub downloads: Arc<Semaphore>,
     pub refreshes: Arc<refreshes::Refresher>,
+    compiler: crate::compiler::Compiler,
     controller: PolicyController,
     stopping: Arc<AtomicBool>,
 }
@@ -78,6 +79,7 @@ impl ControlService {
         }
         Ok(Self {
             engine,
+            compiler: crate::compiler::Compiler::Sequential,
             controller,
             stopping: Arc::new(AtomicBool::new(false)),
             store,
@@ -87,6 +89,10 @@ impl ControlService {
             downloads: Arc::new(Semaphore::new(1)),
             refreshes: Arc::new(refreshes::Refresher::default()),
         })
+    }
+    pub(crate) fn with_compiler(mut self, compiler: crate::compiler::Compiler) -> Self {
+        self.compiler = compiler;
+        self
     }
     /// Next identifier to attempt; callers cannot reset or reuse it.
     pub fn next_generation(&self) -> u64 {
@@ -130,11 +136,12 @@ impl ControlService {
             .map_err(|_| ControlError::Conflict("policy compilation already running".into()))?;
         self.admit()?;
         let listen = self.listen;
+        let compiler = self.compiler.clone();
         tokio::spawn(async move {
             let _guard = guard;
             tokio::task::spawn_blocking(move || {
                 validate_policy(&config, listen).map_err(invalid)?;
-                PolicySnapshot::check(config).map_err(invalid)
+                compiler.check(config).map_err(invalid)
             })
             .await
             .map_err(unavailable)?
@@ -182,10 +189,11 @@ impl ControlService {
             let old = state.engine.snapshot();
             let version = state.version();
             let listen = state.listen;
+            let compiler = state.compiler.clone();
             let snapshot = tokio::task::spawn_blocking(move || {
                 validate_policy(&config, listen)
                     .map_err(rustwalld_dns_policy::PolicyError::Invalid)?;
-                let snapshot = PolicySnapshot::compile(config, id)?;
+                let snapshot = compiler.compile(config, id)?;
                 if let Some(source) = refresh_source {
                     downloads::validate_candidate(&snapshot, source)
                         .map_err(rustwalld_dns_policy::PolicyError::Invalid)?;

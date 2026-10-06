@@ -31,3 +31,11 @@ continues when a caller cancels. SQLite failure leaves live policy unchanged.
 A durable commit precedes infallible publication. HTTP status/ETag mapping belongs
 to the host adapter. Schema and management behavior match the standalone appliance.
 Rust 1.95+, edition 2024; bundled SQLite requires a C toolchain. MIT OR Apache-2.0.
+
+The optional `parallel-compilation` feature provides `Runtime::start_with_compiler`.
+Pass an `Arc<rustwalld_dns_filter::ParallelCompiler>` to share one explicitly
+bounded pool across bootstrap, active/shadow restoration, assertion checks and
+admitted staging. Compilation stays on blocking/control workers. Awaited shutdown
+still drains admitted commit/publication; externally retained control handles or
+compiler Arcs keep the idle pool alive until they are dropped. `Runtime::start`
+and independently constructed `ControlService` values remain sequential.

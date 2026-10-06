@@ -223,6 +223,19 @@ impl PolicySnapshot {
     /// No listeners, database, executor or upstream exchange are created here.
     pub fn check(config: PolicyConfigSet) -> Result<CheckReport, PolicyError> {
         let snapshot = Self::build(config, 1)?;
+        Ok(snapshot.check_report())
+    }
+    /// Diagnose all assertions using an owned pool without publishing a revision.
+    #[cfg(feature = "parallel")]
+    pub fn check_parallel(
+        config: PolicyConfigSet,
+        compiler: &rustwalld_dns_filter::ParallelCompiler,
+    ) -> Result<CheckReport, PolicyError> {
+        let snapshot = Self::build_parallel(config, 1, compiler)?;
+        Ok(snapshot.check_report())
+    }
+    fn check_report(&self) -> CheckReport {
+        let snapshot = self;
         let results: Vec<_> = snapshot
             .config
             .assertions
@@ -233,7 +246,7 @@ impl PolicySnapshot {
             .iter()
             .filter(|result| result.failure.is_some())
             .count();
-        Ok(CheckReport {
+        CheckReport {
             basis: "permanent_policy",
             valid: failed == 0,
             assertions: results.len(),
@@ -248,7 +261,7 @@ impl PolicySnapshot {
                     lists: policy.filters.stats.clone(),
                 })
                 .collect(),
-        })
+        }
     }
 
     fn check_assertion(&self, assertion: &Assertion) -> AssertionResult {

@@ -1,7 +1,7 @@
 //! Explicit application lifecycle; the embedding host owns signals and executors.
 use crate::{ControlService, config, store::Store};
 use rustwalld_dns_core::{Engine, EngineConfig, Server, ServerConfig, telemetry::Telemetry};
-use rustwalld_dns_policy::{PolicyConfigSet, PolicySnapshot};
+use rustwalld_dns_policy::PolicyConfigSet;
 use std::{error::Error, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 use tokio::{runtime::Handle, sync::oneshot};
 use tokio_util::sync::CancellationToken;
@@ -83,10 +83,33 @@ pub struct Runtime {
 impl Runtime {
     /// Compile and restore durable state before binding DNS on the supplied executor.
     pub async fn start(config: RuntimeConfig, dns_runtime: Handle) -> Result<Self> {
+        Self::start_using(config, dns_runtime, crate::compiler::Compiler::Sequential).await
+    }
+    /// Use one explicit, owned pool for startup, restored revisions and admitted edits.
+    /// `run` drains admitted compilation/publication during graceful shutdown.
+    #[cfg(feature = "parallel-compilation")]
+    pub async fn start_with_compiler(
+        config: RuntimeConfig,
+        dns_runtime: Handle,
+        compiler: Arc<rustwalld_dns_filter::ParallelCompiler>,
+    ) -> Result<Self> {
+        Self::start_using(
+            config,
+            dns_runtime,
+            crate::compiler::Compiler::Parallel(compiler),
+        )
+        .await
+    }
+    async fn start_using(
+        config: RuntimeConfig,
+        dns_runtime: Handle,
+        compiler: crate::compiler::Compiler,
+    ) -> Result<Self> {
         config.validate().map_err(config::invalid)?;
         let initial_config = config.policy;
+        let initial_compiler = compiler.clone();
         let initial =
-            tokio::task::spawn_blocking(move || PolicySnapshot::compile(initial_config, 1))
+            tokio::task::spawn_blocking(move || initial_compiler.compile(initial_config, 1))
                 .await??;
         let (telemetry, events) = Telemetry::channel(config.event_queue);
         let db_cancel = CancellationToken::new();
@@ -109,8 +132,9 @@ impl Runtime {
         config::validate_policy(&policy, config.dns_listen).map_err(config::invalid)?;
         let generation = bootstrap.active;
         let next = bootstrap.next;
+        let active_compiler = compiler.clone();
         let snapshot =
-            tokio::task::spawn_blocking(move || PolicySnapshot::compile(policy, generation))
+            tokio::task::spawn_blocking(move || active_compiler.compile(policy, generation))
                 .await??;
         let shadow = if let Some(id) = bootstrap.shadow {
             let revision = store
@@ -119,8 +143,9 @@ impl Runtime {
                 .ok_or("invalid stored shadow revision")?;
             let candidate: PolicyConfigSet = serde_json::from_value(revision.config)?;
             config::validate_policy(&candidate, config.dns_listen).map_err(config::invalid)?;
+            let shadow_compiler = compiler.clone();
             Some(
-                tokio::task::spawn_blocking(move || PolicySnapshot::compile(candidate, id))
+                tokio::task::spawn_blocking(move || shadow_compiler.compile(candidate, id))
                     .await??,
             )
         } else {
@@ -160,9 +185,9 @@ impl Runtime {
                 config::validate_policy(shadow.config(), listen).map_err(config::invalid)?;
             }
         }
-        let control = Arc::new(ControlService::new(
-            engine, controller, store, listen, next,
-        )?);
+        let control = Arc::new(
+            ControlService::new(engine, controller, store, listen, next)?.with_compiler(compiler),
+        );
         Ok(Self {
             control,
             server: Some(server),

@@ -2,6 +2,13 @@
 
 ## 0.1.0 — unreleased
 
+- Optional bounded Rayon compilation for large filters/policies, with deterministic
+  IDs/provenance and the original validation/assertion gates. Durable runtime can
+  share one owned pool across startup, restoration, checks and staging; standalone
+  opt-in builds use two workers. Default constructors/builds remain sequential.
+- Compilation-only Criterion, fresh-process memory comparisons and bounded local
+  UDP histograms during reload; retain unfavorable workload/latency measurements.
+
 - Pin development/release builds to Rust 1.99.0 while retaining the libraries'
   Rust 1.95 minimum. Normalize query names without copying an intermediate
   Hickory name; preserve protocol behavior and escaped-label semantics.

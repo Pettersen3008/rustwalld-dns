@@ -38,3 +38,10 @@ API changes in 0.1.x may break Rust source compatibility with a changelog entry;
 prefer additive changes and document migrations. Observable standalone formats
 remain protected by integration/process/browser/recovery tests. No untested
 Windows/macOS appliance support is promised.
+
+The optional standalone compiler is built with `python3 scripts/release.py
+--parallel-compilation`. Its manifest records `features: ["parallel-compilation"]`;
+default bundles record an empty feature list. This identifies the owned two-worker
+backend in addition to the binary hash. With `--skip-build`, the caller must first
+build the matching Cargo feature mode and console; verify the binary SHA-256
+against the bundle manifest. Library features remain independently selectable.

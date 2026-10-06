@@ -14,14 +14,28 @@ include = ["Cargo.toml", "README.md", "LICENSE-*", "src/**", "examples/**", "tes
 [lints]
 workspace = true
 
+[features]
+parallel = ["dep:rayon"]
+
 [dependencies]
 serde.workspace = true
 thiserror.workspace = true
 idna = "1"
+rayon = { version = "1.12", optional = true }
 
 [dev-dependencies]
 criterion = "0.8"
+serde_json = "1"
 
 [[bench]]
 name = "matching"
 harness = false
+
+[[bench]]
+name = "compilation"
+harness = false
+required-features = ["parallel"]
+
+[[example]]
+name = "compile_compare"
+required-features = ["parallel"]

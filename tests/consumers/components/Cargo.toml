@@ -6,6 +6,9 @@ publish = false
 
 [workspace]
 
+[features]
+parallel = ["rustwalld-dns-filter/parallel"]
+
 [dependencies]
 rustwalld-dns-filter = { path = "../../../crates/filtering" }
 rustwalld-dns-resolver = { path = "../../../crates/resolver" }

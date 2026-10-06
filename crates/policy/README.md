@@ -21,3 +21,8 @@ never be reused for changed content. Rollback recompiles under a fresh identifie
 Snapshots contain bounded forwarding resources; compilation does not resolve DNS.
 The library does not load files, start an HTTP server or open a database.
 Rust 1.95+, edition 2024; MIT OR Apache-2.0.
+
+With the optional `parallel` feature, `compile_parallel` and `check_parallel` use
+an explicit `rustwalld_dns_filter::ParallelCompiler`. Keep the pool on the control
+plane and bound concurrent compilation. The same validation and assertion gates
+apply; default constructors remain sequential even when this feature is enabled.

@@ -79,3 +79,9 @@ persistence where relevant. Profile the suspected bottleneck before adding a new
 data structure or worker pool. Stop an experiment when its benefit does not
 justify its complexity; an arbitrary percentage is never permission to weaken
 the engine. See the [Rust 1.99 comparison](rust-1.99-performance.md).
+
+The [bounded parallel compilation experiment](parallel-compilation.md) compares
+owned 2/4-worker pools with both the original and current sequential compiler.
+Compilation-only Criterion, fresh-process RSS/HWM and bounded UDP histograms have
+separate roles. Rayon remains opt-in; retain short-window tail regressions and
+measure worker budgets on the deployment host before enabling it.

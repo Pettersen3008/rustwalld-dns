@@ -33,7 +33,7 @@ systemd/install/upgrade/recovery verification on the deployment host and a clean
 24–72-hour representative-network soak. Local/container checks cover reproducible
 fixtures and do not replace those gates.
 
-Rust 1.95 is the tested MSRV. Performance/release builds pin Rust 1.98.1 separately.
+Rust 1.95 is the tested MSRV. Performance/release builds pin Rust 1.99.0 separately.
 API changes in 0.1.x may break Rust source compatibility with a changelog entry;
 prefer additive changes and document migrations. Observable standalone formats
 remain protected by integration/process/browser/recovery tests. No untested

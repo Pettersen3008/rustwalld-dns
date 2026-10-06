@@ -1,5 +1,5 @@
-/target/
-/fuzz/target/
+# Cargo artifacts, including independent consumer workspaces.
+target/
 *.sqlite*
 
 /fuzz/corpus/
@@ -14,4 +14,9 @@
 
 __pycache__/
 
-/web/target/
+# Local credentials and developer overrides.
+/config.toml
+.env
+.env.*
+!.env.example
+!.env.*.example

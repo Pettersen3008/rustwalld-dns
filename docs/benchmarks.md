@@ -63,3 +63,19 @@ invocation can unify dev-dependency features and produce a different executable.
 Retain and verify its SHA-256 against the release manifest. Benchmark with other
 build/test/container jobs idle; report failed runs and short repeats as well as
 the chosen long-run numbers.
+
+Optimization iterations change one variable at a time. Save baseline executables
+before upgrading the compiler or editing query code. Compare compiler versions
+separately from source changes; an upgrade comparison intentionally varies only
+the toolchain. Build each benchmark package separately with the same dependency
+features: a workspace-wide build can unify extra features and invalidate the
+comparison. Repeat baseline/candidate/candidate/baseline in serial, retain every
+launch, and compare timing within each workload. Keep portable CPU settings.
+
+An optimization must preserve responses, provenance, policy generations, durable
+recovery, overload admission and resource bounds. Include misses, maximum-length
+and escaped names, encrypted transports, full telemetry queues, reload and failed
+persistence where relevant. Profile the suspected bottleneck before adding a new
+data structure or worker pool. Stop an experiment when its benefit does not
+justify its complexity; an arbitrary percentage is never permission to weaken
+the engine. See the [Rust 1.99 comparison](rust-1.99-performance.md).

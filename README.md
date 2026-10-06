@@ -51,7 +51,7 @@ See [CONTRIBUTING](CONTRIBUTING.md), [SECURITY](SECURITY.md),
 ## Run
 
 Requires Rust 1.95+ and a C/C++ toolchain for bundled SQLite/fuzz builds.
-The checked-in toolchain pins 1.98.1 for performance/release reproducibility.
+The checked-in toolchain pins 1.99.0 for performance/release reproducibility.
 
 ```sh
 cargo run -p rustwalld-dns -- --print-default-config > config.toml
@@ -440,6 +440,10 @@ Latency is diagnostic; stable hardware is required for regression thresholds.
 The [filter memory comparison](docs/filter-memory.md) records fresh-process
 RSS/peak and broader matcher workloads. Retain footprint and Criterion artifacts
 locally; logical payload estimates are not exact RSS.
+
+The [Rust 1.99 performance comparison](docs/rust-1.99-performance.md) separates
+compiler, LTO and query-name ownership experiments, and explains the decisions
+about unsafe code, Rayon and repository artifacts.
 
 The [query allocation comparison](docs/query-allocations.md) covers blocked,
 cached, rewritten and temporary-allow replies with closed/empty/full telemetry

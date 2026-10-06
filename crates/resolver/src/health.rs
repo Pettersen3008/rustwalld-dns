@@ -114,6 +114,8 @@ impl Attempt<'_> {
             .admission
             .finish(self.ticket, None, Instant::now());
         let elapsed = self.start.elapsed().as_micros().min(u64::MAX as u128) as u64;
+        // Rust 1.99 renamed this API; keep the equivalent operation for our 1.95 MSRV.
+        #[allow(deprecated, reason = "fetch_update remains compatible with Rust 1.95")]
         let _ = self
             .health
             .ewma_us

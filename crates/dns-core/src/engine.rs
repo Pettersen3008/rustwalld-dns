@@ -7,7 +7,7 @@ use crate::{
 use arc_swap::{ArcSwap, Guard};
 use hickory_proto::{
     op::{Edns, Message, MessageType, OpCode, ResponseCode},
-    rr::{DNSClass, RecordType},
+    rr::{DNSClass, Name, RecordType},
     serialize::binary::{BinEncodable, BinEncoder},
 };
 use rustwalld_dns_filter::{Action, Decision};
@@ -34,6 +34,7 @@ impl Default for EngineConfig {
         }
     }
 }
+
 /// DNS request processor. Policy writes require the separately returned controller.
 ///
 /// ```compile_fail
@@ -209,7 +210,7 @@ impl Engine {
         } else {
             let selected = snapshot.select(client);
             let policy = selected.policy;
-            let mut ascii = request.queries[0].name().to_lowercase().to_ascii();
+            let mut ascii = canonical_ascii(request.queries[0].name());
             let domain = ascii.strip_suffix('.').unwrap_or(&ascii);
             let rewrite = policy.rewrite(domain, request.queries[0].query_type());
             let mut temporary = if rewrite.is_none() {
@@ -402,5 +403,46 @@ impl Engine {
             self.telemetry.emit(event);
         }
         Some(output)
+    }
+}
+
+fn canonical_ascii(name: &Name) -> String {
+    // Hickory emits ASCII letters literally, and other bytes as escaped
+    // punctuation or octal digits. Lowercasing the output therefore preserves
+    // its label boundaries and escapes without copying the intermediate Name.
+    let mut ascii = name.to_ascii();
+    ascii.make_ascii_lowercase();
+    ascii
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    #[test]
+    fn canonical_ascii_preserves_hickory_escaping_and_case_semantics() {
+        let check = |mut name: Name| {
+            for fqdn in [true, false] {
+                name.set_fqdn(fqdn);
+                assert_eq!(canonical_ascii(&name), name.to_lowercase().to_ascii());
+            }
+        };
+        check(Name::root());
+        // Every byte at the start, middle and end of a label, including dots,
+        // backslashes, controls, wildcard characters and non-ASCII wire bytes.
+        for byte in 0..=u8::MAX {
+            for label in [[byte, b'A', b'Z'], [b'A', byte, b'Z'], [b'A', b'Z', byte]] {
+                check(Name::from_labels([label.as_slice(), b"ExAmPlE".as_slice()]).unwrap());
+            }
+            let labels = [
+                vec![byte; 63],
+                vec![b'A'; 63],
+                vec![b'Z'; 63],
+                vec![b'B'; 61],
+            ];
+            check(Name::from_labels(labels.iter().map(Vec::as_slice)).unwrap());
+        }
+        check(Name::from_labels(std::iter::repeat_n(b"A".as_slice(), 127)).unwrap());
     }
 }

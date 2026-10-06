@@ -27,7 +27,7 @@ unwrap_used = "deny"
 expect_used = "deny"
 
 [profile.release]
-lto = "thin"
+lto = "fat"
 codegen-units = 1
 
 # Same optimization as release, with symbols for local CPU-stack attribution.

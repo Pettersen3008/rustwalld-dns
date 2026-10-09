@@ -1,5 +1,5 @@
 //! Strict DNS-over-TLS. Trust/identity are compiled before snapshot publication.
-use crate::{ResolveError, validate};
+use crate::{ResolveError, tcp_frame, validate};
 use hickory_proto::op::Message;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -188,15 +188,15 @@ impl TlsPool {
         };
         let mut query = request.clone();
         query.metadata.id = rand::random();
-        let bytes = query.to_vec().map_err(|_| ResolveError::Encoding)?;
-        let result = framed_exchange(&mut stream, &query, &bytes).await;
+        let frame = tcp_frame(&query.to_vec().map_err(|_| ResolveError::Encoding)?)?;
+        let result = framed_exchange(&mut stream, &query, &frame).await;
         let response = match result {
             // A server may close an idle connection. Retry that endpoint once, still
             // within the original deadline; never reconnect on invalid DNS content.
             Err(ResolveError::Io(_)) if was_reused => {
                 drop(stream);
                 stream = self.connect().await?;
-                framed_exchange(&mut stream, &query, &bytes).await?
+                framed_exchange(&mut stream, &query, &frame).await?
             }
             result => result?,
         };
@@ -212,15 +212,13 @@ impl TlsPool {
 async fn framed_exchange(
     stream: &mut TlsStream<TcpStream>,
     request: &Message,
-    bytes: &[u8],
+    frame: &[u8],
 ) -> Result<Message, ResolveError> {
-    stream
-        .write_u16(u16::try_from(bytes.len()).map_err(|_| ResolveError::Encoding)?)
-        .await?;
-    stream.write_all(bytes).await?;
+    // One write produces one TLS record for the length and message.
+    stream.write_all(frame).await?;
     // rustls may buffer a small write; flush before awaiting the server.
     stream.flush().await?;
-    let len = stream.read_u16().await? as usize;
+    let len = usize::from(stream.read_u16().await?);
     if len < 12 {
         return Err(ResolveError::InvalidResponse);
     }

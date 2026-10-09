@@ -154,10 +154,17 @@ async fn exchange(upstream: SocketAddr, request: &Message) -> Result<Message, Re
     let socket = UdpSocket::bind(bind).await?;
     socket.connect(upstream).await?;
     socket.send(&bytes).await?;
-    let mut buffer = vec![0; 65535];
+    // A compliant reply fits the advertised payload size. One spare byte detects
+    // an oversized datagram, which the kernel would otherwise truncate silently.
+    let limit = usize::from(request.max_payload().max(512));
+    let mut buffer = vec![0; limit + 1];
     // Ignore spoofed or malformed packets until the enclosing timeout expires.
     loop {
         let len = socket.recv(&mut buffer).await?;
+        if len > limit {
+            // Cannot be validated from a truncated copy; TCP has no size cap.
+            return exchange_tcp(upstream, &request, &bytes).await;
+        }
         let Ok(response) = Message::from_vec(&buffer[..len]) else {
             continue;
         };
@@ -170,17 +177,25 @@ async fn exchange(upstream: SocketAddr, request: &Message) -> Result<Message, Re
         return Ok(response);
     }
 }
+/// Prefix a DNS message with its RFC 1035 TCP length, so it leaves in one write.
+fn tcp_frame(bytes: &[u8]) -> Result<Vec<u8>, ResolveError> {
+    let len = u16::try_from(bytes.len()).map_err(|_| ResolveError::Encoding)?;
+    let mut frame = Vec::with_capacity(bytes.len() + 2);
+    frame.extend_from_slice(&len.to_be_bytes());
+    frame.extend_from_slice(bytes);
+    Ok(frame)
+}
 async fn exchange_tcp(
     upstream: SocketAddr,
     request: &Message,
     bytes: &[u8],
 ) -> Result<Message, ResolveError> {
+    let frame = tcp_frame(bytes)?;
     let mut stream = TcpStream::connect(upstream).await?;
-    stream
-        .write_u16(u16::try_from(bytes.len()).map_err(|_| ResolveError::Encoding)?)
-        .await?;
-    stream.write_all(bytes).await?;
-    let len = stream.read_u16().await? as usize;
+    // Small request frames must not wait for a delayed ACK (Nagle).
+    stream.set_nodelay(true)?;
+    stream.write_all(&frame).await?;
+    let len = usize::from(stream.read_u16().await?);
     if len < 12 {
         return Err(ResolveError::InvalidResponse);
     }

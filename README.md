@@ -433,8 +433,12 @@ inspect the two full revisions for their detailed contents.
 - Input frames are capped at 4,096 bytes; upstream responses at the DNS wire
   maximum. Cache limits are entry counts, not exact byte budgets; record/message
   and request bounds keep growth finite. Tune limits for available memory.
-- Direct self-upstreams are rejected. Operators must prevent indirect forwarding
-  loops. No firewall, port redirection or DNS bypass enforcement is installed.
+- Direct self-upstreams are rejected (addresses compared canonically; a wildcard
+  listener rejects only loopback/unspecified upstreams on its port, so remote
+  resolvers such as `1.1.1.1:53` work with `0.0.0.0:53`). Upstreams at this
+  host's own interface addresses are not detected. Operators must prevent such
+  and indirect forwarding loops. No firewall, port redirection or DNS bypass
+  enforcement is installed.
 
 ## Verify and measure
 

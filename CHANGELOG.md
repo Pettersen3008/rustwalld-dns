@@ -2,6 +2,9 @@
 
 ## 0.1.0 — unreleased
 
+- A wildcard DNS listener (`0.0.0.0:53`, `[::]:53`) no longer rejects remote
+  upstreams on the same port; self-forwarding checks compare canonical
+  addresses, so `[::ffff:127.0.0.1]:53` is rejected for `127.0.0.1:53`.
 - Explanations (`PolicySnapshot::explain`, `GET /api/v1/explain`) include
   `permitted`; the console labels non-admitted clients as dropped. Assertion
   failure messages summarize the matched rule with at most three sources.

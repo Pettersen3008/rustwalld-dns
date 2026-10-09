@@ -50,13 +50,26 @@ fn bench(c: &mut Criterion) {
         cache.insert(cursor, cursor);
         cursor += 1;
     }
-    c.bench_function("bounded_cache_fifo_churn", |b| {
+    c.bench_function("bounded_cache_u64_churn", |b| {
         b.iter(|| {
             cursor = cursor.wrapping_add(1);
             cache.insert(std::hint::black_box(cursor), cursor);
         })
     });
     assert!(cache.len() <= 1024);
+    // Decision-cache shape: owned domain keys, every insertion evicting.
+    let names: Vec<String> = (0..65_536)
+        .map(|index| format!("{index}.churn.example"))
+        .collect();
+    let cache = BoundedCache::new(4096);
+    let mut next = 0;
+    c.bench_function("bounded_cache_string_churn", |b| {
+        b.iter(|| {
+            next = (next + 1) % names.len();
+            cache.insert(names[next].clone(), next);
+        })
+    });
+    assert!(cache.len() <= 4096);
 }
 criterion_group!(benches, bench);
 criterion_main!(benches);

@@ -82,7 +82,10 @@ Clients are matched by canonical address, so IPv4-mapped IPv6 networks such as
 are rejected.
 
 Policy content from the configuration file initializes a **new database**.
-Subsequent starts restore the last durable active/shadow revision from SQLite.
+Subsequent starts restore the last durable active/shadow revision from SQLite
+without compiling (or validating) the file's policy, so a broken file cannot
+block a valid stored revision. A stored shadow that can no longer be restored is
+logged, durably cleared and DNS starts with the active revision.
 Listener/cache/retention settings still come from the file. To change existing
 policy content, use the API. `--check-config` always validates the supplied file
 and its assertions without opening the database or contacting an upstream.

@@ -2,6 +2,14 @@
 
 ## 0.1.0 — unreleased
 
+- Startup: the file policy is compiled only to seed a new store (no double
+  compilation, and a broken file no longer blocks a stored revision); restart
+  after retention no longer resurrects revision 1 with new content; an
+  unrestorable shadow is cleared instead of aborting startup. Malformed stored
+  revision JSON and real pointer read errors are reported (`StoreError` is typed
+  and `#[non_exhaustive]`; `Store::load` added), and maintenance names dangling
+  pointers. App `Config::read` validates settings; `Config::validate` still
+  checks the policy for `--check-config`.
 - A wildcard DNS listener (`0.0.0.0:53`, `[::]:53`) no longer rejects remote
   upstreams on the same port; self-forwarding checks compare canonical
   addresses, so `[::ffff:127.0.0.1]:53` is rejected for `127.0.0.1:53`.

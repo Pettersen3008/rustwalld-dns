@@ -105,12 +105,8 @@ impl Runtime {
         dns_runtime: Handle,
         compiler: crate::compiler::Compiler,
     ) -> Result<Self> {
-        config.validate().map_err(config::invalid)?;
-        let initial_config = config.policy;
-        let initial_compiler = compiler.clone();
-        let initial =
-            tokio::task::spawn_blocking(move || initial_compiler.compile(initial_config, 1))
-                .await??;
+        let mut config = config;
+        config.validate_limits().map_err(config::invalid)?;
         let (telemetry, events) = Telemetry::channel(config.event_queue);
         let db_cancel = CancellationToken::new();
         let (store, done) = Store::start(
@@ -124,32 +120,40 @@ impl Runtime {
             cancel: db_cancel,
             done: Some(done),
         };
-        let bootstrap = store
-            .bootstrap(serde_json::to_string(initial.config())?)
-            .await?;
-        drop(initial);
-        let policy: PolicyConfigSet = serde_json::from_str(&bootstrap.config)?;
-        config::validate_policy(&policy, config.dns_listen).map_err(config::invalid)?;
-        let generation = bootstrap.active;
-        let next = bootstrap.next;
-        let active_compiler = compiler.clone();
-        let snapshot =
-            tokio::task::spawn_blocking(move || active_compiler.compile(policy, generation))
+        let listen = config.dns_listen;
+        // The configuration file seeds only a new database. A restored store
+        // never compiles it, so a broken file cannot block a valid revision.
+        let (snapshot, next, stored_shadow) = match store.load().await? {
+            Some(bootstrap) => {
+                let compiler = compiler.clone();
+                let (generation, text) = (bootstrap.active, bootstrap.config);
+                let snapshot = tokio::task::spawn_blocking(move || {
+                    restore(&compiler, generation, &text, listen)
+                })
                 .await??;
-        let shadow = if let Some(id) = bootstrap.shadow {
-            let revision = store
-                .revision(id)
-                .await?
-                .ok_or("invalid stored shadow revision")?;
-            let candidate: PolicyConfigSet = serde_json::from_value(revision.config)?;
-            config::validate_policy(&candidate, config.dns_listen).map_err(config::invalid)?;
-            let shadow_compiler = compiler.clone();
-            Some(
-                tokio::task::spawn_blocking(move || shadow_compiler.compile(candidate, id))
-                    .await??,
-            )
-        } else {
-            None
+                (snapshot, bootstrap.next, bootstrap.shadow)
+            }
+            None => {
+                config::validate_policy(&config.policy, listen).map_err(config::invalid)?;
+                let policy = std::mem::take(&mut config.policy);
+                let compiler = compiler.clone();
+                let (initial, content) = tokio::task::spawn_blocking(move || {
+                    let initial = compiler.compile(policy, 1)?;
+                    let content = serde_json::to_string(initial.config())?;
+                    Ok::<_, Box<dyn Error + Send + Sync>>((initial, content))
+                })
+                .await??;
+                let bootstrap = store.bootstrap(content).await?;
+                if bootstrap.active != initial.generation() || bootstrap.shadow.is_some() {
+                    return Err("database was bootstrapped concurrently".into());
+                }
+                // The compiled file is exactly revision 1; no second compilation.
+                (initial, bootstrap.next, None)
+            }
+        };
+        let shadow = match stored_shadow {
+            Some(id) => restore_shadow(&store, &compiler, id, listen).await?,
+            None => None,
         };
         let (engine, controller) = Engine::restore(
             snapshot,
@@ -173,10 +177,10 @@ impl Runtime {
         let server = dns_runtime
             .spawn(async move { Server::bind(settings, dns_engine).await })
             .await??;
-        let listen = if config.dns_listen.port() == 0 {
+        let listen = if listen.port() == 0 {
             server.local_addr()?
         } else {
-            config.dns_listen
+            listen
         };
         if config.dns_listen.port() == 0 {
             // The selected port is known only after bind. Recheck loop prevention.
@@ -232,6 +236,53 @@ impl Runtime {
         Ok(())
     }
 }
+/// Parse, validate and compile a stored revision on a blocking thread.
+fn restore(
+    compiler: &crate::compiler::Compiler,
+    generation: u64,
+    text: &str,
+    listen: SocketAddr,
+) -> Result<rustwalld_dns_policy::PolicySnapshot> {
+    let policy: PolicyConfigSet = serde_json::from_str(text)?;
+    config::validate_policy(&policy, listen).map_err(config::invalid)?;
+    Ok(compiler.compile(policy, generation)?)
+}
+/// A shadow is optional review state. If it cannot be restored, durably clear
+/// the pointer and serve the active revision instead of refusing to start DNS.
+/// Storage failures other than unreadable content remain fatal.
+async fn restore_shadow(
+    store: &Store,
+    compiler: &crate::compiler::Compiler,
+    id: u64,
+    listen: SocketAddr,
+) -> Result<Option<rustwalld_dns_policy::PolicySnapshot>> {
+    let compiled: Result<rustwalld_dns_policy::PolicySnapshot> = match store.revision(id).await {
+        Ok(Some(revision)) => {
+            let compiler = compiler.clone();
+            tokio::task::spawn_blocking(move || {
+                let policy: PolicyConfigSet = serde_json::from_value(revision.config)?;
+                config::validate_policy(&policy, listen).map_err(config::invalid)?;
+                Ok(compiler.compile(policy, id)?)
+            })
+            .await?
+        }
+        Ok(None) => Err("revision is missing".into()),
+        Err(error @ crate::store::StoreError::CorruptRevision { .. }) => Err(error.into()),
+        Err(error) => return Err(error.into()),
+    };
+    match compiled {
+        Ok(snapshot) => Ok(Some(snapshot)),
+        Err(error) => {
+            tracing::warn!(
+                generation = id,
+                %error,
+                "stored shadow revision cannot be restored; clearing it and serving the active revision"
+            );
+            store.clear_shadow().await?;
+            Ok(None)
+        }
+    }
+}
 impl Drop for Runtime {
     fn drop(&mut self) {
         self.stop.cancel();
@@ -244,6 +295,7 @@ impl Drop for Runtime {
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+    use rusqlite::OptionalExtension;
     use rustwalld_dns_policy::TemporaryException;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -307,5 +359,100 @@ mod tests {
                 <= u32::try_from(rustwalld_dns_policy::MAX_EXCEPTION_REMAINING.as_secs()).unwrap()
         );
         stop(runtime).await;
+    }
+
+    fn shadow_pointer(config: &RuntimeConfig) -> Option<i64> {
+        rusqlite::Connection::open(&config.database)
+            .unwrap()
+            .query_row("SELECT value FROM runtime WHERE key='shadow'", [], |r| {
+                r.get(0)
+            })
+            .optional()
+            .unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unrestorable_shadow_is_cleared_and_dns_starts_with_active() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = config(directory.path());
+        stop(
+            Runtime::start(config.clone(), Handle::current())
+                .await
+                .unwrap(),
+        )
+        .await;
+        let mut failing = config.policy.clone();
+        failing.assertions.push(rustwalld_dns_policy::Assertion {
+            client: "127.0.0.1".parse().unwrap(),
+            domain: "allowed.test".into(),
+            expected: rustwalld_dns_filter::Action::Block,
+        });
+        for (id, content) in [
+            (2, serde_json::to_string(&failing).unwrap()),
+            (3, "{\"not\":\"a policy\"}".into()),
+            (4, "{".into()),
+        ] {
+            let database = rusqlite::Connection::open(&config.database).unwrap();
+            database
+                .execute(
+                    "INSERT INTO revisions(id,actor,state,diff,config) VALUES(?1,'api','shadow','policies',?2)",
+                    rusqlite::params![id, content],
+                )
+                .unwrap();
+            database
+                .execute(
+                    "INSERT INTO runtime(key,value) VALUES('shadow',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    [id],
+                )
+                .unwrap();
+            drop(database);
+            let runtime = Runtime::start(config.clone(), Handle::current())
+                .await
+                .unwrap();
+            assert_eq!(runtime.control().engine.active().generation(), 1);
+            assert!(runtime.control().engine.shadow_snapshot().is_none());
+            // The pointer is durably cleared; the identifier is never reused.
+            assert_eq!(shadow_pointer(&config), None);
+            assert_eq!(runtime.control().next_generation(), id as u64 + 1);
+            stop(runtime).await;
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn configuration_file_seeds_only_a_new_database() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = config(directory.path());
+        stop(
+            Runtime::start(config.clone(), Handle::current())
+                .await
+                .unwrap(),
+        )
+        .await;
+        // A file policy that cannot compile no longer blocks the stored revision.
+        config
+            .policy
+            .assertions
+            .push(rustwalld_dns_policy::Assertion {
+                client: "127.0.0.1".parse().unwrap(),
+                domain: "allowed.test".into(),
+                expected: rustwalld_dns_filter::Action::Block,
+            });
+        let runtime = Runtime::start(config.clone(), Handle::current())
+            .await
+            .unwrap();
+        assert_eq!(runtime.control().engine.active().generation(), 1);
+        assert!(
+            runtime
+                .control()
+                .engine
+                .active()
+                .config()
+                .assertions
+                .is_empty()
+        );
+        stop(runtime).await;
+        // A new database still compiles and validates the file.
+        config.database = directory.path().join("fresh.sqlite");
+        assert!(Runtime::start(config, Handle::current()).await.is_err());
     }
 }

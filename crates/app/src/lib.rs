@@ -19,7 +19,7 @@ pub async fn run(
     stop: CancellationToken,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let _cancel = CancelOnDrop(stop.clone());
-    config.validate().map_err(config::invalid)?;
+    config.validate_settings().map_err(config::invalid)?;
     if token.len() < 16 || token.len() > 1024 {
         return Err("RUSTWALLD_API_TOKEN must contain 16..1024 bytes".into());
     }

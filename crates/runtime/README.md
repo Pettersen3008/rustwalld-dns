@@ -19,8 +19,10 @@ runtime.run(stop).await?;
 # }
 ```
 
-`start` validates, restores durable active/shadow revisions, and binds DNS without
-serving. `run` supervises DNS/refresh work until cancellation, stops mutation
+`start` validates limits, restores durable active/shadow revisions, and binds DNS
+without serving. `RuntimeConfig::policy` is validated and compiled only to seed a
+new store (as revision 1); it is ignored once an active revision exists. A stored
+shadow that cannot be restored is logged and durably cleared. `run` supervises DNS/refresh work until cancellation, stops mutation
 admission, drains admitted durable operations, then stops history persistence.
 Dropping is best-effort cancellation; await `run` for graceful shutdown.
 

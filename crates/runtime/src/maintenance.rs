@@ -1,7 +1,7 @@
 //! Standalone maintenance: no daemon runtime, API token or DNS executor involved.
 use crate::store::SCHEMA_VERSION;
 use rusqlite::{
-    Connection, OpenFlags,
+    Connection, OpenFlags, OptionalExtension,
     backup::{Backup, StepResult},
 };
 use rustwalld_dns_policy::{PolicyConfigSet, PolicySnapshot};
@@ -80,19 +80,24 @@ pub fn verify(path: &Path) -> Result<Report> {
                 "shadow" if shadow.is_none() => shadow = Some(generation),
                 _ => return Err("invalid runtime revision pointer".into()),
             }
-            let size: i64 = tx.query_row(
-                "SELECT length(CAST(config AS BLOB)) FROM revisions WHERE id=?1",
-                [generation as i64],
-                |row| row.get(0),
-            )?;
+            let id = i64::try_from(generation)?;
+            let size: i64 = tx
+                .query_row(
+                    "SELECT length(CAST(config AS BLOB)) FROM revisions WHERE id=?1",
+                    [id],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .ok_or_else(|| {
+                    format!("runtime {key} pointer refers to missing revision {generation}")
+                })?;
             if !(1..=512 * 1024 * 1024).contains(&size) {
                 return Err("stored policy content exceeds maintenance limit".into());
             }
-            let text: String = tx.query_row(
-                "SELECT config FROM revisions WHERE id=?1",
-                [generation as i64],
-                |row| row.get(0),
-            )?;
+            let text: String =
+                tx.query_row("SELECT config FROM revisions WHERE id=?1", [id], |row| {
+                    row.get(0)
+                })?;
             let config: PolicyConfigSet = serde_json::from_str(&text)?;
             crate::downloads::validate_config(&config).map_err(crate::config::invalid)?;
             PolicySnapshot::compile(config, generation)?;

@@ -89,10 +89,18 @@ impl Config {
                 rules,
             });
         }
-        config.validate()?;
+        config.validate_settings()?;
         Ok(config)
     }
+    /// Validate listeners, limits and the embedded policy (`--check-config`).
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_settings()?;
+        validate_policy(&self.policy, self.dns_listen)
+    }
+    /// Validate everything except the policy. The file's policy seeds only a
+    /// new database; the runtime validates and compiles it when bootstrapping,
+    /// so a broken file cannot block a valid stored revision at startup.
+    pub fn validate_settings(&self) -> Result<(), String> {
         if self
             .web_root
             .as_ref()
@@ -119,8 +127,7 @@ impl Config {
             history_rows: self.history_rows,
             ..Default::default()
         }
-        .validate_limits()?;
-        validate_policy(&self.policy, self.dns_listen)
+        .validate_limits()
     }
     /// Resolved values for the optional durable runtime; no file I/O here.
     pub fn into_runtime(self) -> rustwalld_dns_runtime::RuntimeConfig {

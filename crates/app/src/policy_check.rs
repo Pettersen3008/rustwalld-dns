@@ -14,6 +14,7 @@ pub enum Format {
 
 pub fn run(path: &Path, format: Format) -> Result<bool, Box<dyn Error + Send + Sync>> {
     let config = Config::read(path)?;
+    config.validate()?;
     let report = PolicySnapshot::check(config.policy)?;
     let mut stdout = std::io::stdout().lock();
     match format {

@@ -50,7 +50,8 @@ pub struct CommitReport {
 pub struct ClearShadowReport {
     pub shadow: Option<u64>,
 }
-/// Historical revision content; malformed stored JSON remains null for compatibility.
+/// Historical revision content. Malformed stored JSON is an explicit
+/// [`StoreError::CorruptRevision`], never `null`.
 #[derive(Serialize)]
 pub struct Revision {
     pub id: u64,
@@ -84,17 +85,35 @@ pub struct HistoryEntry {
 }
 /// Bounded store admission and worker failures; never returned by DNS queries.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum StoreError {
     #[error("database command queue unavailable")]
     QueueUnavailable,
     #[error("database worker stopped")]
     WorkerStopped,
-    #[error("{0}")]
-    Backend(String),
+    /// SQLite failure, including lock contention and constraint violations.
+    #[error(transparent)]
+    Sqlite(#[from] rusqlite::Error),
+    /// Stored revision content is not JSON; it is never replaced by `null`.
+    #[error("stored revision {id} is not valid JSON")]
+    CorruptRevision {
+        id: u64,
+        #[source]
+        source: serde_json::Error,
+    },
+    /// A runtime pointer names a revision that no longer exists.
+    #[error("runtime {pointer} pointer refers to missing revision {id}")]
+    DanglingPointer { pointer: &'static str, id: u64 },
+    /// Revisions exist without an active pointer; bootstrapping would reuse IDs.
+    #[error("database has revisions but no active runtime pointer")]
+    MissingActive,
     #[error("unexpected database worker response")]
     Response,
+    #[error("database worker could not start")]
+    Spawn(#[source] std::io::Error),
 }
 enum Operation {
+    Load,
     Bootstrap {
         config: String,
     },
@@ -115,6 +134,7 @@ enum Operation {
     ClearShadow,
 }
 enum Reply {
+    Load(Option<Bootstrap>),
     Bootstrap(Bootstrap),
     Queries(Vec<HistoryEntry>),
     Revisions(Vec<RevisionSummary>),
@@ -156,8 +176,8 @@ impl Store {
                         let _ = ready_tx.send(Ok(()));
                         c
                     }
-                    Err(e) => {
-                        let _ = ready_tx.send(Err(StoreError::Backend(e.to_string())));
+                    Err(error) => {
+                        let _ = ready_tx.send(Err(StoreError::Sqlite(error)));
                         let _ = done_tx.send(());
                         return;
                     }
@@ -166,8 +186,7 @@ impl Store {
                     for _ in 0..8 {
                         match commands.try_recv() {
                             Ok(command) => {
-                                let result = execute(&mut connection, command.operation)
-                                    .map_err(|e| StoreError::Backend(e.to_string()));
+                                let result = execute(&mut connection, command.operation);
                                 let _ = command.reply.send(result);
                             }
                             Err(_) => break,
@@ -202,7 +221,7 @@ impl Store {
                 }
                 let _ = done_tx.send(());
             })
-            .map_err(|e| StoreError::Backend(e.to_string()))?;
+            .map_err(StoreError::Spawn)?;
         ready_rx.await.map_err(|_| StoreError::WorkerStopped)??;
         Ok((Self { sender, metrics }, done_rx))
     }
@@ -215,7 +234,16 @@ impl Store {
         // a timed-out commit must not become durable without atomic promotion.
         receiver.await.map_err(|_| StoreError::WorkerStopped)?
     }
-    /// Bootstrap only an empty store; otherwise return durable active/shadow pointers.
+    /// Durable active/shadow pointers, or `None` for a store never bootstrapped.
+    pub async fn load(&self) -> Result<Option<Bootstrap>, StoreError> {
+        match self.request(Operation::Load).await? {
+            Reply::Load(v) => Ok(v),
+            _ => Err(StoreError::Response),
+        }
+    }
+    /// Store `config` as revision 1 only when no active pointer exists;
+    /// otherwise return the durable active/shadow pointers unchanged. Revision
+    /// identifiers are never reused, including identifiers removed by retention.
     pub async fn bootstrap(&self, config: String) -> Result<Bootstrap, StoreError> {
         match self.request(Operation::Bootstrap { config }).await? {
             Reply::Bootstrap(v) => Ok(v),
@@ -295,36 +323,65 @@ fn open(path: PathBuf) -> rusqlite::Result<Connection> {
     tx.commit()?;
     Ok(connection)
 }
-fn execute(connection: &mut Connection, operation: Operation) -> rusqlite::Result<Reply> {
+/// Read durable pointers inside one transaction, if the store was bootstrapped.
+fn pointers(tx: &rusqlite::Transaction<'_>) -> Result<Option<Bootstrap>, StoreError> {
+    let pointer = |key: &str| {
+        tx.query_row("SELECT value FROM runtime WHERE key=?1", [key], |r| {
+            r.get::<_, i64>(0)
+        })
+        .optional()?
+        .map(from_sql_id)
+        .transpose()
+    };
+    let Some(active) = pointer("active")? else {
+        return Ok(None);
+    };
+    let shadow = pointer("shadow")?;
+    let config: String = tx
+        .query_row(
+            "SELECT config FROM revisions WHERE id=?1",
+            [sql_id(active)?],
+            |r| r.get(0),
+        )
+        .optional()?
+        .ok_or(StoreError::DanglingPointer {
+            pointer: "active",
+            id: active,
+        })?;
+    // Retention always keeps the newest revision, so this never decreases.
+    let next: i64 = tx.query_row("SELECT MAX(id)+1 FROM revisions", [], |r| r.get(0))?;
+    Ok(Some(Bootstrap {
+        active,
+        next: from_sql_id(next)?,
+        config,
+        shadow,
+    }))
+}
+fn execute(connection: &mut Connection, operation: Operation) -> Result<Reply, StoreError> {
     match operation {
+        Operation::Load => {
+            let tx = connection.transaction()?;
+            let pointers = pointers(&tx)?;
+            tx.commit()?;
+            Ok(Reply::Load(pointers))
+        }
         Operation::Bootstrap { config } => {
             let tx = connection.transaction()?;
-            tx.execute("INSERT OR IGNORE INTO revisions(id,actor,state,diff,config) VALUES(1,'startup','promoted','initial configuration',?1)",[config])?;
-            tx.execute(
-                "INSERT OR IGNORE INTO runtime(key,value) VALUES('active',1)",
-                [],
-            )?;
-            let active: i64 =
-                tx.query_row("SELECT value FROM runtime WHERE key='active'", [], |r| {
-                    r.get(0)
-                })?;
-            let next: i64 = tx.query_row("SELECT MAX(id)+1 FROM revisions", [], |r| r.get(0))?;
-            let config: String =
-                tx.query_row("SELECT config FROM revisions WHERE id=?1", [active], |r| {
-                    r.get(0)
-                })?;
-            let shadow: Option<i64> = tx
-                .query_row("SELECT value FROM runtime WHERE key='shadow'", [], |r| {
-                    r.get(0)
-                })
-                .ok();
+            if let Some(existing) = pointers(&tx)? {
+                tx.commit()?;
+                return Ok(Reply::Bootstrap(existing));
+            }
+            // Never resurrect a retention-pruned ID with different content.
+            let revisions: i64 =
+                tx.query_row("SELECT COUNT(*) FROM revisions", [], |r| r.get(0))?;
+            if revisions != 0 {
+                return Err(StoreError::MissingActive);
+            }
+            tx.execute("INSERT INTO revisions(id,actor,state,diff,config) VALUES(1,'startup','promoted','initial configuration',?1)",[config])?;
+            tx.execute("INSERT INTO runtime(key,value) VALUES('active',1)", [])?;
+            let bootstrap = pointers(&tx)?.ok_or(StoreError::MissingActive)?;
             tx.commit()?;
-            Ok(Reply::Bootstrap(Bootstrap {
-                active: from_sql_id(active)?,
-                next: from_sql_id(next)?,
-                config,
-                shadow: shadow.map(from_sql_id).transpose()?,
-            }))
+            Ok(Reply::Bootstrap(bootstrap))
         }
         Operation::Queries { limit } => {
             let mut stmt=connection.prepare("SELECT id,created,client,domain,qtype,generation,policy,action,rule,decision_cached,rcode,source,latency_us,shadow,temporary_exception FROM queries ORDER BY id DESC LIMIT ?1")?;
@@ -375,10 +432,14 @@ fn execute(connection: &mut Connection, operation: Operation) -> rusqlite::Resul
                     |r| r.get(0),
                 )
                 .optional()?;
-            Ok(Reply::Revision(text.map(|text| Revision {
-                id,
-                config: serde_json::from_str(&text).unwrap_or(Value::Null),
-            })))
+            let revision = text
+                .map(|text| {
+                    serde_json::from_str(&text)
+                        .map(|config| Revision { id, config })
+                        .map_err(|source| StoreError::CorruptRevision { id, source })
+                })
+                .transpose()?;
+            Ok(Reply::Revision(revision))
         }
         Operation::Commit {
             id,
@@ -520,5 +581,102 @@ mod tests {
         assert_eq!(ids(&connection), vec![1, 2]);
         write_events(&mut connection, &[event()], 2).unwrap();
         assert_eq!(ids(&connection), vec![2, 3]);
+    }
+    fn bootstrap(connection: &mut Connection, config: &str) -> Result<Bootstrap, StoreError> {
+        match execute(
+            connection,
+            Operation::Bootstrap {
+                config: config.into(),
+            },
+        )? {
+            Reply::Bootstrap(bootstrap) => Ok(bootstrap),
+            _ => Err(StoreError::Response),
+        }
+    }
+    fn commit(connection: &mut Connection, id: u64, mode: RevisionMode) {
+        execute(
+            connection,
+            Operation::Commit {
+                id,
+                config: format!("{{\"revision\":{id}}}"),
+                mode,
+                actor: "test".into(),
+                diff: "policies".into(),
+            },
+        )
+        .unwrap();
+    }
+    #[test]
+    fn restart_after_retention_never_resurrects_revision_one() {
+        let mut connection = open(PathBuf::from(":memory:")).unwrap();
+        assert!(matches!(
+            execute(&mut connection, Operation::Load).unwrap(),
+            Reply::Load(None)
+        ));
+        let first = bootstrap(&mut connection, "{\"file\":1}").unwrap();
+        assert_eq!((first.active, first.next), (1, 2));
+        for id in 2..=40 {
+            commit(&mut connection, id, RevisionMode::Promoted);
+        }
+        let pruned = |connection: &Connection| {
+            connection
+                .query_row("SELECT COUNT(*) FROM revisions WHERE id=1", [], |r| {
+                    r.get::<_, i64>(0)
+                })
+                .unwrap()
+                == 0
+        };
+        assert!(pruned(&connection));
+        // A restart passes today's file content; it must not become revision 1.
+        let restarted = bootstrap(&mut connection, "{\"file\":2}").unwrap();
+        assert!(pruned(&connection));
+        assert_eq!(restarted.active, 40);
+        assert_eq!(restarted.next, 41);
+        assert_eq!(restarted.config, "{\"revision\":40}");
+        // Revisions without an active pointer are never silently re-seeded.
+        connection
+            .execute("DELETE FROM runtime WHERE key='active'", [])
+            .unwrap();
+        assert!(matches!(
+            bootstrap(&mut connection, "{}"),
+            Err(StoreError::MissingActive)
+        ));
+        assert!(pruned(&connection));
+    }
+    #[test]
+    fn pointer_and_revision_corruption_is_reported_not_hidden() {
+        let mut connection = open(PathBuf::from(":memory:")).unwrap();
+        bootstrap(&mut connection, "{}").unwrap();
+        commit(&mut connection, 2, RevisionMode::Shadow);
+        // A real read error is not "no shadow".
+        connection
+            .execute("UPDATE runtime SET value='two' WHERE key='shadow'", [])
+            .unwrap();
+        assert!(matches!(
+            bootstrap(&mut connection, "{}"),
+            Err(StoreError::Sqlite(_))
+        ));
+        connection
+            .execute("UPDATE runtime SET value=99 WHERE key='active'", [])
+            .unwrap();
+        connection
+            .execute("UPDATE runtime SET value=2 WHERE key='shadow'", [])
+            .unwrap();
+        assert_eq!(
+            bootstrap(&mut connection, "{}").unwrap_err().to_string(),
+            "runtime active pointer refers to missing revision 99"
+        );
+        connection
+            .execute("UPDATE revisions SET config='{' WHERE id=2", [])
+            .unwrap();
+        let error = execute(&mut connection, Operation::Revision { id: 2 })
+            .err()
+            .unwrap();
+        assert_eq!(error.to_string(), "stored revision 2 is not valid JSON");
+        assert!(std::error::Error::source(&error).is_some());
+        assert!(matches!(
+            execute(&mut connection, Operation::Revision { id: 3 }).unwrap(),
+            Reply::Revision(None)
+        ));
     }
 }

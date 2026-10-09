@@ -251,6 +251,29 @@ fn empty_assertions_are_explicit_and_cli_rejects_ambiguous_arguments() {
 }
 
 #[test]
+fn serving_reads_settings_without_requiring_a_valid_seed_policy() {
+    let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let path = dir.path().join("config.toml");
+    let mut config = Config::default();
+    // A self-forwarding upstream: invalid policy, valid listener settings.
+    config.policy.upstreams[0].addresses = vec![config.dns_listen];
+    std::fs::write(&path, toml::to_string(&config).unwrap()).unwrap();
+    let read = Config::read(&path).unwrap();
+    assert!(read.validate_settings().is_ok());
+    assert_eq!(
+        read.validate().unwrap_err(),
+        "upstream points at DNS listener"
+    );
+    let result = Command::new(env!("CARGO_BIN_EXE_rustwalld-dns"))
+        .args(["--check-config", "--config"])
+        .arg(&path)
+        .env_remove("RUSTWALLD_API_TOKEN")
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+}
+
+#[test]
 fn check_config_treats_file_exceptions_as_new_intake() {
     let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
     let path = dir.path().join("config.toml");

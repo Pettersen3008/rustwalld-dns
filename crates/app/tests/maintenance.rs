@@ -231,5 +231,8 @@ async fn untrusted_destination_directory_and_executable_schema_are_rejected() {
     database
         .execute_batch("DROP TRIGGER unexpected; UPDATE runtime SET value=999 WHERE key='active';")
         .unwrap();
-    assert!(maintenance::verify(&source).is_err());
+    assert_eq!(
+        maintenance::verify(&source).unwrap_err().to_string(),
+        "runtime active pointer refers to missing revision 999"
+    );
 }

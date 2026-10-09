@@ -76,6 +76,10 @@ The token protects all management endpoints except `/healthz`, `/metrics` and
 must remain on loopback. It bounds connections, idle time, request concurrency
 and body size. DNS listeners outside loopback require explicitly configured
 `allowed_clients` CIDRs. Client bindings select policies; they do not grant access.
+Clients are matched by canonical address, so IPv4-mapped IPv6 networks such as
+`::ffff:10.0.0.0/104` are compiled as their IPv4 network (`10.0.0.0/8`; stored
+`allowed_clients` are rewritten to that form). Mapped prefixes shorter than /96
+are rejected.
 
 Policy content from the configuration file initializes a **new database**.
 Subsequent starts restore the last durable active/shadow revision from SQLite.

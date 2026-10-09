@@ -10,7 +10,7 @@ use hickory_proto::rr::{
     Name, RData, Record,
     rdata::{A, AAAA},
 };
-use ipnet::IpNet;
+use ipnet::{IpNet, Ipv4Net};
 use rustwalld_dns_filter::FilterSnapshot;
 use rustwalld_dns_resolver::Forwarder;
 use std::{
@@ -62,8 +62,13 @@ impl PolicySnapshot {
             usize,
         ) -> Result<FilterSnapshot, rustwalld_dns_filter::CompileError>,
     ) -> Result<Self, PolicyError> {
+        let mut config = config;
         sources::validate(&config)?;
         validate_counts(&config, generation)?;
+        // Admission compares canonical client IPs; store mapped networks as IPv4.
+        for (index, network) in config.allowed_clients.iter_mut().enumerate() {
+            *network = canonical_network(*network, || format!("allowed_clients[{index}]"))?;
+        }
         let clock = exceptions::Clock::now();
         metadata::validate(&config.bindings)?;
         let (profiles, upstreams) = compile_upstreams(&config)?;
@@ -139,7 +144,7 @@ impl PolicySnapshot {
         for (index, binding) in config.bindings.iter().enumerate() {
             let field = |name: &str| format!("bindings[{index}].{name}");
             validate_name(&binding.name, || field("name"))?;
-            let network = binding.network.trunc();
+            let network = canonical_network(binding.network, || field("network"))?.trunc();
             if !seen.insert(network) {
                 return Err(PolicyError::field(
                     field("network"),
@@ -185,6 +190,28 @@ impl PolicySnapshot {
         };
         Ok(snapshot)
     }
+}
+/// Query-path client addresses are canonicalized (`::ffff:a.b.c.d` becomes
+/// `a.b.c.d`), so an IPv4-mapped IPv6 network can only ever match as the IPv4
+/// network it maps. Convert it; a mapped prefix shorter than /96 would also
+/// cover unrelated IPv6 space and is rejected.
+fn canonical_network(network: IpNet, field: impl FnOnce() -> String) -> Result<IpNet, PolicyError> {
+    let IpNet::V6(v6) = network else {
+        return Ok(network);
+    };
+    let Some(v4) = v6.addr().to_ipv4_mapped() else {
+        return Ok(network);
+    };
+    v6.prefix_len()
+        .checked_sub(96)
+        .and_then(|prefix| Ipv4Net::new(v4, prefix).ok())
+        .map(IpNet::V4)
+        .ok_or_else(|| {
+            PolicyError::field(
+                field(),
+                format!("IPv4-mapped network {network} needs a prefix of /96 or longer"),
+            )
+        })
 }
 fn validate_counts(config: &PolicyConfigSet, generation: u64) -> Result<(), PolicyError> {
     if generation == 0 {
@@ -405,6 +432,63 @@ mod tests {
             error(source),
             "invalid configuration: filter_sources[0].bootstrap_ips: ::ffff:192.0.2.1 is listed more than once"
         );
+    }
+
+    #[test]
+    fn ipv4_mapped_client_networks_match_their_ipv4_clients() {
+        let mut config = PolicyConfigSet {
+            allowed_clients: vec![
+                "::ffff:192.0.2.0/120".parse().unwrap(),
+                "127.0.0.1/32".parse().unwrap(),
+            ],
+            ..Default::default()
+        };
+        config.policies.push(PolicyConfig {
+            name: "lan".into(),
+            upstream: "default".into(),
+            lists: vec![],
+            rewrites: vec![],
+            temporary_exceptions: vec![],
+        });
+        config.bindings = vec![Binding {
+            network: "::ffff:10.9.9.9/104".parse().unwrap(),
+            policy: "lan".into(),
+            name: "mapped".into(),
+            metadata: None,
+        }];
+        let snapshot = PolicySnapshot::compile(config.clone(), 1).unwrap();
+        for client in ["10.1.2.3", "::ffff:10.1.2.3"] {
+            let selected = snapshot.select(client.parse().unwrap());
+            assert_eq!(selected.policy.name(), "lan", "{client}");
+            assert_eq!(selected.network.unwrap().to_string(), "10.0.0.0/8");
+        }
+        for client in ["192.0.2.7", "::ffff:192.0.2.7"] {
+            assert!(snapshot.permits(client.parse().unwrap()), "{client}");
+        }
+        assert!(!snapshot.permits("192.0.3.1".parse().unwrap()));
+        assert_eq!(
+            snapshot.config().allowed_clients[0].to_string(),
+            "192.0.2.0/24"
+        );
+        let mut duplicate = config.clone();
+        duplicate.bindings.push(Binding {
+            network: "10.0.0.0/8".parse().unwrap(),
+            name: "plain".into(),
+            ..duplicate.bindings[0].clone()
+        });
+        assert_eq!(
+            error(duplicate),
+            "invalid configuration: bindings[1].network: duplicate client network 10.0.0.0/8"
+        );
+        let mut short = config.clone();
+        short.bindings[0].network = "::ffff:10.0.0.0/95".parse().unwrap();
+        assert!(
+            error(short)
+                .starts_with("invalid configuration: bindings[0].network: IPv4-mapped network")
+        );
+        let mut short = config;
+        short.allowed_clients[0] = "::ffff:0.0.0.0/80".parse().unwrap();
+        assert!(error(short).contains("allowed_clients[0]"));
     }
 
     #[test]

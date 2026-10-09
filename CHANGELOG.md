@@ -2,6 +2,8 @@
 
 ## 0.1.0 — unreleased
 
+- IPv4-mapped IPv6 client bindings and allowed networks now match their IPv4
+  clients (compiled as the IPv4 network); mapped prefixes below /96 are rejected.
 - Startup no longer fails when a stored temporary exception has more than seven
   days remaining on a lagging wall clock: compilation clamps the monotonic
   deadline. The seven-day limit applies at intake to exceptions that are new

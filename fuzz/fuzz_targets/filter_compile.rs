@@ -10,11 +10,25 @@ fuzz_target!(|input: &str| {
         return;
     }
     let compiler = COMPILER.get_or_init(|| ParallelCompiler::new(2).unwrap());
-    let lists = [ListInput {
-        name: "fuzz".into(),
-        action: Action::Block,
-        rules: input.into(),
-    }];
+    // Odd lines feed an allowlist so allow and block rules share index entries.
+    let (mut block, mut allow) = (String::new(), String::new());
+    for (index, line) in input.lines().enumerate() {
+        let list = if index % 2 == 0 { &mut block } else { &mut allow };
+        list.push_str(line);
+        list.push('\n');
+    }
+    let lists = [
+        ListInput {
+            name: "fuzz".into(),
+            action: Action::Block,
+            rules: block,
+        },
+        ListInput {
+            name: "allow".into(),
+            action: Action::Allow,
+            rules: allow,
+        },
+    ];
     let limit = [0, 1, 256, 40000][usize::from(input.as_bytes().first().copied().unwrap_or(0) & 3)];
     match (
         FilterSnapshot::compile(&lists, limit, MAX_BYTES),
@@ -32,10 +46,17 @@ fuzz_target!(|input: &str| {
             assert_eq!(serial.payload_bytes(), parallel.payload_bytes());
             assert_eq!(serial.effective_rules(), parallel.effective_rules());
             for rule in serial.rules() {
-                assert_eq!(
-                    serial.evaluate(&rule.domain),
-                    parallel.evaluate(&rule.domain)
-                );
+                let decision = serial.evaluate(&rule.domain);
+                assert_eq!(decision, parallel.evaluate(&rule.domain));
+                // Allow precedence: a name covered by an allow rule never blocks.
+                if rule.action == Action::Allow {
+                    assert_eq!(decision.action, Action::Allow);
+                }
+                if let Some(id) = decision.rule {
+                    let decided = serial.rule(id).unwrap();
+                    assert_eq!(decided.action, decision.action);
+                    assert!(!decided.redundant);
+                }
                 assert_eq!(
                     serial.evaluate(&format!("child.{}", rule.domain)),
                     parallel.evaluate(&format!("child.{}", rule.domain))

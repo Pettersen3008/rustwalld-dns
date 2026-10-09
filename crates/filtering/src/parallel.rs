@@ -1,8 +1,7 @@
 //! Optional bounded control-plane work. Query snapshots never retain this pool.
-use crate::{Action, CompileError, FilterSnapshot, ListInput, Matcher, compile};
+use crate::{CompileError, FilterSnapshot, ListInput, compile};
 use compile::{ParsedRules, Work};
 use rayon::{ThreadPool, ThreadPoolBuilder, prelude::*};
-use std::collections::HashMap;
 
 const BATCH_LINES: usize = 8192;
 const BATCH_BYTES: usize = 1024 * 1024;
@@ -107,43 +106,14 @@ impl Work for ParallelCompiler {
         if snapshot.rules.len() < INDEX_MIN_RULES {
             return compile::Sequential.finish(snapshot);
         }
-        let FilterSnapshot {
-            rules,
-            allow_suffix,
-            deny_suffix,
-            allow_exact,
-            deny_exact,
-            ..
-        } = snapshot;
+        let FilterSnapshot { rules, suffix, .. } = &mut *snapshot;
+        let suffix = &*suffix;
         self.pool.install(|| {
-            rules.par_iter_mut().for_each(|rule| {
-                let suffix = if rule.action == Action::Allow {
-                    &*allow_suffix
-                } else {
-                    &*deny_suffix
-                };
-                let candidate = if rule.matcher == Matcher::Exact {
-                    Some(rule.domain.as_ref())
-                } else {
-                    crate::parent(&rule.domain)
-                };
-                rule.redundant =
-                    candidate.is_some_and(|domain| crate::suffix_match(suffix, domain).is_some());
-            });
-            let exact = |action| {
-                let mut map = HashMap::new();
-                for rule in rules.iter().filter(|rule| {
-                    rule.action == action && rule.matcher == Matcher::Exact && !rule.redundant
-                }) {
-                    map.insert(rule.domain.clone(), rule.id);
-                }
-                map
-            };
-            let (allow, deny) = rayon::join(|| exact(Action::Allow), || exact(Action::Block));
-            *allow_exact = allow;
-            *deny_exact = deny;
+            rules
+                .par_iter_mut()
+                .for_each(|rule| rule.redundant = compile::redundant(suffix, rule));
         });
-        allow_suffix.retain(|_, id| !rules[*id as usize].redundant);
-        deny_suffix.retain(|_, id| !rules[*id as usize].redundant);
+        compile::index_exact(snapshot);
+        compile::retain_effective_suffixes(snapshot);
     }
 }

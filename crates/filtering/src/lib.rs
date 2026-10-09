@@ -6,7 +6,7 @@ mod parallel;
 pub use parallel::{ParallelCompiler, PoolError};
 
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -94,13 +94,65 @@ pub fn normalize(input: &str) -> Result<String, CompileError> {
     }
     Ok(ascii)
 }
+/// Rule identifiers indexed under one name: at most one allow and one block
+/// rule per matcher, because identical (action, matcher, name) rules share an ID.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Ids {
+    allow: u32,
+    block: u32,
+}
+impl Ids {
+    /// Sentinel for "no rule"; compilation never assigns it as an ID.
+    pub(crate) const NONE: u32 = u32::MAX;
+    pub(crate) const EMPTY: Self = Self {
+        allow: Self::NONE,
+        block: Self::NONE,
+    };
+    #[inline]
+    fn id(value: u32) -> Option<u32> {
+        (value != Self::NONE).then_some(value)
+    }
+    #[inline]
+    pub(crate) fn allow(self) -> Option<u32> {
+        Self::id(self.allow)
+    }
+    #[inline]
+    pub(crate) fn block(self) -> Option<u32> {
+        Self::id(self.block)
+    }
+    #[inline]
+    pub(crate) fn get(self, action: Action) -> Option<u32> {
+        match action {
+            Action::Allow => self.allow(),
+            Action::Block => self.block(),
+        }
+    }
+    pub(crate) fn set(&mut self, action: Action, id: u32) {
+        match action {
+            Action::Allow => self.allow = id,
+            Action::Block => self.block = id,
+        }
+    }
+    pub(crate) fn clear(&mut self, action: Action) {
+        self.set(action, Self::NONE);
+    }
+    pub(crate) fn count(self) -> usize {
+        usize::from(self.allow().is_some()) + usize::from(self.block().is_some())
+    }
+}
+/// Immutable name index. The hasher is seeded per process; keys come from
+/// operator-selected lists and lookups never insert.
+pub(crate) type Index = hashbrown::HashMap<Arc<str>, Ids, foldhash::fast::RandomState>;
+
 #[derive(Debug)]
 pub struct FilterSnapshot {
     rules: Vec<Rule>,
-    allow_exact: HashMap<Arc<str>, u32>,
-    allow_suffix: HashMap<Arc<str>, u32>,
-    deny_exact: HashMap<Arc<str>, u32>,
-    deny_suffix: HashMap<Arc<str>, u32>,
+    exact: Index,
+    suffix: Index,
+    /// Whether any suffix allow survives; without one, the first suffix block
+    /// found while walking towards the root is final.
+    suffix_allows: bool,
+    effective_rules: usize,
     payload_bytes: usize,
     pub stats: Vec<ListStats>,
 }
@@ -113,25 +165,36 @@ impl FilterSnapshot {
         compile::build(lists, max_rules, max_bytes, &compile::Sequential)
     }
     /// Input is a normalized lower-case name without the root dot. No allocation.
+    ///
+    /// Any matching allow rule wins over every block rule; within an action an
+    /// exact match is reported before the most specific suffix match. Both
+    /// actions share one walk towards the root.
     pub fn evaluate(&self, domain: &str) -> Decision {
-        for (action, exact, suffix) in [
-            (Action::Allow, &self.allow_exact, &self.allow_suffix),
-            (Action::Block, &self.deny_exact, &self.deny_suffix),
-        ] {
-            if let Some(id) = exact.get(domain) {
-                return Decision {
-                    action,
-                    rule: Some(*id),
-                    matcher: Some(Matcher::Exact),
-                };
+        let exact = self.exact.get(domain).copied().unwrap_or(Ids::EMPTY);
+        if let Some(id) = exact.allow() {
+            return Decision::matched(Action::Allow, id, Matcher::Exact);
+        }
+        let mut block_suffix = None;
+        let mut name = Some(domain);
+        while let Some(current) = name {
+            if let Some(ids) = self.suffix.get(current) {
+                if let Some(id) = ids.allow() {
+                    return Decision::matched(Action::Allow, id, Matcher::Suffix);
+                }
+                if block_suffix.is_none() {
+                    block_suffix = ids.block();
+                    if block_suffix.is_some() && !self.suffix_allows {
+                        break;
+                    }
+                }
             }
-            if let Some(id) = suffix_match(suffix, domain) {
-                return Decision {
-                    action,
-                    rule: Some(id),
-                    matcher: Some(Matcher::Suffix),
-                };
-            }
+            name = parent(current);
+        }
+        if let Some(id) = exact.block() {
+            return Decision::matched(Action::Block, id, Matcher::Exact);
+        }
+        if let Some(id) = block_suffix {
+            return Decision::matched(Action::Block, id, Matcher::Suffix);
         }
         Decision::ALLOW
     }
@@ -141,16 +204,26 @@ impl FilterSnapshot {
     pub fn rules(&self) -> &[Rule] {
         &self.rules
     }
+    /// Rules that can decide a query: compiled rules minus duplicates and rules
+    /// subsumed by a same-action suffix rule.
     pub fn effective_rules(&self) -> usize {
-        self.allow_exact.len()
-            + self.allow_suffix.len()
-            + self.deny_exact.len()
-            + self.deny_suffix.len()
+        self.effective_rules
     }
     /// Logical payload estimate, counting shared string bytes once. Excludes
     /// allocator/Arc headers, spare capacity, stats and map overhead; not RSS.
     pub fn payload_bytes(&self) -> usize {
         self.payload_bytes
+    }
+    /// Recompute the derived counters after the indexes are final.
+    pub(crate) fn seal(&mut self) {
+        self.effective_rules = self
+            .exact
+            .values()
+            .chain(self.suffix.values())
+            .map(|ids| ids.count())
+            .sum();
+        self.suffix_allows = self.suffix.values().any(|ids| ids.allow().is_some());
+        self.payload_bytes = self.calculate_payload_bytes();
     }
     fn calculate_payload_bytes(&self) -> usize {
         self.rules
@@ -167,7 +240,17 @@ impl FilterSnapshot {
                 .filter(|stats| stats.unique != 0 || stats.duplicates != 0)
                 .map(|stats| stats.name.len())
                 .sum::<usize>()
-            + self.effective_rules() * std::mem::size_of::<(Arc<str>, u32)>()
+            + (self.exact.len() + self.suffix.len()) * std::mem::size_of::<(Arc<str>, Ids)>()
+    }
+}
+impl Decision {
+    #[inline]
+    fn matched(action: Action, id: u32, matcher: Matcher) -> Self {
+        Self {
+            action,
+            rule: Some(id),
+            matcher: Some(matcher),
+        }
     }
 }
 fn parent(mut domain: &str) -> Option<&str> {
@@ -182,10 +265,11 @@ fn parent(mut domain: &str) -> Option<&str> {
         domain = rest;
     }
 }
-fn suffix_match(map: &HashMap<Arc<str>, u32>, mut domain: &str) -> Option<u32> {
+/// Most specific suffix rule of `action` covering `domain` (inclusive).
+fn suffix_match(index: &Index, action: Action, mut domain: &str) -> Option<u32> {
     loop {
-        if let Some(id) = map.get(domain) {
-            return Some(*id);
+        if let Some(id) = index.get(domain).and_then(|ids| ids.get(action)) {
+            return Some(id);
         }
         domain = parent(domain)?;
     }
@@ -385,6 +469,133 @@ mod tests {
                         let rule = snapshot.rule(id).unwrap();
                         assert_eq!(rule.action, expected);
                         assert_eq!(rule.sources.len(), if first == second { 4 } else { 2 });
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod differential {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    /// Reference semantics: rules subsumed by a same-action suffix rule (above
+    /// them, or at the same name for exact rules) are dropped; then any allow
+    /// beats any block, and within an action an exact match beats a suffix
+    /// match and nearer suffixes beat farther ones.
+    fn reference(
+        rules: &[(Action, Matcher, &str)],
+        query: &str,
+    ) -> Option<(Action, Matcher, String)> {
+        let below = |name: &str, ancestor: &str| {
+            name.strip_suffix(ancestor)
+                .is_some_and(|prefix| prefix.ends_with('.'))
+        };
+        let effective: Vec<_> = rules
+            .iter()
+            .filter(|(action, matcher, domain)| {
+                !rules.iter().any(|(a, m, d)| {
+                    a == action
+                        && *m == Matcher::Suffix
+                        && (below(domain, d) || (*matcher == Matcher::Exact && domain == d))
+                })
+            })
+            .collect();
+        for action in [Action::Allow, Action::Block] {
+            if let Some((_, _, domain)) = effective
+                .iter()
+                .find(|(a, m, d)| *a == action && *m == Matcher::Exact && query == *d)
+            {
+                return Some((action, Matcher::Exact, (*domain).to_owned()));
+            }
+            if let Some((_, _, domain)) = effective
+                .iter()
+                .filter(|(a, m, d)| {
+                    *a == action && *m == Matcher::Suffix && (query == *d || below(query, d))
+                })
+                .max_by_key(|(_, _, d)| d.len())
+            {
+                return Some((action, Matcher::Suffix, (*domain).to_owned()));
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn single_walk_matches_reference_on_random_overlapping_rule_sets() {
+        let names = [
+            "test",
+            "a.test",
+            "b.a.test",
+            "c.b.a.test",
+            "x.test",
+            "other",
+        ];
+        let queries = [
+            "test",
+            "a.test",
+            "b.a.test",
+            "c.b.a.test",
+            "d.c.b.a.test",
+            "x.test",
+            "y.x.test",
+            "other",
+            "z.other",
+            "unrelated.example",
+        ];
+        let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = |bound: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            usize::try_from(seed % bound as u64).unwrap()
+        };
+        for _ in 0..4000 {
+            let count = 1 + next(6);
+            let rules: Vec<_> = (0..count)
+                .map(|_| {
+                    let action = if next(2) == 0 {
+                        Action::Allow
+                    } else {
+                        Action::Block
+                    };
+                    let matcher = if next(2) == 0 {
+                        Matcher::Exact
+                    } else {
+                        Matcher::Suffix
+                    };
+                    (action, matcher, names[next(names.len())])
+                })
+                .collect();
+            let lists: Vec<_> = rules
+                .iter()
+                .enumerate()
+                .map(|(index, (action, matcher, domain))| ListInput {
+                    name: format!("list{index}"),
+                    action: *action,
+                    rules: format!(
+                        "{}{domain}",
+                        if *matcher == Matcher::Exact { "=" } else { "" }
+                    ),
+                })
+                .collect();
+            let snapshot = FilterSnapshot::compile(&lists, 100, 10_000).unwrap();
+            for query in queries {
+                let decision = snapshot.evaluate(query);
+                match reference(&rules, query) {
+                    None => assert_eq!(decision, Decision::ALLOW, "{rules:?} {query}"),
+                    Some((action, matcher, domain)) => {
+                        assert_eq!(decision.action, action, "{rules:?} {query}");
+                        assert_eq!(decision.matcher, Some(matcher), "{rules:?} {query}");
+                        let rule = snapshot.rule(decision.rule.unwrap()).unwrap();
+                        assert_eq!(
+                            (rule.action, rule.matcher, rule.domain.as_ref()),
+                            (action, matcher, domain.as_str()),
+                            "{rules:?} {query}"
+                        );
+                        assert!(!rule.redundant);
                     }
                 }
             }

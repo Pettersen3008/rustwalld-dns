@@ -18,7 +18,8 @@ assert_eq!(normalize("SAFE.Ads.Test.")?, "safe.ads.test");
 ```
 
 Lines beginning with `=` match exactly; other domain rules match the name and its
-subdomains. Invalid lines are reported in list statistics. Rule identifiers and
+subdomains. Evaluation walks the name once towards the root; any matching allow
+rule wins over every block rule. Invalid lines are reported in list statistics. Rule identifiers and
 provenance belong to this snapshot: preserve its lifetime when retaining results.
 Input rule and byte limits are explicit. This crate has no networking, database,
 HTTP or application dependency. Rust 1.95+, edition 2024; MIT OR Apache-2.0.

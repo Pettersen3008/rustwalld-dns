@@ -66,6 +66,45 @@ fn bench(c: &mut Criterion) {
                 std::hint::black_box(filters.evaluate(std::hint::black_box(query)))
             });
         });
+        // Typical deployments add a small allowlist; every evaluation must then
+        // rule out an allow at each label before honouring a block.
+        let mixed = FilterSnapshot::compile(
+            &[
+                ListInput {
+                    name: "fixture".into(),
+                    action: Action::Block,
+                    rules: (0..size)
+                        .map(|i| {
+                            if i % 2 == 0 {
+                                format!("=exact{i}.bench\n")
+                            } else {
+                                format!("suffix{i}.bench\n")
+                            }
+                        })
+                        .collect(),
+                },
+                ListInput {
+                    name: "allow".into(),
+                    action: Action::Allow,
+                    rules: (0..64)
+                        .map(|i| format!("@@allowed{i}.example\n=keep{i}.bench\n"))
+                        .collect(),
+                },
+            ],
+            size + 129,
+            usize::MAX,
+        )
+        .unwrap();
+        for (path, query) in [
+            ("mixed_block_exact", "exact42.bench"),
+            ("mixed_block_suffix", "a.b.x.suffix43.bench"),
+            ("mixed_allow_suffix", "cdn.allowed7.example"),
+            ("mixed_miss", "www.unlisted.example.org"),
+        ] {
+            group.bench_with_input(BenchmarkId::new(path, size), &query, |b, q| {
+                b.iter(|| std::hint::black_box(mixed.evaluate(std::hint::black_box(q))))
+            });
+        }
     }
     group.finish();
 }

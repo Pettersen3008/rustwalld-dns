@@ -1610,6 +1610,8 @@ name = "rustwalld-dns-filter"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "foldhash",
+ "hashbrown 0.17.1",
  "idna",
  "rayon",
  "serde",

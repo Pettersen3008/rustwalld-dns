@@ -1,6 +1,6 @@
 //! Ordered ingestion and immutable index construction, off the query executor.
 use crate::{
-    Action, CompileError, FilterSnapshot, ListInput, ListStats, Matcher, Rule, Source, parent,
+    Action, CompileError, FilterSnapshot, Ids, ListInput, ListStats, Matcher, Rule, Source, parent,
     parse_rule, suffix_match,
 };
 use std::{collections::HashMap, sync::Arc};
@@ -38,33 +38,50 @@ impl Work for Sequential {
     }
     fn finish(&self, snapshot: &mut FilterSnapshot) {
         for rule in &mut snapshot.rules {
-            let suffix = if rule.action == Action::Allow {
-                &snapshot.allow_suffix
-            } else {
-                &snapshot.deny_suffix
-            };
-            let candidate = if rule.matcher == Matcher::Exact {
-                Some(rule.domain.as_ref())
-            } else {
-                parent(&rule.domain)
-            };
-            rule.redundant = candidate.is_some_and(|domain| suffix_match(suffix, domain).is_some());
-            if !rule.redundant && rule.matcher == Matcher::Exact {
-                let map = if rule.action == Action::Allow {
-                    &mut snapshot.allow_exact
-                } else {
-                    &mut snapshot.deny_exact
-                };
-                map.insert(rule.domain.clone(), rule.id);
+            rule.redundant = redundant(&snapshot.suffix, rule);
+        }
+        index_exact(snapshot);
+        retain_effective_suffixes(snapshot);
+    }
+}
+/// A rule is redundant when a same-action suffix rule strictly above it (or,
+/// for an exact rule, at the same name) already decides every name it matches.
+pub(super) fn redundant(suffix: &crate::Index, rule: &Rule) -> bool {
+    let candidate = if rule.matcher == Matcher::Exact {
+        Some(rule.domain.as_ref())
+    } else {
+        parent(&rule.domain)
+    };
+    candidate.is_some_and(|domain| suffix_match(suffix, rule.action, domain).is_some())
+}
+/// Index every effective exact rule.
+pub(super) fn index_exact(snapshot: &mut FilterSnapshot) {
+    for rule in snapshot
+        .rules
+        .iter()
+        .filter(|rule| rule.matcher == Matcher::Exact && !rule.redundant)
+    {
+        snapshot
+            .exact
+            .entry(rule.domain.clone())
+            .or_insert(Ids::EMPTY)
+            .set(rule.action, rule.id);
+    }
+}
+/// Drop redundant suffix rules, and names left without any rule.
+pub(super) fn retain_effective_suffixes(snapshot: &mut FilterSnapshot) {
+    let rules = &snapshot.rules;
+    snapshot.suffix.retain(|_, ids| {
+        for action in [Action::Allow, Action::Block] {
+            if ids
+                .get(action)
+                .is_some_and(|id| rules[id as usize].redundant)
+            {
+                ids.clear(action);
             }
         }
-        snapshot
-            .allow_suffix
-            .retain(|_, id| !snapshot.rules[*id as usize].redundant);
-        snapshot
-            .deny_suffix
-            .retain(|_, id| !snapshot.rules[*id as usize].redundant);
-    }
+        ids.count() != 0
+    });
 }
 pub(super) fn content(line: &str) -> Option<&str> {
     let line = line.split('#').next().unwrap_or("").trim();
@@ -85,10 +102,10 @@ pub(super) fn build<W: Work>(
     }
     let mut snapshot = FilterSnapshot {
         rules: Vec::new(),
-        allow_exact: HashMap::new(),
-        allow_suffix: HashMap::new(),
-        deny_exact: HashMap::new(),
-        deny_suffix: HashMap::new(),
+        exact: crate::Index::default(),
+        suffix: crate::Index::default(),
+        suffix_allows: false,
+        effective_rules: 0,
         payload_bytes: 0,
         stats: Vec::new(),
     };
@@ -128,7 +145,10 @@ pub(super) fn build<W: Work>(
                     stats.duplicates += 1;
                     continue;
                 }
-                let id = u32::try_from(snapshot.rules.len()).map_err(|_| CompileError::Limit)?;
+                let id = u32::try_from(snapshot.rules.len())
+                    .ok()
+                    .filter(|id| *id != Ids::NONE)
+                    .ok_or(CompileError::Limit)?;
                 seen.insert(key, id);
                 snapshot.rules.push(Rule {
                     id,
@@ -144,15 +164,14 @@ pub(super) fn build<W: Work>(
         })?;
         snapshot.stats.push(stats);
     }
-    // Build suffix maps first, then mark same-action descendants as redundant.
+    // Build the suffix index first, then mark same-action descendants redundant.
     for rule in &snapshot.rules {
         if rule.matcher == Matcher::Suffix {
-            let map = if rule.action == Action::Allow {
-                &mut snapshot.allow_suffix
-            } else {
-                &mut snapshot.deny_suffix
-            };
-            map.insert(rule.domain.clone(), rule.id);
+            snapshot
+                .suffix
+                .entry(rule.domain.clone())
+                .or_insert(Ids::EMPTY)
+                .set(rule.action, rule.id);
         }
     }
     work.finish(&mut snapshot);
@@ -163,7 +182,7 @@ pub(super) fn build<W: Work>(
             }
         }
     }
-    // This scan belongs to compilation, never to a status/API request.
-    snapshot.payload_bytes = snapshot.calculate_payload_bytes();
+    // These scans belong to compilation, never to a status/API request.
+    snapshot.seal();
     Ok(snapshot)
 }

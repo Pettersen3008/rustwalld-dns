@@ -1,6 +1,6 @@
 //! One bounded control-plane worker. Timers never promote production policy.
 use crate::{ControlService, downloads};
-use rustwalld_dns_policy::{FilterSource, PolicySnapshot};
+use rustwalld_dns_policy::{DownloadStamp, FilterSource, PolicyConfigSet, PolicySnapshot};
 use serde::Serialize;
 use std::{
     sync::{Arc, Mutex},
@@ -226,11 +226,18 @@ impl Refresher {
         if runtime.running.is_some() || runtime.generation != snapshot.generation() {
             return Ok(None);
         }
-        let position = if let Some(queued) = runtime.queued.take() {
-            runtime
+        // Peek at a manual request; it is consumed only once a download slot
+        // is held, so contention defers it instead of losing it.
+        let queued = runtime.queued;
+        let position = if let Some(queued) = queued {
+            let position = runtime
                 .entries
                 .iter()
-                .position(|entry| entry.index == queued.source)
+                .position(|entry| entry.index == queued.source);
+            if position.is_none() {
+                runtime.queued = None;
+            }
+            position
         } else {
             runtime
                 .entries
@@ -240,10 +247,9 @@ impl Refresher {
                 .min_by_key(|(_, entry)| entry.next)
                 .map(|(position, _)| position)
         };
-        let Some(position) = position else {
+        let Some(entry) = position.and_then(|position| runtime.entries.get_mut(position)) else {
             return Ok(None);
         };
-        let entry = &mut runtime.entries[position];
         let permit = match downloads.clone().try_acquire_owned() {
             Ok(permit) => permit,
             Err(_) => {
@@ -256,6 +262,9 @@ impl Refresher {
         let source = entry.source.clone();
         let cached = entry.cached.clone();
         let index = entry.index;
+        if queued.is_some() {
+            runtime.queued = None;
+        }
         runtime.running = Some(Running {
             generation: snapshot.generation(),
             source: index,
@@ -373,6 +382,95 @@ impl Drop for Job {
     }
 }
 
+/// Record `Failed` for any error; only cancellation leaves a job unfinished,
+/// so that `Drop` records `Cancelled`.
+impl Job {
+    fn ok_or_fail<T>(&mut self, result: Result<T, String>) -> Option<T> {
+        match result {
+            Ok(value) => Some(value),
+            Err(error) => {
+                self.finish(Outcome::Failed, Some(error));
+                None
+            }
+        }
+    }
+    /// Classify a completed fetch. Returns changed content still to stage;
+    /// every other outcome is recorded here.
+    fn receive(
+        &mut self,
+        fetched: Result<downloads::Fetch, String>,
+        active_generation: u64,
+        shadow: bool,
+    ) -> Option<(String, DownloadStamp)> {
+        let fetched = match fetched {
+            Ok(value) => value,
+            Err(error) => {
+                self.cached = None; // Next check can recover with an unconditional GET.
+                self.finish(Outcome::Failed, Some(error));
+                return None;
+            }
+        };
+        if active_generation != self.snapshot.generation() || shadow {
+            self.finish(
+                Outcome::Deferred,
+                Some("configuration or shadow changed during download".into()),
+            );
+            return None;
+        }
+        let (text, stamp, validators) = match fetched {
+            downloads::Fetch::NotModified { validators } => {
+                self.transfer = Some((304, 0));
+                if let Some(cache) = &mut self.cached {
+                    cache.validators = validators;
+                }
+                self.finish(Outcome::Unchanged, None);
+                return None;
+            }
+            downloads::Fetch::Modified {
+                text,
+                stamp,
+                validators,
+            } => (text, stamp, validators),
+        };
+        self.transfer = Some((200, stamp.bytes));
+        let rules = self.rules().map(|rules| rules == text);
+        let unchanged = self.ok_or_fail(rules)?;
+        self.cached = validators.usable().then(|| Cached {
+            generation: unchanged.then_some(self.snapshot.generation()),
+            sha256: stamp.sha256.clone(),
+            bytes: stamp.bytes,
+            validators,
+        });
+        if unchanged {
+            self.finish(Outcome::Unchanged, None);
+            return None;
+        }
+        Some((text, stamp))
+    }
+    /// Full configuration clone with the downloaded text; run off executor.
+    fn candidate(&self, text: String, stamp: DownloadStamp) -> Result<PolicyConfigSet, String> {
+        let mut config = self.snapshot.config().clone();
+        let list = config
+            .policies
+            .iter_mut()
+            .find(|policy| policy.name == self.source.policy)
+            .and_then(|policy| {
+                policy
+                    .lists
+                    .iter_mut()
+                    .find(|list| list.name == self.source.list)
+            })
+            .ok_or("scheduled source target missing")?;
+        list.rules = text;
+        config
+            .filter_sources
+            .get_mut(self.index)
+            .ok_or("scheduled source missing")?
+            .download = Some(stamp);
+        Ok(config)
+    }
+}
+
 async fn check(state: &Arc<ControlService>, stop: &CancellationToken) -> Result<(), String> {
     // A shadow is review work. Never replace it or run more checks while it exists.
     if state.engine.shadow().is_some() {
@@ -397,83 +495,40 @@ async fn check(state: &Arc<ControlService>, stop: &CancellationToken) -> Result<
     })
     .await
     .map_err(|_| "refresh preparation stopped")?;
-    let conditions = match conditions {
-        Ok(value) => value,
-        Err(error) => {
-            job.finish(Outcome::Failed, Some(error));
-            return Ok(());
-        }
+    let Some(conditions) = job.ok_or_fail(conditions) else {
+        return Ok(());
     };
     let fetched = tokio::select! {
         _ = stop.cancelled() => return Ok(()),
         result = downloads::fetch_conditional(&job.source, conditions.as_ref()) => result,
     };
-    let fetched = match fetched {
-        Ok(value) => value,
-        Err(error) => {
-            job.cached = None; // Next check can recover with an unconditional GET.
-            job.finish(Outcome::Failed, Some(error));
-            return Ok(());
-        }
-    };
     if stop.is_cancelled() {
         return Ok(());
     }
-    if state.engine.active().generation() != job.snapshot.generation()
-        || state.engine.shadow().is_some()
-    {
-        job.finish(
-            Outcome::Deferred,
-            Some("configuration or shadow changed during download".into()),
-        );
-        return Ok(());
+    let active = state.engine.active().generation();
+    let shadow = state.engine.shadow().is_some();
+    if let Some((text, stamp)) = job.receive(fetched, active, shadow) {
+        stage(state, job, text, stamp).await?;
     }
-    let (text, stamp, validators) = match fetched {
-        downloads::Fetch::NotModified { validators } => {
-            job.transfer = Some((304, 0));
-            if let Some(cache) = &mut job.cached {
-                cache.validators = validators;
-            }
-            job.finish(Outcome::Unchanged, None);
-            return Ok(());
-        }
-        downloads::Fetch::Modified {
-            text,
-            stamp,
-            validators,
-        } => (text, stamp, validators),
-    };
-    job.transfer = Some((200, stamp.bytes));
-    let unchanged = job.rules()? == text;
-    job.cached = validators.usable().then(|| Cached {
-        generation: unchanged.then_some(job.snapshot.generation()),
-        sha256: stamp.sha256.clone(),
-        bytes: stamp.bytes,
-        validators,
-    });
-    if unchanged {
-        job.finish(Outcome::Unchanged, None);
-        return Ok(());
-    }
+    Ok(())
+}
+
+/// Stage changed content as a shadow through the normal assertion-gated path.
+async fn stage(
+    state: &Arc<ControlService>,
+    job: Job,
+    text: String,
+    stamp: DownloadStamp,
+) -> Result<(), String> {
     let (mut job, config) = tokio::task::spawn_blocking(move || {
-        let mut config = job.snapshot.config().clone();
-        let list = config
-            .policies
-            .iter_mut()
-            .find(|policy| policy.name == job.source.policy)
-            .and_then(|policy| {
-                policy
-                    .lists
-                    .iter_mut()
-                    .find(|list| list.name == job.source.list)
-            })
-            .ok_or("scheduled source target missing")?;
-        list.rules = text;
-        config.filter_sources[job.index].download = Some(stamp);
-        Ok::<_, String>((job, config))
+        let config = job.candidate(text, stamp);
+        (job, config)
     })
     .await
-    .map_err(|_| "refresh candidate preparation stopped")??;
+    .map_err(|_| "refresh candidate preparation stopped")?;
+    let Some(config) = job.ok_or_fail(config) else {
+        return Ok(());
+    };
     // Once compilation/commit starts, drain it before SQLite shutdown. stage_refresh
     // retains mutation admission until its durable commit and shadow publication end.
     match state
@@ -714,5 +769,93 @@ mod tests {
             refresher.status(&next).unwrap().queued.unwrap().generation,
             2
         );
+    }
+    #[test]
+    fn queued_manual_check_survives_download_contention() {
+        let snapshot = Arc::new(PolicySnapshot::compile(config(), 1).unwrap());
+        let refresher = Arc::new(Refresher::default());
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
+        // Not yet due on its own schedule: only the manual request can start it.
+        refresher.status(&snapshot).unwrap();
+        refresher.inner.lock().unwrap().entries[0].next = Instant::now() + RETRY_BUSY;
+        refresher.enqueue(&snapshot, 0).unwrap();
+        let preview = semaphore.clone().try_acquire_owned().unwrap();
+        assert!(
+            refresher
+                .begin(snapshot.clone(), &semaphore)
+                .unwrap()
+                .is_none()
+        );
+        let status = refresher.status(&snapshot).unwrap();
+        assert_eq!(status.entries[0].outcome, Outcome::Deferred);
+        assert_eq!(status.queued.unwrap().source, 0);
+        drop(preview);
+        let job = refresher.begin(snapshot.clone(), &semaphore).unwrap();
+        assert_eq!(job.unwrap().index, 0);
+        assert!(refresher.status(&snapshot).unwrap().queued.is_none());
+    }
+    #[test]
+    fn processing_failures_are_recorded_as_failed_not_cancelled() {
+        let snapshot = Arc::new(PolicySnapshot::compile(config(), 1).unwrap());
+        let refresher = Arc::new(Refresher::default());
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
+        let fetched = || {
+            Ok(downloads::Fetch::Modified {
+                text: "new.test\n".into(),
+                stamp: DownloadStamp {
+                    retrieved_at: 1,
+                    sha256: downloads::sha256(b"new.test\n"),
+                    bytes: 9,
+                },
+                validators: downloads::Validators::default(),
+            })
+        };
+        let outcome = |refresher: &Refresher| {
+            let status = refresher.status(&snapshot).unwrap();
+            (status.entries[0].outcome, status.entries[0].error.clone())
+        };
+        let start = || {
+            refresher.enqueue(&snapshot, 0).unwrap();
+            refresher
+                .begin(snapshot.clone(), &semaphore)
+                .unwrap()
+                .unwrap()
+        };
+        // The compared target vanished: previously `?` dropped the job unfinished.
+        let mut job = start();
+        let mut renamed = config();
+        renamed.policies[0].lists[0].name = "renamed".into();
+        renamed.filter_sources.clear();
+        job.snapshot = Arc::new(PolicySnapshot::compile(renamed, 1).unwrap());
+        assert!(job.receive(fetched(), 1, false).is_none());
+        drop(job);
+        assert_eq!(
+            outcome(&refresher),
+            (
+                Outcome::Failed,
+                Some("scheduled source target missing".into())
+            )
+        );
+        // The list still exists but its source entry is gone.
+        let mut job = start();
+        let mut sourceless = config();
+        sourceless.filter_sources.clear();
+        job.snapshot = Arc::new(PolicySnapshot::compile(sourceless, 1).unwrap());
+        let (text, stamp) = job.receive(fetched(), 1, false).unwrap();
+        let candidate = job.candidate(text, stamp);
+        assert!(job.ok_or_fail(candidate).is_none());
+        drop(job);
+        assert_eq!(
+            outcome(&refresher),
+            (Outcome::Failed, Some("scheduled source missing".into()))
+        );
+        // Changed live state still defers, and real cancellation still cancels.
+        let mut job = start();
+        assert!(job.receive(fetched(), 2, false).is_none());
+        drop(job);
+        assert_eq!(outcome(&refresher).0, Outcome::Deferred);
+        // A deferred source waits RETRY_BUSY; a manual request starts it now.
+        drop(start());
+        assert_eq!(outcome(&refresher).0, Outcome::Cancelled);
     }
 }

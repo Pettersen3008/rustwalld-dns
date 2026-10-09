@@ -92,10 +92,14 @@ instrumentation. Proc reads, setup and reporting stay outside measured queries
 and production libraries. See [CPU/query methodology](cpu-query.md).
 
 Hot-path telemetry uses try_send; database work and JSON never run in Engine.
-The SQLite worker counts retained history through its compact index and trims
-only excess oldest rows. It preserves sparse IDs and atomic batches, while
-avoiding a full newest-row walk on every small batch. Matched paced comparisons
-measure this control-plane CPU improvement; burst history remains best-effort.
+The SQLite worker keeps the retained history row count in memory (counted once
+at open, adjusted by inserts and evictions) and trims only excess oldest rows.
+It preserves sparse IDs and atomic batches without counting or walking rows on
+every small batch; the unused creation-time index is dropped. The worker blocks
+on commands/events (commands first) and writes a history batch when full or
+10 ms after its first event, instead of polling. History batches commit with
+`synchronous=NORMAL`; revision/pointer commits switch to `FULL`. New database
+files are created 0600 and WAL mode is verified. Burst history remains best-effort.
 Once policy/shadow matching finishes, query telemetry takes ownership of the
 normalized name buffer. Rewrites and temporary allows avoid unused decision-key
 construction. The parser, cache representations and telemetry admission remain

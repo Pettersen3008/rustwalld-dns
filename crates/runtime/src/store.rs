@@ -4,7 +4,7 @@ use rustwalld_dns_core::telemetry::QueryEvent;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -15,6 +15,12 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 pub const SCHEMA_VERSION: i64 = 2;
+/// Revisions kept besides the live active/shadow ones.
+const RETAINED_REVISIONS: i64 = 32;
+/// Maximum history events written in one transaction.
+const HISTORY_BATCH: usize = 256;
+/// Longest time a queued history event waits for more events to batch with.
+const HISTORY_FLUSH: Duration = Duration::from_millis(10);
 
 /// Persisted revision state, serialized with the existing schema vocabulary.
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -59,7 +65,7 @@ pub struct Revision {
 }
 #[derive(Debug, Serialize)]
 pub struct RevisionSummary {
-    pub id: i64,
+    pub id: u64,
     pub timestamp: String,
     pub actor: String,
     pub state: String,
@@ -67,12 +73,12 @@ pub struct RevisionSummary {
 }
 #[derive(Debug, Serialize)]
 pub struct HistoryEntry {
-    pub id: i64,
+    pub id: u64,
     pub timestamp: String,
     pub client: String,
     pub domain: String,
     pub qtype: u16,
-    pub generation: i64,
+    pub generation: u64,
     pub policy_id: i64,
     pub action: String,
     pub rule_id: Option<u32>,
@@ -107,6 +113,13 @@ pub enum StoreError {
     /// Revisions exist without an active pointer; bootstrapping would reuse IDs.
     #[error("database has revisions but no active runtime pointer")]
     MissingActive,
+    #[error("unsupported database schema {found}; expected {SCHEMA_VERSION}")]
+    Schema { found: i64 },
+    /// Concurrent writers and crash recovery require write-ahead logging.
+    #[error("database journal mode is {0:?}; write-ahead logging is required")]
+    JournalMode(String),
+    #[error("database file could not be created")]
+    Create(#[source] std::io::Error),
     #[error("unexpected database worker response")]
     Response,
     #[error("database worker could not start")]
@@ -157,13 +170,16 @@ pub struct Store {
     pub metrics: Arc<StoreMetrics>,
 }
 impl Store {
+    /// Open (creating a private 0600 file if absent) and start the worker.
+    /// The worker owns the `queries` table; its retained row count is kept in
+    /// memory, so external writes to that table need a restart to be counted.
     pub async fn start(
         path: PathBuf,
         history_rows: usize,
-        mut events: mpsc::Receiver<QueryEvent>,
+        events: mpsc::Receiver<QueryEvent>,
         cancel: CancellationToken,
     ) -> Result<(Self, oneshot::Receiver<()>), StoreError> {
-        let (sender, mut commands) = mpsc::channel::<Command>(32);
+        let (sender, commands) = mpsc::channel::<Command>(32);
         let (ready_tx, ready_rx) = oneshot::channel();
         let (done_tx, done_rx) = oneshot::channel();
         let metrics = Arc::new(StoreMetrics::default());
@@ -171,53 +187,27 @@ impl Store {
         std::thread::Builder::new()
             .name("dns-sqlite".into())
             .spawn(move || {
-                let mut connection = match open(path) {
-                    Ok(c) => {
+                let opened = open(&path).and_then(|connection| {
+                    let history = History::open(&connection, history_rows)?;
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .enable_time()
+                        .build()
+                        .map_err(StoreError::Spawn)?;
+                    Ok((connection, history, runtime))
+                });
+                match opened {
+                    Ok((connection, history, runtime)) => {
                         let _ = ready_tx.send(Ok(()));
-                        c
+                        let worker = Worker {
+                            connection,
+                            history,
+                            counts,
+                        };
+                        runtime.block_on(worker.run(commands, events, cancel));
                     }
                     Err(error) => {
-                        let _ = ready_tx.send(Err(StoreError::Sqlite(error)));
-                        let _ = done_tx.send(());
-                        return;
+                        let _ = ready_tx.send(Err(error));
                     }
-                };
-                loop {
-                    for _ in 0..8 {
-                        match commands.try_recv() {
-                            Ok(command) => {
-                                let result = execute(&mut connection, command.operation);
-                                let _ = command.reply.send(result);
-                            }
-                            Err(_) => break,
-                        }
-                    }
-                    let mut batch = Vec::with_capacity(256);
-                    while batch.len() < 256 {
-                        match events.try_recv() {
-                            Ok(event) => batch.push(event),
-                            Err(_) => break,
-                        }
-                    }
-                    if !batch.is_empty() {
-                        match write_events(&mut connection, &batch, history_rows) {
-                            Ok(()) => {
-                                counts
-                                    .persisted_events
-                                    .fetch_add(batch.len() as u64, Ordering::Relaxed);
-                            }
-                            Err(error) => {
-                                counts
-                                    .write_failures
-                                    .fetch_add(batch.len() as u64, Ordering::Relaxed);
-                                tracing::warn!(%error,"query history batch dropped");
-                            }
-                        }
-                    }
-                    if cancel.is_cancelled() && events.is_empty() {
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(10));
                 }
                 let _ = done_tx.send(());
             })
@@ -230,8 +220,9 @@ impl Store {
         self.sender
             .try_send(Command { operation, reply })
             .map_err(|_| StoreError::QueueUnavailable)?;
-        // Reads may time out. Mutations are deliberately awaited to completion:
-        // a timed-out commit must not become durable without atomic promotion.
+        // Requests are bounded by queue admission and the SQLite busy timeout,
+        // not by a deadline here. Mutations are deliberately awaited to
+        // completion: a timed-out commit must not become durable unpublished.
         receiver.await.map_err(|_| StoreError::WorkerStopped)?
     }
     /// Durable active/shadow pointers, or `None` for a store never bootstrapped.
@@ -269,7 +260,9 @@ impl Store {
             _ => Err(StoreError::Response),
         }
     }
-    /// Commit the unchanged schema transaction; live publication belongs to control.
+    /// Low-level durable write used by `ControlService`. It neither reserves a
+    /// generation nor publishes; hosts with a control service must stage
+    /// revisions through it instead.
     pub async fn commit(
         &self,
         id: u64,
@@ -299,22 +292,196 @@ impl Store {
         }
     }
 }
-fn open(path: PathBuf) -> rusqlite::Result<Connection> {
+
+struct Worker {
+    connection: Connection,
+    history: History,
+    counts: Arc<StoreMetrics>,
+}
+impl Worker {
+    /// Block on commands and events instead of polling. Commands take priority;
+    /// a history batch is written when full or `HISTORY_FLUSH` after its first
+    /// event. Cancellation persists what is already queued, then stops.
+    async fn run(
+        mut self,
+        mut commands: mpsc::Receiver<Command>,
+        mut events: mpsc::Receiver<QueryEvent>,
+        cancel: CancellationToken,
+    ) {
+        let mut batch = Vec::with_capacity(HISTORY_BATCH);
+        let flush = tokio::time::sleep(HISTORY_FLUSH);
+        tokio::pin!(flush);
+        loop {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => break,
+                Some(command) = commands.recv() => self.serve(command),
+                Some(event) = events.recv(), if batch.len() < HISTORY_BATCH => {
+                    if batch.is_empty() {
+                        flush.as_mut().reset(tokio::time::Instant::now() + HISTORY_FLUSH);
+                    }
+                    batch.push(event);
+                    if batch.len() == HISTORY_BATCH {
+                        self.persist(&mut batch);
+                    }
+                }
+                () = &mut flush, if !batch.is_empty() => self.persist(&mut batch),
+                else => break,
+            }
+        }
+        while let Ok(command) = commands.try_recv() {
+            self.serve(command);
+        }
+        loop {
+            while batch.len() < HISTORY_BATCH {
+                match events.try_recv() {
+                    Ok(event) => batch.push(event),
+                    Err(_) => break,
+                }
+            }
+            if batch.is_empty() {
+                break;
+            }
+            self.persist(&mut batch);
+        }
+    }
+    fn serve(&mut self, command: Command) {
+        let _ = command
+            .reply
+            .send(execute(&mut self.connection, command.operation));
+    }
+    fn persist(&mut self, batch: &mut Vec<QueryEvent>) {
+        let count = u64::try_from(batch.len()).unwrap_or(u64::MAX);
+        match self.history.write(&mut self.connection, batch) {
+            Ok(()) => {
+                self.counts
+                    .persisted_events
+                    .fetch_add(count, Ordering::Relaxed);
+            }
+            Err(error) => {
+                self.counts
+                    .write_failures
+                    .fetch_add(count, Ordering::Relaxed);
+                tracing::warn!(%error, "query history batch dropped");
+            }
+        }
+        batch.clear();
+    }
+}
+
+/// Bounded best-effort history. The retained row count lives in memory, so a
+/// batch never scans the table (a `COUNT(*)` per batch is O(rows)).
+struct History {
+    limit: u64,
+    rows: u64,
+}
+impl History {
+    fn open(connection: &Connection, limit: usize) -> Result<Self, StoreError> {
+        Ok(Self {
+            limit: u64::try_from(limit).unwrap_or(u64::MAX),
+            rows: Self::count(connection)?,
+        })
+    }
+    fn count(connection: &Connection) -> Result<u64, StoreError> {
+        let rows: i64 = connection.query_row("SELECT COUNT(*) FROM queries", [], |r| r.get(0))?;
+        Ok(from_sql_id(rows)?)
+    }
+    /// Insert one atomic batch and evict only the oldest excess rows.
+    /// History favors throughput over durability (`synchronous=NORMAL`): a
+    /// power loss may drop recent batches but never corrupts the database.
+    fn write(
+        &mut self,
+        connection: &mut Connection,
+        batch: &[QueryEvent],
+    ) -> Result<(), StoreError> {
+        let tx = connection.transaction()?;
+        {
+            let mut stmt=tx.prepare_cached("INSERT INTO queries(client,domain,qtype,generation,policy,action,rule,decision_cached,rcode,source,latency_us,shadow,temporary_exception) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)")?;
+            for event in batch {
+                let shadow = event.shadow.as_ref().map(|s| {
+                    json!({
+                        "generation": s.generation,
+                        "policy_id": s.policy,
+                        "decision": s.decision,
+                        "rewrite": s.rewrite,
+                        "differs": s.differs,
+                        "temporary_exception": s.temporary_exception,
+                    })
+                    .to_string()
+                });
+                stmt.execute(params![
+                    event.client.to_string(),
+                    event.domain,
+                    event.qtype,
+                    sql_id(event.generation)?,
+                    i64::try_from(event.policy)
+                        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+                    if event.decision.action == rustwalld_dns_filter::Action::Block {
+                        "block"
+                    } else {
+                        "allow"
+                    },
+                    event.decision.rule,
+                    event.decision_cached,
+                    event.response_code,
+                    event.source.as_str(),
+                    i64::try_from(event.latency_us).unwrap_or(i64::MAX),
+                    shadow,
+                    event.temporary_exception
+                ])?;
+            }
+        }
+        let rows = self
+            .rows
+            .saturating_add(u64::try_from(batch.len()).unwrap_or(u64::MAX));
+        let mut evicted = 0;
+        if let Some(excess) = rows.checked_sub(self.limit).filter(|excess| *excess > 0) {
+            evicted = tx.execute(
+                "DELETE FROM queries WHERE id <= (SELECT id FROM queries ORDER BY id ASC LIMIT 1 OFFSET ?1)",
+                [sql_id(excess - 1)?],
+            )?;
+        }
+        tx.commit()?;
+        self.rows = rows.saturating_sub(u64::try_from(evicted).unwrap_or(u64::MAX));
+        Ok(())
+    }
+}
+
+/// Create the database privately: it holds client addresses and domains.
+/// SQLite gives its WAL/SHM sidecars the database file's permissions.
+fn create_private(path: &Path) -> Result<(), StoreError> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    match options.open(path) {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => Err(StoreError::Create(error)),
+    }
+}
+fn open(path: &Path) -> Result<Connection, StoreError> {
+    create_private(path)?;
     let mut connection = Connection::open(path)?;
     connection.busy_timeout(Duration::from_millis(250))?;
     let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     if !(0..=SCHEMA_VERSION).contains(&version) {
-        return Err(rusqlite::Error::InvalidParameterName(format!(
-            "unsupported database schema {version}; expected {SCHEMA_VERSION}"
-        )));
+        return Err(StoreError::Schema { found: version });
     }
-    connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
+    let mode: String = connection.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
+    if !mode.eq_ignore_ascii_case("wal") {
+        return Err(StoreError::JournalMode(mode));
+    }
+    // History batches run at NORMAL; revision/pointer commits switch to FULL.
+    connection.pragma_update(None, "synchronous", "NORMAL")?;
     let tx = connection.transaction()?;
     tx.execute_batch("
         CREATE TABLE IF NOT EXISTS revisions(id INTEGER PRIMARY KEY,created TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),actor TEXT NOT NULL,state TEXT NOT NULL,diff TEXT NOT NULL,config TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS runtime(key TEXT PRIMARY KEY,value INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS queries(id INTEGER PRIMARY KEY,created TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),client TEXT NOT NULL,domain TEXT NOT NULL,qtype INTEGER NOT NULL,generation INTEGER NOT NULL,policy INTEGER NOT NULL,action TEXT NOT NULL,rule INTEGER,decision_cached INTEGER NOT NULL,rcode INTEGER NOT NULL,source TEXT NOT NULL,latency_us INTEGER NOT NULL,shadow TEXT,temporary_exception INTEGER);
-        CREATE INDEX IF NOT EXISTS queries_created ON queries(created);")?;
+        -- Nothing reads by creation time and retention no longer counts rows,
+        -- so this index only cost a B-tree update per history insert.
+        DROP INDEX IF EXISTS queries_created;")?;
     if version == 1 {
         tx.execute_batch("ALTER TABLE queries ADD COLUMN temporary_exception INTEGER;")?;
     }
@@ -322,6 +489,21 @@ fn open(path: PathBuf) -> rusqlite::Result<Connection> {
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     tx.commit()?;
     Ok(connection)
+}
+/// Revision and pointer changes are fsynced on commit (`synchronous=FULL`);
+/// the pragma is switched between transactions and restored afterwards.
+fn durable<T>(
+    connection: &mut Connection,
+    operation: impl FnOnce(&mut Connection) -> Result<T, StoreError>,
+) -> Result<T, StoreError> {
+    connection.pragma_update(None, "synchronous", "FULL")?;
+    let result = operation(connection);
+    // Never turn a committed revision into an error: the caller would skip
+    // publication. Staying at FULL is only slower.
+    if let Err(error) = connection.pragma_update(None, "synchronous", "NORMAL") {
+        tracing::warn!(%error, "history synchronous mode could not be restored");
+    }
+    result
 }
 /// Read durable pointers inside one transaction, if the store was bootstrapped.
 fn pointers(tx: &rusqlite::Transaction<'_>) -> Result<Option<Bootstrap>, StoreError> {
@@ -366,155 +548,128 @@ fn execute(connection: &mut Connection, operation: Operation) -> Result<Reply, S
             Ok(Reply::Load(pointers))
         }
         Operation::Bootstrap { config } => {
-            let tx = connection.transaction()?;
-            if let Some(existing) = pointers(&tx)? {
-                tx.commit()?;
-                return Ok(Reply::Bootstrap(existing));
-            }
-            // Never resurrect a retention-pruned ID with different content.
-            let revisions: i64 =
-                tx.query_row("SELECT COUNT(*) FROM revisions", [], |r| r.get(0))?;
-            if revisions != 0 {
-                return Err(StoreError::MissingActive);
-            }
-            tx.execute("INSERT INTO revisions(id,actor,state,diff,config) VALUES(1,'startup','promoted','initial configuration',?1)",[config])?;
-            tx.execute("INSERT INTO runtime(key,value) VALUES('active',1)", [])?;
-            let bootstrap = pointers(&tx)?.ok_or(StoreError::MissingActive)?;
-            tx.commit()?;
-            Ok(Reply::Bootstrap(bootstrap))
+            durable(connection, |connection| bootstrap(connection, config)).map(Reply::Bootstrap)
         }
-        Operation::Queries { limit } => {
-            let mut stmt=connection.prepare("SELECT id,created,client,domain,qtype,generation,policy,action,rule,decision_cached,rcode,source,latency_us,shadow,temporary_exception FROM queries ORDER BY id DESC LIMIT ?1")?;
-            let rows = stmt.query_map([limit.clamp(1, 1000) as i64], |r| {
-                Ok(HistoryEntry {
-                    id: r.get(0)?,
-                    timestamp: r.get(1)?,
-                    client: r.get(2)?,
-                    domain: r.get(3)?,
-                    qtype: r.get(4)?,
-                    generation: r.get(5)?,
-                    policy_id: r.get(6)?,
-                    action: r.get(7)?,
-                    rule_id: r.get(8)?,
-                    decision_cached: r.get(9)?,
-                    response_code: r.get(10)?,
-                    source: r.get(11)?,
-                    latency_us: r.get(12)?,
-                    shadow: r
-                        .get::<_, Option<String>>(13)?
-                        .and_then(|s| serde_json::from_str::<Value>(&s).ok()),
-                    temporary_exception: r.get(14)?,
-                })
-            })?;
-            Ok(Reply::Queries(rows.collect::<rusqlite::Result<Vec<_>>>()?))
-        }
-        Operation::Revisions => {
-            let mut stmt = connection
-                .prepare("SELECT id,created,actor,state,diff FROM revisions ORDER BY id DESC")?;
-            let rows = stmt.query_map([], |r| {
-                Ok(RevisionSummary {
-                    id: r.get(0)?,
-                    timestamp: r.get(1)?,
-                    actor: r.get(2)?,
-                    state: r.get(3)?,
-                    diff: r.get(4)?,
-                })
-            })?;
-            Ok(Reply::Revisions(
-                rows.collect::<rusqlite::Result<Vec<_>>>()?,
-            ))
-        }
-        Operation::Revision { id } => {
-            let text: Option<String> = connection
-                .query_row(
-                    "SELECT config FROM revisions WHERE id=?1",
-                    [sql_id(id)?],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            let revision = text
-                .map(|text| {
-                    serde_json::from_str(&text)
-                        .map(|config| Revision { id, config })
-                        .map_err(|source| StoreError::CorruptRevision { id, source })
-                })
-                .transpose()?;
-            Ok(Reply::Revision(revision))
-        }
+        Operation::Queries { limit } => queries(connection, limit).map(Reply::Queries),
+        Operation::Revisions => revisions(connection).map(Reply::Revisions),
+        Operation::Revision { id } => revision(connection, id).map(Reply::Revision),
         Operation::Commit {
             id,
             config,
             mode,
             actor,
             diff,
-        } => {
-            let tx = connection.transaction()?;
-            tx.execute(
-                "INSERT INTO revisions(id,actor,state,diff,config) VALUES(?1,?2,?3,?4,?5)",
-                params![sql_id(id)?, actor, mode.as_str(), diff, config],
-            )?;
-            let key = if matches!(mode, RevisionMode::Shadow) {
-                "shadow"
-            } else {
-                "active"
-            };
-            tx.execute("INSERT INTO runtime(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![key,sql_id(id)?])?;
-            if !matches!(mode, RevisionMode::Shadow) {
-                tx.execute("DELETE FROM runtime WHERE key='shadow'", [])?;
-            }
-            // Retain recent revisions and any currently active/shadow generation.
-            tx.execute("DELETE FROM revisions WHERE id NOT IN (SELECT id FROM revisions ORDER BY id DESC LIMIT 32) AND id NOT IN (SELECT value FROM runtime)",[])?;
-            tx.commit()?;
-            Ok(Reply::Commit(CommitReport {
-                generation: id,
-                state: mode,
-            }))
-        }
-        Operation::ClearShadow => {
+        } => durable(connection, |connection| {
+            commit(connection, id, &config, mode, &actor, &diff)
+        })
+        .map(Reply::Commit),
+        Operation::ClearShadow => durable(connection, |connection| {
             connection.execute("DELETE FROM runtime WHERE key='shadow'", [])?;
-            Ok(Reply::ClearShadow(ClearShadowReport { shadow: None }))
-        }
+            Ok(ClearShadowReport { shadow: None })
+        })
+        .map(Reply::ClearShadow),
     }
 }
-fn write_events(
-    connection: &mut Connection,
-    batch: &[QueryEvent],
-    limit: usize,
-) -> rusqlite::Result<()> {
+fn bootstrap(connection: &mut Connection, config: String) -> Result<Bootstrap, StoreError> {
     let tx = connection.transaction()?;
-    {
-        let mut stmt=tx.prepare_cached("INSERT INTO queries(client,domain,qtype,generation,policy,action,rule,decision_cached,rcode,source,latency_us,shadow,temporary_exception) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)")?;
-        for event in batch {
-            let shadow=event.shadow.as_ref().map(|s|json!({"generation":s.generation,"policy_id":s.policy,"decision":s.decision,"rewrite":s.rewrite,"differs":s.differs,"temporary_exception":s.temporary_exception}).to_string());
-            stmt.execute(params![
-                event.client.to_string(),
-                event.domain,
-                event.qtype,
-                sql_id(event.generation)?,
-                event.policy as i64,
-                if event.decision.action == rustwalld_dns_filter::Action::Block {
-                    "block"
-                } else {
-                    "allow"
-                },
-                event.decision.rule,
-                event.decision_cached,
-                event.response_code,
-                event.source.as_str(),
-                event.latency_us.min(i64::MAX as u64) as i64,
-                shadow,
-                event.temporary_exception
-            ])?;
-        }
+    if let Some(existing) = pointers(&tx)? {
+        tx.commit()?;
+        return Ok(existing);
     }
-    // Count using SQLite's compact covering index; scan only the rows to evict.
-    // Walking `limit` newest rows on every small batch competes with DNS for CPU.
-    let rows: i64 = tx.query_row("SELECT COUNT(*) FROM queries", [], |row| row.get(0))?;
-    let excess = rows - limit.min(i64::MAX as usize) as i64;
-    if excess > 0 {
-        tx.execute("DELETE FROM queries WHERE id <= (SELECT id FROM queries ORDER BY id ASC LIMIT 1 OFFSET ?1)", [excess - 1])?;
+    // Never resurrect a retention-pruned ID with different content.
+    let revisions: i64 = tx.query_row("SELECT COUNT(*) FROM revisions", [], |r| r.get(0))?;
+    if revisions != 0 {
+        return Err(StoreError::MissingActive);
     }
-    tx.commit()
+    tx.execute("INSERT INTO revisions(id,actor,state,diff,config) VALUES(1,'startup','promoted','initial configuration',?1)",[config])?;
+    tx.execute("INSERT INTO runtime(key,value) VALUES('active',1)", [])?;
+    let bootstrap = pointers(&tx)?.ok_or(StoreError::MissingActive)?;
+    tx.commit()?;
+    Ok(bootstrap)
+}
+fn queries(connection: &Connection, limit: usize) -> Result<Vec<HistoryEntry>, StoreError> {
+    let mut stmt=connection.prepare("SELECT id,created,client,domain,qtype,generation,policy,action,rule,decision_cached,rcode,source,latency_us,shadow,temporary_exception FROM queries ORDER BY id DESC LIMIT ?1")?;
+    let limit = i64::try_from(limit.clamp(1, 1000)).unwrap_or(1000);
+    let rows = stmt.query_map([limit], |r| {
+        Ok(HistoryEntry {
+            id: from_sql_id(r.get(0)?)?,
+            timestamp: r.get(1)?,
+            client: r.get(2)?,
+            domain: r.get(3)?,
+            qtype: r.get(4)?,
+            generation: from_sql_id(r.get(5)?)?,
+            policy_id: r.get(6)?,
+            action: r.get(7)?,
+            rule_id: r.get(8)?,
+            decision_cached: r.get(9)?,
+            response_code: r.get(10)?,
+            source: r.get(11)?,
+            latency_us: r.get(12)?,
+            shadow: r
+                .get::<_, Option<String>>(13)?
+                .and_then(|s| serde_json::from_str::<Value>(&s).ok()),
+            temporary_exception: r.get(14)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+fn revisions(connection: &Connection) -> Result<Vec<RevisionSummary>, StoreError> {
+    let mut stmt =
+        connection.prepare("SELECT id,created,actor,state,diff FROM revisions ORDER BY id DESC")?;
+    let rows = stmt.query_map([], |r| {
+        Ok(RevisionSummary {
+            id: from_sql_id(r.get(0)?)?,
+            timestamp: r.get(1)?,
+            actor: r.get(2)?,
+            state: r.get(3)?,
+            diff: r.get(4)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+fn revision(connection: &Connection, id: u64) -> Result<Option<Revision>, StoreError> {
+    let text: Option<String> = connection
+        .query_row(
+            "SELECT config FROM revisions WHERE id=?1",
+            [sql_id(id)?],
+            |r| r.get(0),
+        )
+        .optional()?;
+    text.map(|text| {
+        serde_json::from_str(&text)
+            .map(|config| Revision { id, config })
+            .map_err(|source| StoreError::CorruptRevision { id, source })
+    })
+    .transpose()
+}
+fn commit(
+    connection: &mut Connection,
+    id: u64,
+    config: &str,
+    mode: RevisionMode,
+    actor: &str,
+    diff: &str,
+) -> Result<CommitReport, StoreError> {
+    let tx = connection.transaction()?;
+    tx.execute(
+        "INSERT INTO revisions(id,actor,state,diff,config) VALUES(?1,?2,?3,?4,?5)",
+        params![sql_id(id)?, actor, mode.as_str(), diff, config],
+    )?;
+    let key = match mode {
+        RevisionMode::Shadow => "shadow",
+        RevisionMode::Promoted => "active",
+    };
+    tx.execute("INSERT INTO runtime(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![key,sql_id(id)?])?;
+    if matches!(mode, RevisionMode::Promoted) {
+        tx.execute("DELETE FROM runtime WHERE key='shadow'", [])?;
+    }
+    // Retain recent revisions and any currently active/shadow generation.
+    tx.execute("DELETE FROM revisions WHERE id NOT IN (SELECT id FROM revisions ORDER BY id DESC LIMIT ?1) AND id NOT IN (SELECT value FROM runtime)",[RETAINED_REVISIONS])?;
+    tx.commit()?;
+    Ok(CommitReport {
+        generation: id,
+        state: mode,
+    })
 }
 
 fn from_sql_id(id: i64) -> rusqlite::Result<u64> {
@@ -556,31 +711,136 @@ mod tests {
             .collect::<rusqlite::Result<_>>()
             .unwrap()
     }
+    fn database() -> (tempfile::TempDir, Connection) {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = open(&directory.path().join("dns.sqlite")).unwrap();
+        (directory, connection)
+    }
+    fn write(
+        connection: &mut Connection,
+        batch: &[QueryEvent],
+        limit: u64,
+    ) -> Result<(), StoreError> {
+        let mut history = History::open(connection, 0).unwrap();
+        history.limit = limit;
+        history.write(connection, batch)
+    }
     #[test]
     fn history_retains_newest_rows_with_sparse_ids_and_changing_limits() {
-        let mut connection = open(PathBuf::from(":memory:")).unwrap();
-        write_events(&mut connection, &vec![event(); 10], 12).unwrap();
+        let (_directory, mut connection) = database();
+        write(&mut connection, &vec![event(); 10], 12).unwrap();
         assert_eq!(ids(&connection).len(), 10);
         connection
             .execute_batch("UPDATE queries SET id=-id; UPDATE queries SET id=-id*10; DELETE FROM queries WHERE id IN(40,70)")
             .unwrap();
-        write_events(&mut connection, &[event()], 4).unwrap();
+        write(&mut connection, &[event()], 4).unwrap();
         assert_eq!(ids(&connection), vec![80, 90, 100, 101]);
-        write_events(&mut connection, &vec![event(); 6], 4).unwrap();
+        write(&mut connection, &vec![event(); 6], 4).unwrap();
         assert_eq!(ids(&connection), vec![104, 105, 106, 107]);
-        write_events(&mut connection, &[event()], 1).unwrap();
+        write(&mut connection, &[event()], 1).unwrap();
         assert_eq!(ids(&connection), vec![108]);
     }
     #[test]
     fn failed_history_batch_cannot_insert_or_trim_partial_state() {
-        let mut connection = open(PathBuf::from(":memory:")).unwrap();
-        write_events(&mut connection, &[event(), event()], 2).unwrap();
+        let (_directory, mut connection) = database();
+        write(&mut connection, &[event(), event()], 2).unwrap();
         let mut invalid = event();
         invalid.generation = u64::MAX;
-        assert!(write_events(&mut connection, &[event(), invalid], 1).is_err());
+        assert!(write(&mut connection, &[event(), invalid], 1).is_err());
         assert_eq!(ids(&connection), vec![1, 2]);
-        write_events(&mut connection, &[event()], 2).unwrap();
+        write(&mut connection, &[event()], 2).unwrap();
         assert_eq!(ids(&connection), vec![2, 3]);
+    }
+    #[test]
+    fn retained_row_count_tracks_inserts_evictions_and_failed_batches() {
+        let (_directory, mut connection) = database();
+        let mut history = History::open(&connection, 5).unwrap();
+        history.write(&mut connection, &vec![event(); 3]).unwrap();
+        assert_eq!(history.rows, 3);
+        history.write(&mut connection, &vec![event(); 4]).unwrap();
+        assert_eq!(history.rows, 5);
+        let mut invalid = event();
+        invalid.generation = u64::MAX;
+        assert!(history.write(&mut connection, &[invalid]).is_err());
+        assert_eq!(history.rows, 5);
+        assert_eq!(History::count(&connection).unwrap(), 5);
+        // A reopened store starts from the durable count, not from zero.
+        assert_eq!(History::open(&connection, 5).unwrap().rows, 5);
+        // The creation-time index is gone; retention never needed it.
+        let indexes: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE type='index' AND name='queries_created'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(indexes, 0);
+    }
+    #[test]
+    fn revision_commits_are_full_sync_and_history_stays_normal() {
+        let (_directory, mut connection) = database();
+        let synchronous = |connection: &Connection| {
+            connection
+                .query_row("PRAGMA synchronous", [], |r| r.get::<_, i64>(0))
+                .unwrap()
+        };
+        // 1 = NORMAL, 2 = FULL.
+        assert_eq!(synchronous(&connection), 1);
+        let seen = durable(&mut connection, |connection| Ok(synchronous(connection))).unwrap();
+        assert_eq!(seen, 2);
+        assert_eq!(synchronous(&connection), 1);
+        assert!(durable(&mut connection, |_| Err::<(), _>(StoreError::Response)).is_err());
+        assert_eq!(synchronous(&connection), 1);
+        let mode: String = connection
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn new_databases_are_private_files() {
+        use std::os::unix::fs::PermissionsExt;
+        let (directory, _connection) = database();
+        let mode = std::fs::metadata(directory.path().join("dns.sqlite"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+        let wal = std::fs::metadata(directory.path().join("dns.sqlite-wal"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(wal & 0o077, 0);
+    }
+    #[tokio::test]
+    async fn worker_blocks_until_work_and_flushes_partial_batches() {
+        let directory = tempfile::tempdir().unwrap();
+        let (sender, events) = mpsc::channel(16);
+        let cancel = CancellationToken::new();
+        let (store, done) = Store::start(
+            directory.path().join("dns.sqlite"),
+            10,
+            events,
+            cancel.clone(),
+        )
+        .await
+        .unwrap();
+        sender.send(event()).await.unwrap();
+        // One event, far below a full batch, is persisted after the flush interval.
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while store.metrics.persisted_events.load(Ordering::Relaxed) == 0 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(store.queries(10).await.unwrap().len(), 1);
+        for _ in 0..3 {
+            sender.send(event()).await.unwrap();
+        }
+        cancel.cancel();
+        done.await.unwrap();
+        assert_eq!(store.metrics.persisted_events.load(Ordering::Relaxed), 4);
     }
     fn bootstrap(connection: &mut Connection, config: &str) -> Result<Bootstrap, StoreError> {
         match execute(
@@ -608,7 +868,7 @@ mod tests {
     }
     #[test]
     fn restart_after_retention_never_resurrects_revision_one() {
-        let mut connection = open(PathBuf::from(":memory:")).unwrap();
+        let (_directory, mut connection) = database();
         assert!(matches!(
             execute(&mut connection, Operation::Load).unwrap(),
             Reply::Load(None)
@@ -645,7 +905,7 @@ mod tests {
     }
     #[test]
     fn pointer_and_revision_corruption_is_reported_not_hidden() {
-        let mut connection = open(PathBuf::from(":memory:")).unwrap();
+        let (_directory, mut connection) = database();
         bootstrap(&mut connection, "{}").unwrap();
         commit(&mut connection, 2, RevisionMode::Shadow);
         // A real read error is not "no shadow".

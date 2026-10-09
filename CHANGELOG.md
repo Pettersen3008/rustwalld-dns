@@ -2,6 +2,12 @@
 
 ## 0.1.0 — unreleased
 
+- SQLite worker: blocking receive with a 10 ms batch flush instead of a 10 ms
+  sleep-poll; in-memory retained-row count instead of `COUNT(*)` per batch (the
+  `queries_created` index is dropped; older binaries recreate it); history at
+  `synchronous=NORMAL`, revisions/pointers at `FULL`; new files are 0600 and WAL
+  mode is checked. `RevisionSummary.id` and `HistoryEntry.{id,generation}` are
+  `u64`.
 - Startup: the file policy is compiled only to seed a new store (no double
   compilation, and a broken file no longer blocks a stored revision); restart
   after retention no longer resurrects revision 1 with new content; an

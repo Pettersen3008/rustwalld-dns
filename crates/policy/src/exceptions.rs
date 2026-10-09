@@ -1,6 +1,6 @@
 //! Compiled exact-domain allows. Expiry never depends on a management task.
 use crate::{
-    CompiledPolicy, PolicyError,
+    CompiledPolicy, PolicyConfigSet, PolicyError,
     config::{excerpt, validate_name},
     sources::MAX_UNIX_SECONDS,
 };
@@ -118,12 +118,12 @@ impl Entries {
             if remaining.is_zero() {
                 continue;
             }
-            if remaining > MAX_EXCEPTION_REMAINING {
-                return Err(PolicyError::field(
-                    field("expires_at"),
-                    "more than seven days remaining",
-                ));
-            }
+            // Stored revisions are recompiled at startup with whatever the wall
+            // clock says. A clock that is behind (an RTC-less board before NTP)
+            // must not keep DNS from starting, so bound only the monotonic
+            // deadline here. The absolute wall expiry still ends the allowance
+            // once the clock is corrected; intake enforces the seven-day limit.
+            let remaining = remaining.min(MAX_EXCEPTION_REMAINING);
             let deadline = clock.monotonic.checked_add(remaining).ok_or_else(|| {
                 PolicyError::field(field("expires_at"), "unrepresentable deadline")
             })?;
@@ -147,6 +147,71 @@ impl Entries {
             );
         }
         Ok((!entries.is_empty()).then_some(Self(entries)))
+    }
+}
+impl PolicyConfigSet {
+    /// Intake check for newly accepted temporary exceptions.
+    ///
+    /// An exception is new unless an identical entry (policy name, exception
+    /// name, domain and expiry) exists in one of the `accepted` configurations,
+    /// such as the live active and shadow revisions. New exceptions may have at
+    /// most [`MAX_EXCEPTION_REMAINING`] left on the current wall clock; expired
+    /// ones are inert and accepted. Compilation itself never applies this limit:
+    /// it clamps the monotonic deadline so that restoring a stored revision
+    /// with a lagging clock still starts DNS.
+    pub fn validate_new_exceptions(
+        &self,
+        accepted: &[&PolicyConfigSet],
+    ) -> Result<(), PolicyError> {
+        self.validate_new_exceptions_at(accepted, SystemTime::now())
+    }
+    pub(crate) fn validate_new_exceptions_at(
+        &self,
+        accepted: &[&PolicyConfigSet],
+        now: SystemTime,
+    ) -> Result<(), PolicyError> {
+        let known: HashSet<_> = accepted
+            .iter()
+            .flat_map(|config| &config.policies)
+            .flat_map(|policy| {
+                policy.temporary_exceptions.iter().map(move |exception| {
+                    (
+                        policy.name.as_str(),
+                        exception.name.as_str(),
+                        exception.domain.as_str(),
+                        exception.expires_at,
+                    )
+                })
+            })
+            .collect();
+        for (policy_index, policy) in self.policies.iter().enumerate() {
+            for (index, exception) in policy.temporary_exceptions.iter().enumerate() {
+                let key = (
+                    policy.name.as_str(),
+                    exception.name.as_str(),
+                    exception.domain.as_str(),
+                    exception.expires_at,
+                );
+                // Unrepresentable expiries are reported by compilation.
+                let remaining = UNIX_EPOCH
+                    .checked_add(Duration::from_secs(exception.expires_at))
+                    .and_then(|expiry| expiry.duration_since(now).ok());
+                if remaining.is_some_and(|remaining| remaining > MAX_EXCEPTION_REMAINING)
+                    && !known.contains(&key)
+                {
+                    return Err(PolicyError::field(
+                        format!(
+                            "policies[{policy_index}].temporary_exceptions[{index}].expires_at"
+                        ),
+                        format!(
+                            "exception {} has more than seven days remaining",
+                            excerpt(&exception.name)
+                        ),
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 }
 impl CompiledPolicy {
@@ -246,14 +311,6 @@ mod tests {
             )
             .is_ok()
         );
-        assert!(
-            Entries::compile(
-                0,
-                &[input(1001 + MAX_EXCEPTION_REMAINING.as_secs())],
-                &clock
-            )
-            .is_err()
-        );
         assert!(Entries::compile(0, &[input(u64::MAX)], &clock).is_err());
         assert!(Entries::compile(0, &[input(0)], &clock).is_err());
         let mut other = input(1005);
@@ -266,6 +323,102 @@ mod tests {
         let mut expired = input(999);
         expired.domain = "bad..test".into();
         assert!(Entries::compile(0, &[expired], &clock).is_err());
+    }
+    #[test]
+    fn lagging_wall_clock_clamps_the_deadline_instead_of_failing_compilation() {
+        // A revision accepted with a correct clock, restored on a board whose
+        // clock is a year behind: compilation must succeed.
+        let clock = clock();
+        let year = 365 * 86400;
+        let entries = Entries::compile(0, &[input(1000 + year)], &clock)
+            .unwrap()
+            .unwrap();
+        let entry = entries.0.values().next().unwrap();
+        assert_eq!(entry.deadline, clock.monotonic + MAX_EXCEPTION_REMAINING);
+        assert_eq!(
+            entry.remaining_at(clock.monotonic, clock.wall),
+            Some(u32::try_from(MAX_EXCEPTION_REMAINING.as_secs()).unwrap())
+        );
+        // Once NTP corrects the clock the absolute expiry governs again.
+        let corrected = clock.wall + Duration::from_secs(year - 10);
+        assert_eq!(
+            entry.remaining_at(clock.monotonic + Duration::from_secs(1), corrected),
+            Some(10)
+        );
+        assert_eq!(
+            entry.remaining_at(
+                clock.monotonic + Duration::from_secs(2),
+                corrected + Duration::from_secs(10)
+            ),
+            None
+        );
+        // Whole-snapshot compilation with the real clock behaves the same way.
+        let mut config = PolicyConfigSet::default();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        config.policies[0].temporary_exceptions = vec![TemporaryException {
+            expires_at: now + 30 * 86400,
+            ..input(0)
+        }];
+        let snapshot = crate::PolicySnapshot::compile(config, 1).unwrap();
+        let found = snapshot.policies()[0]
+            .temporary_allow("xn--bcher-kva.test", Instant::now())
+            .unwrap();
+        assert!(
+            found.remaining_ttl(Instant::now()).unwrap()
+                <= u32::try_from(MAX_EXCEPTION_REMAINING.as_secs()).unwrap()
+        );
+    }
+    #[test]
+    fn intake_limits_only_new_exceptions_to_seven_days() {
+        let now = UNIX_EPOCH + Duration::from_secs(1000);
+        let week = MAX_EXCEPTION_REMAINING.as_secs();
+        let config = |expires_at| {
+            let mut config = PolicyConfigSet::default();
+            config.policies[0].temporary_exceptions = vec![input(expires_at)];
+            config
+        };
+        for expires_at in [1, 999, 1000, 1000 + week, u64::MAX] {
+            assert!(
+                config(expires_at)
+                    .validate_new_exceptions_at(&[], now)
+                    .is_ok(),
+                "{expires_at}"
+            );
+        }
+        let long = config(1001 + week);
+        assert_eq!(
+            long.validate_new_exceptions_at(&[], now)
+                .unwrap_err()
+                .to_string(),
+            "invalid configuration: policies[0].temporary_exceptions[0].expires_at: \
+             exception \"repair\" has more than seven days remaining"
+        );
+        // Already accepted (for example, active while the clock was correct).
+        assert!(long.validate_new_exceptions_at(&[&long], now).is_ok());
+        let unrelated = PolicyConfigSet::default();
+        assert!(
+            long.validate_new_exceptions_at(&[&unrelated, &long], now)
+                .is_ok()
+        );
+        // Any change to the accepted identity is a new exception.
+        for changed in [
+            config(1002 + week),
+            {
+                let mut renamed = long.clone();
+                renamed.policies[0].name = "other".into();
+                renamed
+            },
+            {
+                let mut renamed = long.clone();
+                renamed.policies[0].temporary_exceptions[0].name = "other".into();
+                renamed
+            },
+        ] {
+            assert!(changed.validate_new_exceptions_at(&[&long], now).is_err());
+        }
     }
     #[test]
     fn permanent_assertions_cannot_be_satisfied_by_an_exception_and_counts_are_bounded() {

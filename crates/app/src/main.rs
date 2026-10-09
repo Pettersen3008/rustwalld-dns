@@ -91,6 +91,8 @@ fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
     };
     if args.check_config {
         config.validate().map_err(rustwalld_dns::config::invalid)?;
+        // Operator intake: every exception in the file is treated as new.
+        config.policy.validate_new_exceptions(&[])?;
         rustwalld_dns_policy::PolicySnapshot::compile(config.policy, 1)?;
         println!("configuration and required assertions passed");
         return Ok(ExitCode::SUCCESS);

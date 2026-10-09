@@ -5,7 +5,7 @@ use crate::{
     store::{ClearShadowReport, CommitReport, Revision, RevisionMode, Store},
 };
 use rustwalld_dns_core::{Engine, PolicyController, PolicyVersion, PublicationTarget};
-use rustwalld_dns_policy::{CheckReport, PolicyConfigSet};
+use rustwalld_dns_policy::{CheckReport, PolicyConfigSet, PolicySnapshot};
 use serde_json::Value;
 use std::{
     net::SocketAddr,
@@ -137,10 +137,12 @@ impl ControlService {
         self.admit()?;
         let listen = self.listen;
         let compiler = self.compiler.clone();
+        let accepted = self.accepted();
         tokio::spawn(async move {
             let _guard = guard;
             tokio::task::spawn_blocking(move || {
                 validate_policy(&config, listen).map_err(invalid)?;
+                validate_intake(&config, &accepted).map_err(invalid)?;
                 compiler.check(config).map_err(invalid)
             })
             .await
@@ -166,15 +168,18 @@ impl ControlService {
             .map_err(|_| ControlError::Conflict("policy compilation already running".into()))?;
         self.admit()?;
         self.check_revision(expected)?;
-        let (config, refresh_source) = match candidate {
-            Candidate::Config(config) => (config, None),
-            Candidate::Refresh { config, source } => (config, Some(source)),
+        // Shadow promotion and refreshes reuse exceptions accepted earlier;
+        // only operator-supplied configuration is new intake.
+        let (config, refresh_source, intake) = match candidate {
+            Candidate::Config(config) => (config, None, Some(self.accepted())),
+            Candidate::Refresh { config, source } => (config, Some(source), None),
             Candidate::Shadow => (
                 self.engine
                     .shadow_snapshot()
                     .ok_or_else(|| invalid("no shadow revision"))?
                     .config()
                     .clone(),
+                None,
                 None,
             ),
         };
@@ -193,6 +198,9 @@ impl ControlService {
             let snapshot = tokio::task::spawn_blocking(move || {
                 validate_policy(&config, listen)
                     .map_err(rustwalld_dns_policy::PolicyError::Invalid)?;
+                if let Some(accepted) = &intake {
+                    validate_intake(&config, accepted)?;
+                }
                 let snapshot = compiler.compile(config, id)?;
                 if let Some(source) = refresh_source {
                     downloads::validate_candidate(&snapshot, source)
@@ -286,6 +294,21 @@ impl ControlService {
         let revision = self.store.revision(id).await.map_err(unavailable)?;
         revision.ok_or(ControlError::MissingRevision)
     }
+}
+type Accepted = (Arc<PolicySnapshot>, Option<Arc<PolicySnapshot>>);
+impl ControlService {
+    /// Live active/shadow revisions whose exceptions passed intake earlier.
+    fn accepted(&self) -> Accepted {
+        (self.engine.snapshot(), self.engine.shadow_snapshot())
+    }
+}
+fn validate_intake(
+    config: &PolicyConfigSet,
+    (active, shadow): &Accepted,
+) -> Result<(), rustwalld_dns_policy::PolicyError> {
+    let mut accepted = vec![active.config()];
+    accepted.extend(shadow.as_deref().map(PolicySnapshot::config));
+    config.validate_new_exceptions(&accepted)
 }
 fn configuration_diff(old: &PolicyConfigSet, new: &PolicyConfigSet) -> String {
     let old = serde_json::to_value(old).unwrap_or(Value::Null);

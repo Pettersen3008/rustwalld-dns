@@ -239,3 +239,73 @@ impl Drop for Runtime {
         self.control.engine.resolver().shutdown();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+    use rustwalld_dns_policy::TemporaryException;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn config(directory: &std::path::Path) -> RuntimeConfig {
+        let mut config = RuntimeConfig {
+            database: directory.join("dns.sqlite"),
+            dns_listen: "127.0.0.1:0".parse().unwrap(),
+            ..Default::default()
+        };
+        config.policy.upstreams[0].addresses = vec!["127.0.0.1:9".parse().unwrap()];
+        config
+    }
+    async fn stop(runtime: Runtime) {
+        let stop = CancellationToken::new();
+        stop.cancel();
+        runtime.run(stop).await.unwrap();
+    }
+    fn store_active(config: &RuntimeConfig, id: i64, policy: &PolicyConfigSet) {
+        let database = rusqlite::Connection::open(&config.database).unwrap();
+        database
+            .execute(
+                "INSERT INTO revisions(id,actor,state,diff,config) VALUES(?1,'api','promoted','policies',?2)",
+                rusqlite::params![id, serde_json::to_string(policy).unwrap()],
+            )
+            .unwrap();
+        database
+            .execute("UPDATE runtime SET value=?1 WHERE key='active'", [id])
+            .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stored_exception_restored_on_a_lagging_clock_still_starts_dns() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = config(directory.path());
+        stop(
+            Runtime::start(config.clone(), Handle::current())
+                .await
+                .unwrap(),
+        )
+        .await;
+        // Accepted with a correct clock; this boot's clock lags by 30 days.
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let mut stored = config.policy.clone();
+        stored.policies[0].temporary_exceptions = vec![TemporaryException {
+            name: "repair".into(),
+            domain: "ads.test".into(),
+            expires_at: now + 30 * 86400,
+        }];
+        store_active(&config, 2, &stored);
+        let runtime = Runtime::start(config, Handle::current()).await.unwrap();
+        let active = runtime.control().engine.snapshot();
+        assert_eq!(active.generation(), 2);
+        let allowed = active.policies()[0]
+            .temporary_allow("ads.test", std::time::Instant::now())
+            .unwrap();
+        assert!(
+            allowed.remaining_ttl(std::time::Instant::now()).unwrap()
+                <= u32::try_from(rustwalld_dns_policy::MAX_EXCEPTION_REMAINING.as_secs()).unwrap()
+        );
+        stop(runtime).await;
+    }
+}

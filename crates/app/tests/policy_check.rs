@@ -249,3 +249,34 @@ fn empty_assertions_are_explicit_and_cli_rejects_ambiguous_arguments() {
         assert!(result.stdout.is_empty());
     }
 }
+
+#[test]
+fn check_config_treats_file_exceptions_as_new_intake() {
+    let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let path = dir.path().join("config.toml");
+    let mut config = Config::default();
+    config.policy.upstreams[0].addresses = vec!["127.0.0.1:15354".parse().unwrap()];
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    for (days, accepted) in [(6, true), (8, false)] {
+        config.policy.policies[0].temporary_exceptions =
+            vec![rustwalld_dns_policy::TemporaryException {
+                name: "repair".into(),
+                domain: "ads.test".into(),
+                expires_at: now + days * 86400,
+            }];
+        std::fs::write(&path, toml::to_string(&config).unwrap()).unwrap();
+        let result = Command::new(env!("CARGO_BIN_EXE_rustwalld-dns"))
+            .args(["--check-config", "--config"])
+            .arg(&path)
+            .env_remove("RUSTWALLD_API_TOKEN")
+            .output()
+            .unwrap();
+        assert_eq!(result.status.success(), accepted, "{days} days");
+        if !accepted {
+            assert!(String::from_utf8_lossy(&result.stderr).contains("more than seven days"));
+        }
+    }
+}

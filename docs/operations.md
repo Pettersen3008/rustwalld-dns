@@ -251,7 +251,9 @@ alone. Existing UDP and TLS revisions remain readable by this release.
 Temporary allows keep their original absolute `expires_at` through durable
 revisions, shadow promotion, restart and rollback. They expire in DNS workers
 even when SQLite or management is unavailable. Restart/recompilation requires a
-trustworthy system clock. DNS responses cap record TTLs to remaining allowance;
+trustworthy system clock for exact timing; if the clock lags at boot, DNS still
+starts and each allowance lasts at most seven days of monotonic time or until
+its corrected absolute expiry. DNS responses cap record TTLs to remaining allowance;
 already-used answers and application connections cannot be withdrawn. Expired
 entries remain inspectable until removed through the normal policy workflow.
 See [temporary exceptions](temporary-exceptions.md).

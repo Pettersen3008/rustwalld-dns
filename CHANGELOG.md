@@ -2,6 +2,10 @@
 
 ## 0.1.0 — unreleased
 
+- Startup no longer fails when a stored temporary exception has more than seven
+  days remaining on a lagging wall clock: compilation clamps the monotonic
+  deadline. The seven-day limit applies at intake to exceptions that are new
+  relative to the live revisions (`PolicyConfigSet::validate_new_exceptions`).
 - Policy validation errors are structured (`PolicyError::{Field, Count,
   Generation}`) and name the failing configuration path with a bounded, escaped
   value. Names reject whitespace-only text and bidirectional formatting controls.

@@ -252,7 +252,8 @@ draft. Removing it from the draft requires promotion to revoke the active allow.
 
 The policy JSON field is `temporary_exceptions`: an array of
 `{ "name": "repair", "domain": "service.example", "expires_at": UnixSeconds }`.
-Use a numeric Unix-second expiry, at most seven days ahead. Matching uses IDNA
+Use a numeric Unix-second expiry, at most seven days ahead when the exception is
+first submitted (restored revisions are clamped, never rejected). Matching uses IDNA
 normalization and is exact; subdomains need separate entries. Limits are 1,024
 entries per policy and 4,096 per generation. A policy applies to every admitted
 client mapped to it; choose a device-specific policy for a device-only exception.

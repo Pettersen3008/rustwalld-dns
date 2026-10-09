@@ -8,8 +8,15 @@ restart/rollback, diagnostics and console editing all honor the same deadline.
 An exception has a name, domain and absolute Unix-second `expires_at`. Domains
 use the existing IDNA normalization. Bounds: 1,024 exceptions per policy, 4,096
 per generation, unique names and normalized domains within a policy, and at most
-seven days remaining at compilation. Expired entries remain valid historical
-configuration but are never reactivated by compilation with a correct clock.
+seven days remaining when first accepted. Intake (`PUT /config`, `POST /shadow`,
+`POST /policy/test`, rollback and `--check-config`) applies the seven-day limit
+to exceptions that are not already present, identically, in the live active or
+shadow revision (`PolicyConfigSet::validate_new_exceptions`). Compilation does
+not: restoring a stored revision clamps the monotonic deadline to seven days, so
+a wall clock that is behind at boot (an RTC-less board before NTP) cannot keep
+DNS from starting. The absolute expiry still ends the allowance once the clock
+is corrected. Expired entries remain valid historical configuration but are
+never reactivated by compilation with a correct clock.
 
 policy compiles an optional exact-name map into each immutable policy. Entries
 retain their configuration index for provenance, absolute wall-clock expiry and
@@ -34,7 +41,8 @@ leave the exception active. Control-plane cleanup may be added independently.
 
 Live wall-clock rollback cannot extend the monotonic deadline; a forward jump
 expires an allowance early. Restarts/recompilation reconstruct remaining time
-from absolute expiry and require a trustworthy system clock. No DNS appliance
+from absolute expiry and require a trustworthy system clock for exact timing; a
+lagging clock is bounded by the seven-day monotonic clamp. No DNS appliance
 can withdraw answers already used by applications or terminate their connections.
 Sub-second remaining allowances emit TTL zero; clients must honor DNS TTLs.
 

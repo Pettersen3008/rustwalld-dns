@@ -166,3 +166,44 @@ async fn temporary_exception_api_shadow_history_sqlite_failure_and_expired_rollb
     mock.abort();
     harness.shutdown().await;
 }
+
+#[tokio::test]
+async fn api_intake_limits_only_new_exceptions_to_seven_days() {
+    let harness = Harness::start().await;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut config = harness.state.control.engine.active().config().clone();
+    config.policies[0]
+        .temporary_exceptions
+        .push(rustwalld_dns_policy::TemporaryException {
+            name: "too-long".into(),
+            domain: "ads.test".into(),
+            expires_at: now + 8 * 86400,
+        });
+    for (path, put) in [
+        ("/api/v1/policy/test", false),
+        ("/api/v1/shadow", false),
+        ("/api/v1/config", true),
+    ] {
+        let response = harness.send(path, &config, put).await;
+        assert_eq!(response.status(), 422, "{path}");
+        let body: Value = response.json().await.unwrap();
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("temporary_exceptions[0].expires_at"),
+            "{body}"
+        );
+    }
+    assert_eq!(harness.state.control.engine.active().generation(), 1);
+    assert!(harness.state.control.engine.shadow().is_none());
+    config.policies[0].temporary_exceptions[0].expires_at = now + 6 * 86400;
+    assert_eq!(
+        harness.send("/api/v1/config", &config, true).await.status(),
+        200
+    );
+    harness.shutdown().await;
+}

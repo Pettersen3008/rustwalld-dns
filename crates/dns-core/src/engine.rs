@@ -23,6 +23,7 @@ use std::{
 
 /// Transport a query arrived on; it selects the reply size limit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum Transport {
     /// Replies honour the client's EDNS payload size, clamped to 512..=1232
     /// bytes, and set TC when truncated.
@@ -288,39 +289,7 @@ impl Engine {
         } else {
             self.decide(policy, &domain, snapshot.generation())
         };
-        let step = if let Some(records) = rewrite {
-            self.telemetry
-                .metrics
-                .rewrites
-                .fetch_add(1, Ordering::Relaxed);
-            let mut response = reply(&request, ResponseCode::NoError);
-            response.answers = records;
-            Step::Local(response, QuerySource::Rewrite)
-        } else if decision.action == Action::Block {
-            self.telemetry
-                .metrics
-                .blocked
-                .fetch_add(1, Ordering::Relaxed);
-            Step::Local(
-                reply(&request, ResponseCode::NXDomain),
-                QuerySource::Blocked,
-            )
-        } else if let Some(upstream) = snapshot.upstreams().get(policy.upstream()) {
-            match self.resolver.lookup(&request, upstream) {
-                Ok(Lookup::Hit(response)) => Step::Local(response, QuerySource::Cache),
-                Ok(Lookup::Miss(key)) => Step::Miss(key, upstream.clone()),
-                Err(_) => Step::Local(
-                    reply(&request, ResponseCode::ServFail),
-                    QuerySource::Failure,
-                ),
-            }
-        } else {
-            // Compilation validates profile indexes; never panic on the query path.
-            Step::Local(
-                reply(&request, ResponseCode::ServFail),
-                QuerySource::Failure,
-            )
-        };
+        let step = self.step(&request, &snapshot, policy, rewrite, decision);
         match step {
             Step::Local(response, source) => {
                 let excepted = exception.is_some();
@@ -362,6 +331,39 @@ impl Engine {
         }
     }
 
+    /// Choose how an admitted query is answered: rewrite, block, cache hit, or
+    /// a miss to forward.
+    fn step(
+        &self,
+        request: &Message,
+        snapshot: &PolicySnapshot,
+        policy: &CompiledPolicy,
+        rewrite: Option<Vec<hickory_proto::rr::Record>>,
+        decision: Decision,
+    ) -> Step {
+        let metrics = &self.telemetry.metrics;
+        if let Some(records) = rewrite {
+            metrics.rewrites.fetch_add(1, Ordering::Relaxed);
+            let mut response = reply(request, ResponseCode::NoError);
+            response.answers = records;
+            return Step::Local(response, QuerySource::Rewrite);
+        }
+        if decision.action == Action::Block {
+            metrics.blocked.fetch_add(1, Ordering::Relaxed);
+            return Step::Local(reply(request, ResponseCode::NXDomain), QuerySource::Blocked);
+        }
+        // Compilation validates profile indexes; never panic on the query path.
+        let servfail = || Step::Local(reply(request, ResponseCode::ServFail), QuerySource::Failure);
+        let Some(upstream) = snapshot.upstreams().get(policy.upstream()) else {
+            return servfail();
+        };
+        match self.resolver.lookup(request, upstream) {
+            Ok(Lookup::Hit(response)) => Step::Local(response, QuerySource::Cache),
+            Ok(Lookup::Miss(key)) => Step::Miss(key, upstream.clone()),
+            Err(_) => servfail(),
+        }
+    }
+
     /// Resolve a prepared cache miss upstream (coalescing identical misses) and
     /// encode the reply under the generation that admitted the query.
     pub async fn forward(&self, pending: PendingQuery) -> Option<Vec<u8>> {
@@ -379,8 +381,9 @@ impl Engine {
                 result.response,
                 match result.source {
                     ResolutionSource::Cache => QuerySource::Cache,
-                    ResolutionSource::Upstream => QuerySource::Upstream,
                     ResolutionSource::Coalesced => QuerySource::Coalesced,
+                    // Any other resolver source still came from an upstream.
+                    _ => QuerySource::Upstream,
                 },
             ),
             Err(_) => (

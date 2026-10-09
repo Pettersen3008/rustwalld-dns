@@ -8,7 +8,7 @@ use std::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream, UdpSocket},
-    sync::Semaphore,
+    sync::{OwnedSemaphorePermit, Semaphore},
     task::JoinSet,
     time::{Instant, sleep_until, timeout},
 };
@@ -107,11 +107,7 @@ impl Server {
                     let (len, client) = match packet {
                         Ok(packet) => packet,
                         Err(error) => {
-                            metrics.listener_errors.fetch_add(1, Ordering::Relaxed);
-                            if let Some(pause) = listener_backoff(&error) {
-                                tracing::warn!(%error, "DNS UDP receive failed");
-                                udp_pause = Some(Instant::now() + pause);
-                            }
+                            udp_pause = listener_failed(&metrics, &error, "UDP receive");
                             continue;
                         }
                     };
@@ -122,40 +118,22 @@ impl Server {
                         metrics.udp_overloads.fetch_add(1, Ordering::Relaxed);
                         continue;
                     };
-                    let bytes = buffer[..len].to_vec();
-                    let engine = self.engine.clone();
-                    let socket = self.udp.clone();
-                    let waits = wait_limit.clone();
-                    let metrics = metrics.clone();
-                    tasks.spawn(async move {
-                        let reply = match engine.prepare(&bytes, client.ip(), Transport::Udp) {
-                            Prepared::Drop => None,
-                            Prepared::Reply(reply) => Some(reply),
-                            Prepared::Forward(pending) => {
-                                // Waiting has its own bound; release the local slot.
-                                drop(permit);
-                                if let Ok(_wait) = waits.try_acquire_owned() {
-                                    engine.forward(pending).await
-                                } else {
-                                    metrics.forward_overloads.fetch_add(1, Ordering::Relaxed);
-                                    engine.reject(pending)
-                                }
-                            }
-                        };
-                        if let Some(reply) = reply {
-                            let _ = socket.send_to(&reply, client).await;
-                        }
-                    });
+                    tasks.spawn(serve_udp(
+                        UdpQuery {
+                            bytes: buffer[..len].to_vec(),
+                            client,
+                            permit,
+                        },
+                        self.engine.clone(),
+                        self.udp.clone(),
+                        wait_limit.clone(),
+                    ));
                 }
                 connection = self.tcp.accept(), if tcp_pause.is_none() => {
                     let (stream, client) = match connection {
                         Ok(connection) => connection,
                         Err(error) => {
-                            metrics.listener_errors.fetch_add(1, Ordering::Relaxed);
-                            if let Some(pause) = listener_backoff(&error) {
-                                tracing::warn!(%error, "DNS TCP accept failed");
-                                tcp_pause = Some(Instant::now() + pause);
-                            }
+                            tcp_pause = listener_failed(&metrics, &error, "TCP accept");
                             continue;
                         }
                     };
@@ -186,6 +164,58 @@ impl Server {
         self.engine.resolver.shutdown();
         Ok(())
     }
+}
+
+/// One received datagram holding a local-work slot.
+struct UdpQuery {
+    bytes: Vec<u8>,
+    client: SocketAddr,
+    permit: OwnedSemaphorePermit,
+}
+/// Answer a datagram. The local slot covers only synchronous work; a cache
+/// miss waits under the separate upstream-wait bound or is shed with SERVFAIL.
+async fn serve_udp(
+    query: UdpQuery,
+    engine: Arc<Engine>,
+    socket: Arc<UdpSocket>,
+    waits: Arc<Semaphore>,
+) {
+    let UdpQuery {
+        bytes,
+        client,
+        permit,
+    } = query;
+    let reply = match engine.prepare(&bytes, client.ip(), Transport::Udp) {
+        Prepared::Drop => None,
+        Prepared::Reply(reply) => Some(reply),
+        Prepared::Forward(pending) => {
+            drop(permit);
+            if let Ok(_wait) = waits.try_acquire_owned() {
+                engine.forward(pending).await
+            } else {
+                engine
+                    .telemetry()
+                    .metrics
+                    .forward_overloads
+                    .fetch_add(1, Ordering::Relaxed);
+                engine.reject(pending)
+            }
+        }
+    };
+    if let Some(reply) = reply {
+        let _ = socket.send_to(&reply, client).await;
+    }
+}
+/// Count a listener failure and decide whether to pause that listener.
+fn listener_failed(
+    metrics: &crate::telemetry::Metrics,
+    error: &io::Error,
+    operation: &str,
+) -> Option<Instant> {
+    metrics.listener_errors.fetch_add(1, Ordering::Relaxed);
+    let pause = listener_backoff(error)?;
+    tracing::warn!(%error, operation, "DNS listener failed");
+    Some(Instant::now() + pause)
 }
 
 /// Largest accepted query message on either transport.

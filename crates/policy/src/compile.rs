@@ -233,59 +233,77 @@ impl PolicySnapshot {
                 format!("unknown policy {}", excerpt(&config.default_policy)),
             )
         })?;
-        let mut ipv4 = BTreeMap::<u8, HashMap<u32, ClientBinding>>::new();
-        let mut ipv6 = BTreeMap::<u8, HashMap<u128, ClientBinding>>::new();
-        let mut seen = HashSet::new();
-        let mut metadata = HashMap::new();
-        for (index, binding) in config.bindings.iter().enumerate() {
-            let field = |name: &str| format!("bindings[{index}].{name}");
-            validate_name(&binding.name, || field("name"))?;
-            let network = canonical_network(binding.network, || field("network"))?.trunc();
-            if !seen.insert(network) {
-                return Err(PolicyError::field(
-                    field("network"),
-                    format!("duplicate client network {network}"),
-                ));
-            }
-            let policy = *names.get(&binding.policy).ok_or_else(|| {
-                PolicyError::field(
-                    field("policy"),
-                    format!("unknown policy {}", excerpt(&binding.policy)),
-                )
-            })?;
-            if binding.metadata.is_some() {
-                metadata.insert(network, index);
-            }
-            let entry = ClientBinding {
-                policy,
-                name: binding.name.clone(),
-                network,
-            };
-            match network {
-                IpNet::V4(net) => {
-                    ipv4.entry(net.prefix_len())
-                        .or_default()
-                        .insert(u32::from(net.network()), entry);
-                }
-                IpNet::V6(net) => {
-                    ipv6.entry(net.prefix_len())
-                        .or_default()
-                        .insert(u128::from(net.network()), entry);
-                }
-            }
-        }
+        let bindings = compile_bindings(&config, &names)?;
         let snapshot = Self {
             generation,
             config,
             policies,
             upstreams,
             default,
-            ipv4: ipv4.into_iter().rev().collect(),
-            ipv6: ipv6.into_iter().rev().collect(),
-            metadata,
+            ipv4: bindings.ipv4,
+            ipv6: bindings.ipv6,
+            metadata: bindings.metadata,
         };
         Ok(snapshot)
     }
+}
+/// Client selection tables: one exact-match map per prefix length, longest
+/// prefix first, plus the sparse metadata index.
+struct Bindings {
+    ipv4: Vec<(u8, HashMap<u32, ClientBinding>)>,
+    ipv6: Vec<(u8, HashMap<u128, ClientBinding>)>,
+    metadata: HashMap<IpNet, usize>,
+}
+fn compile_bindings(
+    config: &PolicyConfigSet,
+    names: &HashMap<String, usize>,
+) -> Result<Bindings, PolicyError> {
+    let mut ipv4 = BTreeMap::<u8, HashMap<u32, ClientBinding>>::new();
+    let mut ipv6 = BTreeMap::<u8, HashMap<u128, ClientBinding>>::new();
+    let mut seen = HashSet::new();
+    let mut metadata = HashMap::new();
+    for (index, binding) in config.bindings.iter().enumerate() {
+        let field = |name: &str| format!("bindings[{index}].{name}");
+        validate_name(&binding.name, || field("name"))?;
+        let network = canonical_network(binding.network, || field("network"))?.trunc();
+        if !seen.insert(network) {
+            return Err(PolicyError::field(
+                field("network"),
+                format!("duplicate client network {network}"),
+            ));
+        }
+        let policy = *names.get(&binding.policy).ok_or_else(|| {
+            PolicyError::field(
+                field("policy"),
+                format!("unknown policy {}", excerpt(&binding.policy)),
+            )
+        })?;
+        if binding.metadata.is_some() {
+            metadata.insert(network, index);
+        }
+        let entry = ClientBinding {
+            policy,
+            name: binding.name.clone(),
+            network,
+        };
+        match network {
+            IpNet::V4(net) => {
+                ipv4.entry(net.prefix_len())
+                    .or_default()
+                    .insert(u32::from(net.network()), entry);
+            }
+            IpNet::V6(net) => {
+                ipv6.entry(net.prefix_len())
+                    .or_default()
+                    .insert(u128::from(net.network()), entry);
+            }
+        }
+    }
+    Ok(Bindings {
+        ipv4: ipv4.into_iter().rev().collect(),
+        ipv6: ipv6.into_iter().rev().collect(),
+        metadata,
+    })
 }
 /// Query-path client addresses are canonicalized (`::ffff:a.b.c.d` becomes
 /// `a.b.c.d`), so an IPv4-mapped IPv6 network can only ever match as the IPv4

@@ -7,22 +7,41 @@ use tokio::{
     time::timeout,
 };
 
+/// Why a forwarding attempt or configuration failed.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ResolveError {
+    /// Every upstream failed, was backing off, or admission/shutdown refused work.
     #[error("no upstream completed a validated DNS exchange")]
     Unavailable,
+    /// A reply failed validation (ID, opcode, question, size or truncation).
     #[error("invalid upstream response")]
     InvalidResponse,
+    /// The request could not be wire-encoded, or had no question.
     #[error("DNS wire encoding failed")]
     Encoding,
+    /// Socket or TLS failure.
     #[error(transparent)]
     Io(#[from] io::Error),
+    /// Invalid forwarder or transport settings.
     #[error("invalid upstream transport configuration: {0}")]
     Configuration(String),
+    /// HTTP/2 protocol failure on a DNS-over-HTTPS connection.
     #[error(transparent)]
-    Http2(#[from] h2::Error),
+    Http2(#[from] Http2Error),
+    /// A classified failure of an otherwise completed exchange.
     #[error("upstream failure: {0:?}")]
     Failure(FailureKind),
+}
+/// HTTP/2 failure. Opaque so that `h2` is not part of this crate's public API;
+/// the underlying error remains available through [`std::error::Error::source`].
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub struct Http2Error(pub(crate) h2::Error);
+impl From<h2::Error> for ResolveError {
+    fn from(error: h2::Error) -> Self {
+        Self::Http2(Http2Error(error))
+    }
 }
 
 impl ResolveError {
@@ -31,7 +50,7 @@ impl ResolveError {
             Self::Failure(kind) => *kind,
             Self::InvalidResponse => FailureKind::DnsResponse,
             Self::Io(error) => io_failure(error),
-            Self::Http2(error) => error
+            Self::Http2(Http2Error(error)) => error
                 .get_io()
                 .map(io_failure)
                 .unwrap_or(FailureKind::HttpProtocol),
@@ -134,7 +153,7 @@ pub struct Forwarder {
     endpoints: Vec<Endpoint>,
     timeout: Duration,
     id: UpstreamId,
-    pub health: Arc<Vec<UpstreamHealth>>,
+    health: Arc<Vec<UpstreamHealth>>,
 }
 impl Forwarder {
     pub fn new(upstreams: Vec<SocketAddr>, timeout: Duration) -> Result<Self, ResolveError> {
@@ -182,6 +201,11 @@ impl Forwarder {
     }
     pub fn upstreams(&self) -> &[SocketAddr] {
         &self.addresses
+    }
+    /// Per-address counters and admission state, in address order.
+    #[inline]
+    pub fn health(&self) -> &[UpstreamHealth] {
+        &self.health
     }
     /// Content identity used to partition caches and coalesced work.
     #[inline]

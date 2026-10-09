@@ -49,7 +49,7 @@ async fn trusted_reuse_reconnect_and_invalid_dns() {
         let f = forward(&bad);
         assert!(f.resolve(&query()).await.is_err());
         failure(
-            &f.health[0],
+            &f.health()[0],
             if mode == 9 {
                 FailureKind::Connection
             } else {
@@ -70,7 +70,7 @@ async fn certificate_identity_trust_and_validity_are_required() {
     let f =
         Forwarder::with_transport(vec![mock.address], Duration::from_millis(200), &wrong).unwrap();
     assert!(f.resolve(&query()).await.is_err());
-    failure(&f.health[0], FailureKind::TlsAuthentication, 1);
+    failure(&f.health()[0], FailureKind::TlsAuthentication, 1);
     let mut untrusted = mock.transport.clone();
     if let UpstreamTransport::Tls { ca_pem, .. } = &mut untrusted {
         *ca_pem = None;
@@ -78,11 +78,11 @@ async fn certificate_identity_trust_and_validity_are_required() {
     let f = Forwarder::with_transport(vec![mock.address], Duration::from_millis(200), &untrusted)
         .unwrap();
     assert!(f.resolve(&query()).await.is_err());
-    failure(&f.health[0], FailureKind::TlsAuthentication, 1);
+    failure(&f.health()[0], FailureKind::TlsAuthentication, 1);
     let expired = Mock::with_expiry(0, true).await;
     let f = forward(&expired);
     assert!(f.resolve(&query()).await.is_err());
-    failure(&f.health[0], FailureKind::TlsAuthentication, 1);
+    failure(&f.health()[0], FailureKind::TlsAuthentication, 1);
     assert_eq!(mock.queries.load(Ordering::SeqCst), 0);
     assert_eq!(expired.queries.load(Ordering::SeqCst), 0);
 }
@@ -120,13 +120,13 @@ async fn timeout_cancel_and_pool_admission_do_not_poison_reuse() {
     }
     mock.mode.store(0, Ordering::SeqCst);
     assert!(f.resolve(&query()).await.is_ok());
-    assert_eq!(f.health[0].successes.load(Ordering::SeqCst), 1);
-    failure(&f.health[0], FailureKind::Cancelled, 1);
-    failure(&f.health[0], FailureKind::Deadline, 8);
+    assert_eq!(f.health()[0].successes.load(Ordering::SeqCst), 1);
+    failure(&f.health()[0], FailureKind::Cancelled, 1);
+    failure(&f.health()[0], FailureKind::Deadline, 8);
     let stall = Mock::start(6).await;
     let f = forward(&stall);
     assert!(f.resolve(&query()).await.is_err());
-    failure(&f.health[0], FailureKind::Deadline, 1);
+    failure(&f.health()[0], FailureKind::Deadline, 1);
     assert_eq!(stall.queries.load(Ordering::SeqCst), 0);
 }
 #[tokio::test]
@@ -159,9 +159,9 @@ async fn fallback_is_sequential_and_never_plaintext() {
     assert!(task.await.unwrap().is_ok());
     assert_eq!(bad.accepted.load(Ordering::SeqCst), 1);
     assert_eq!(good.accepted.load(Ordering::SeqCst), 1);
-    assert_eq!(f.health[0].successes.load(Ordering::SeqCst), 0);
-    failure(&f.health[0], FailureKind::Deadline, 1);
-    reconciled(&f.health[1]);
+    assert_eq!(f.health()[0].successes.load(Ordering::SeqCst), 0);
+    failure(&f.health()[0], FailureKind::Deadline, 1);
+    reconciled(&f.health()[1]);
 }
 #[test]
 fn invalid_tls_configuration_rejected_before_connect() {
@@ -205,8 +205,8 @@ async fn concurrent_successful_queries_stay_within_connection_bound() {
     }
     assert_eq!(mock.queries.load(Ordering::SeqCst), 32);
     assert_eq!(mock.accepted.load(Ordering::SeqCst), 2);
-    reconciled(&f.health[0]);
-    assert_eq!(f.health[0].successes.load(Ordering::SeqCst), 32);
+    reconciled(&f.health()[0]);
+    assert_eq!(f.health()[0].successes.load(Ordering::SeqCst), 32);
 }
 
 #[tokio::test]
@@ -221,8 +221,8 @@ async fn failed_tls_authentication_cannot_send_plaintext_dns() {
     )
     .unwrap();
     assert!(f.resolve(&query()).await.is_ok());
-    failure(&f.health[0], FailureKind::TlsAuthentication, 1);
-    reconciled(&f.health[1]);
+    failure(&f.health()[0], FailureKind::TlsAuthentication, 1);
+    reconciled(&f.health()[1]);
     assert_eq!(bad.queries.load(Ordering::SeqCst), 0);
     assert_eq!(good.queries.load(Ordering::SeqCst), 1);
     let mut bytes = [0; 4096];
@@ -285,12 +285,12 @@ async fn failed_endpoint_cools_down_single_probe_cancels_and_recovers() {
     for _ in 0..3 {
         assert!(f.resolve(&query()).await.is_ok());
     }
-    assert_eq!(f.health[0].admission_status().state, "cooldown");
+    assert_eq!(f.health()[0].admission_status().state, "cooldown");
     for _ in 0..20 {
         assert!(f.resolve(&query()).await.is_ok());
     }
     assert_eq!(bad.queries.load(Ordering::SeqCst), 3);
-    assert_eq!(f.health[0].backoff_skips.load(Ordering::SeqCst), 20);
+    assert_eq!(f.health()[0].backoff_skips.load(Ordering::SeqCst), 20);
     // A compiled generation owns fresh endpoint admission, independent of old work.
     let fresh = Forwarder::with_transport(
         vec![bad.address, good.address],
@@ -298,7 +298,7 @@ async fn failed_endpoint_cools_down_single_probe_cancels_and_recovers() {
         &transport,
     )
     .unwrap();
-    assert_eq!(fresh.health[0].admission_status().state, "ready");
+    assert_eq!(fresh.health()[0].admission_status().state, "ready");
     assert!(fresh.resolve(&query()).await.is_ok());
     assert_eq!(bad.queries.load(Ordering::SeqCst), 4);
     bad.mode.store(2, Ordering::SeqCst);
@@ -308,7 +308,7 @@ async fn failed_endpoint_cools_down_single_probe_cancels_and_recovers() {
         tokio::spawn(async move { f.resolve(&query()).await })
     };
     bad.wait_queries(5).await;
-    assert_eq!(f.health[0].admission_status().state, "probing");
+    assert_eq!(f.health()[0].admission_status().state, "probing");
     let mut others = vec![];
     for _ in 0..20 {
         let f = f.clone();
@@ -318,20 +318,20 @@ async fn failed_endpoint_cools_down_single_probe_cancels_and_recovers() {
         assert!(other.await.unwrap().is_ok());
     }
     assert_eq!(bad.queries.load(Ordering::SeqCst), 5);
-    assert_eq!(f.health[0].recovery_probes.load(Ordering::SeqCst), 1);
+    assert_eq!(f.health()[0].recovery_probes.load(Ordering::SeqCst), 1);
     probe.abort();
     let _ = probe.await;
-    failure(&f.health[0], FailureKind::Cancelled, 1);
+    failure(&f.health()[0], FailureKind::Cancelled, 1);
     bad.mode.store(0, Ordering::SeqCst);
     assert!(f.resolve(&query()).await.is_ok());
-    assert_eq!(f.health[0].admission_status().state, "ready");
-    assert_eq!(f.health[0].recovery_probes.load(Ordering::SeqCst), 2);
-    let fallback_attempts = f.health[1].attempts.load(Ordering::SeqCst);
+    assert_eq!(f.health()[0].admission_status().state, "ready");
+    assert_eq!(f.health()[0].recovery_probes.load(Ordering::SeqCst), 2);
+    let fallback_attempts = f.health()[1].attempts.load(Ordering::SeqCst);
     assert!(f.resolve(&query()).await.is_ok());
     assert_eq!(
-        f.health[1].attempts.load(Ordering::SeqCst),
+        f.health()[1].attempts.load(Ordering::SeqCst),
         fallback_attempts
     );
-    reconciled(&f.health[0]);
-    reconciled(&f.health[1]);
+    reconciled(&f.health()[0]);
+    reconciled(&f.health()[1]);
 }

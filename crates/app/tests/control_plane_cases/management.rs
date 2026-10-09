@@ -171,13 +171,17 @@ async fn upstream_diagnostics_survive_failures_and_reset_with_generation() {
         ResponseCode::NXDomain
     );
     assert_eq!(
-        old.upstreams()[0].health[0].attempts.load(Ordering::SeqCst),
+        old.upstreams()[0].health()[0]
+            .attempts
+            .load(Ordering::SeqCst),
         0
     );
     assert_eq!(harness.dns("cached.test.").await.answers.len(), 1);
     assert_eq!(harness.dns("cached.test.").await.answers.len(), 1);
     assert_eq!(
-        old.upstreams()[0].health[0].attempts.load(Ordering::SeqCst),
+        old.upstreams()[0].health()[0]
+            .attempts
+            .load(Ordering::SeqCst),
         1
     );
     for (value, domain) in [
@@ -233,7 +237,9 @@ async fn upstream_diagnostics_survive_failures_and_reset_with_generation() {
         .await
         .unwrap();
     assert_eq!(
-        old.upstreams()[0].health[0].inflight.load(Ordering::SeqCst),
+        old.upstreams()[0].health()[0]
+            .inflight
+            .load(Ordering::SeqCst),
         1
     );
     assert!(
@@ -253,13 +259,15 @@ async fn upstream_diagnostics_survive_failures_and_reset_with_generation() {
         1
     );
     assert_eq!(
-        old.upstreams()[0].health[0]
+        old.upstreams()[0].health()[0]
             .successes
             .load(Ordering::SeqCst),
         3
     );
     assert_eq!(
-        old.upstreams()[0].health[0].inflight.load(Ordering::SeqCst),
+        old.upstreams()[0].health()[0]
+            .inflight
+            .load(Ordering::SeqCst),
         0
     );
     let fresh: Value = harness.get("/api/v1/upstreams").await.json().await.unwrap();

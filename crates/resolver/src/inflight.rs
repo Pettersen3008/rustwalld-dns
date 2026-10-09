@@ -33,7 +33,9 @@ pub struct Resolver {
     slots: Arc<Semaphore>,
     cancel: CancellationToken,
 }
+/// Where a resolution's answer came from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum ResolutionSource {
     Cache,
     Upstream,

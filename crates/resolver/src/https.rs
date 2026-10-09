@@ -18,7 +18,9 @@ use tokio::{
     task::JoinHandle,
 };
 use tokio_rustls::{TlsConnector, client::TlsStream, rustls::pki_types::ServerName};
-const DNS_LIMIT: usize = 65535;
+/// Largest DNS message, also the HTTP/2 flow-control window per stream.
+const DNS_WINDOW: u32 = 65_535;
+const DNS_LIMIT: usize = DNS_WINDOW as usize;
 
 pub(super) fn compile(
     addresses: &[SocketAddr],
@@ -121,8 +123,8 @@ impl HttpsPool {
             return Err(ResolveError::Failure(FailureKind::TlsProtocol));
         }
         let (sender, connection) = h2::client::Builder::new()
-            .initial_window_size(DNS_LIMIT as u32)
-            .initial_connection_window_size(DNS_LIMIT as u32)
+            .initial_window_size(DNS_WINDOW)
+            .initial_connection_window_size(DNS_WINDOW)
             .max_frame_size(16384)
             .max_header_list_size(16384)
             .header_table_size(4096)
@@ -177,7 +179,7 @@ impl HttpsPool {
         }
         let result = post(&mut connection, &self.uri, &query, bytes.clone()).await;
         let response = match result {
-            Err(ResolveError::Http2(ref error))
+            Err(ResolveError::Http2(crate::Http2Error(ref error)))
                 if was_reused
                     && (error.is_io()
                         || (error.is_go_away()

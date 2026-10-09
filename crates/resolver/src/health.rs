@@ -7,9 +7,11 @@ use std::{
     time::Instant,
 };
 
+/// Classified outcome of a failed upstream attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[repr(usize)]
+#[non_exhaustive]
 pub enum FailureKind {
     Deadline,
     Connection,
@@ -113,7 +115,7 @@ impl Attempt<'_> {
         self.health
             .admission
             .finish(self.ticket, None, Instant::now());
-        let elapsed = self.start.elapsed().as_micros().min(u64::MAX as u128) as u64;
+        let elapsed = u64::try_from(self.start.elapsed().as_micros()).unwrap_or(u64::MAX);
         // Rust 1.99 renamed this API; keep the equivalent operation for our 1.95 MSRV.
         #[allow(deprecated, reason = "fetch_update remains compatible with Rust 1.95")]
         let _ = self

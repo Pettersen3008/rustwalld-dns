@@ -70,7 +70,7 @@ async fn http_envelopes_and_malformed_dns_are_rejected() {
         let mock = Mock::start(mode).await;
         let f = forward(&mock);
         assert!(f.resolve(&query()).await.is_err(), "mode {mode}");
-        failure(&f.health[0], kind, 1);
+        failure(&f.health()[0], kind, 1);
         assert_eq!(mock.queries.load(Ordering::SeqCst), 1, "mode {mode}");
     }
 }
@@ -108,19 +108,19 @@ async fn certificates_alpn_and_handshake_deadline_are_required() {
         let f = Forwarder::with_transport(vec![mock.address], Duration::from_millis(200), &config)
             .unwrap();
         assert!(f.resolve(&query()).await.is_err());
-        failure(&f.health[0], FailureKind::TlsAuthentication, 1);
+        failure(&f.health()[0], FailureKind::TlsAuthentication, 1);
     }
     assert_eq!(mock.queries.load(Ordering::SeqCst), 0);
     let expired = Mock::with_expiry(0, true).await;
     let f = forward(&expired);
     assert!(f.resolve(&query()).await.is_err());
-    failure(&f.health[0], FailureKind::TlsAuthentication, 1);
+    failure(&f.health()[0], FailureKind::TlsAuthentication, 1);
     for mode in [15, 16] {
         let mock = Mock::start(mode).await;
         let f = forward(&mock);
         assert!(f.resolve(&query()).await.is_err());
         failure(
-            &f.health[0],
+            &f.health()[0],
             if mode == 15 {
                 FailureKind::TlsProtocol
             } else {
@@ -147,8 +147,8 @@ async fn concurrent_queries_obey_pool_limit_and_cancelled_sockets_are_disposed()
         assert!(task.await.unwrap().is_ok());
     }
     assert_eq!(mock.accepted.load(Ordering::SeqCst), 2);
-    reconciled(&f.health[0]);
-    assert_eq!(f.health[0].successes.load(Ordering::SeqCst), 32);
+    reconciled(&f.health()[0]);
+    assert_eq!(f.health()[0].successes.load(Ordering::SeqCst), 32);
     drop(f);
     mock.wait_closed().await;
     for mode in [9, 10] {
@@ -173,8 +173,8 @@ async fn concurrent_queries_obey_pool_limit_and_cancelled_sockets_are_disposed()
         let _ = task.await;
         mock.mode.store(0, Ordering::SeqCst);
         assert!(f.resolve(&query()).await.is_ok());
-        failure(&f.health[0], FailureKind::Cancelled, 1);
-        assert_eq!(f.health[0].successes.load(Ordering::SeqCst), 1);
+        failure(&f.health()[0], FailureKind::Cancelled, 1);
+        assert_eq!(f.health()[0].successes.load(Ordering::SeqCst), 1);
         // Pool owns only the new valid socket; cancelled driver disposes old TLS.
         drop(f);
         mock.wait_closed().await;
@@ -189,8 +189,8 @@ async fn stalled_headers_and_body_expire_and_can_reconnect() {
         assert!(f.resolve(&query()).await.is_err());
         mock.mode.store(0, Ordering::SeqCst);
         assert!(f.resolve(&query()).await.is_ok());
-        failure(&f.health[0], FailureKind::Deadline, 1);
-        assert_eq!(f.health[0].successes.load(Ordering::SeqCst), 1);
+        failure(&f.health()[0], FailureKind::Deadline, 1);
+        assert_eq!(f.health()[0].successes.load(Ordering::SeqCst), 1);
         assert_eq!(mock.accepted.load(Ordering::SeqCst), 2);
     }
 }
@@ -224,8 +224,8 @@ async fn fallback_is_sequential_and_redirects_cannot_leak_plaintext_queries() {
     bad.wait_queries(1).await;
     assert_eq!(good.accepted.load(Ordering::SeqCst), 0);
     assert!(task.await.unwrap().is_ok());
-    failure(&f.health[0], FailureKind::Deadline, 1);
-    reconciled(&f.health[1]);
+    failure(&f.health()[0], FailureKind::Deadline, 1);
+    reconciled(&f.health()[1]);
     let redirect = Mock::start(2).await;
     let observer = tokio::net::UdpSocket::bind(redirect.address).await.unwrap();
     assert!(forward(&redirect).resolve(&query()).await.is_err());
@@ -379,12 +379,12 @@ async fn failed_endpoint_cools_down_single_probe_cancels_and_recovers() {
     for _ in 0..3 {
         assert!(f.resolve(&query()).await.is_ok());
     }
-    assert_eq!(f.health[0].admission_status().state, "cooldown");
+    assert_eq!(f.health()[0].admission_status().state, "cooldown");
     for _ in 0..20 {
         assert!(f.resolve(&query()).await.is_ok());
     }
     assert_eq!(bad.queries.load(Ordering::SeqCst), 3);
-    assert_eq!(f.health[0].backoff_skips.load(Ordering::SeqCst), 20);
+    assert_eq!(f.health()[0].backoff_skips.load(Ordering::SeqCst), 20);
     // A compiled generation owns fresh endpoint admission, independent of old work.
     let fresh = Forwarder::with_transport(
         vec![bad.address, good.address],
@@ -392,7 +392,7 @@ async fn failed_endpoint_cools_down_single_probe_cancels_and_recovers() {
         &transport,
     )
     .unwrap();
-    assert_eq!(fresh.health[0].admission_status().state, "ready");
+    assert_eq!(fresh.health()[0].admission_status().state, "ready");
     assert!(fresh.resolve(&query()).await.is_ok());
     assert_eq!(bad.queries.load(Ordering::SeqCst), 4);
     bad.mode.store(9, Ordering::SeqCst);
@@ -402,7 +402,7 @@ async fn failed_endpoint_cools_down_single_probe_cancels_and_recovers() {
         tokio::spawn(async move { f.resolve(&query()).await })
     };
     bad.wait_queries(5).await;
-    assert_eq!(f.health[0].admission_status().state, "probing");
+    assert_eq!(f.health()[0].admission_status().state, "probing");
     let mut others = vec![];
     for _ in 0..20 {
         let f = f.clone();
@@ -412,20 +412,20 @@ async fn failed_endpoint_cools_down_single_probe_cancels_and_recovers() {
         assert!(other.await.unwrap().is_ok());
     }
     assert_eq!(bad.queries.load(Ordering::SeqCst), 5);
-    assert_eq!(f.health[0].recovery_probes.load(Ordering::SeqCst), 1);
+    assert_eq!(f.health()[0].recovery_probes.load(Ordering::SeqCst), 1);
     probe.abort();
     let _ = probe.await;
-    failure(&f.health[0], FailureKind::Cancelled, 1);
+    failure(&f.health()[0], FailureKind::Cancelled, 1);
     bad.mode.store(0, Ordering::SeqCst);
     assert!(f.resolve(&query()).await.is_ok());
-    assert_eq!(f.health[0].admission_status().state, "ready");
-    assert_eq!(f.health[0].recovery_probes.load(Ordering::SeqCst), 2);
-    let fallback_attempts = f.health[1].attempts.load(Ordering::SeqCst);
+    assert_eq!(f.health()[0].admission_status().state, "ready");
+    assert_eq!(f.health()[0].recovery_probes.load(Ordering::SeqCst), 2);
+    let fallback_attempts = f.health()[1].attempts.load(Ordering::SeqCst);
     assert!(f.resolve(&query()).await.is_ok());
     assert_eq!(
-        f.health[1].attempts.load(Ordering::SeqCst),
+        f.health()[1].attempts.load(Ordering::SeqCst),
         fallback_attempts
     );
-    reconciled(&f.health[0]);
-    reconciled(&f.health[1]);
+    reconciled(&f.health()[0]);
+    reconciled(&f.health()[1]);
 }

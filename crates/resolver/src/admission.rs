@@ -98,10 +98,8 @@ impl Admission {
             } else {
                 "ready"
             },
-            retry_after_ms: remaining
-                .as_nanos()
-                .div_ceil(1_000_000)
-                .min(u64::MAX as u128) as u64,
+            retry_after_ms: u64::try_from(remaining.as_nanos().div_ceil(1_000_000))
+                .unwrap_or(u64::MAX),
         }
     }
 }

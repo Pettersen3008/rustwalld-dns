@@ -24,6 +24,7 @@ use tokio_rustls::{
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[non_exhaustive]
 pub enum UpstreamTransport {
     /// UDP with TCP fallback on a validated truncated response.
     #[default]

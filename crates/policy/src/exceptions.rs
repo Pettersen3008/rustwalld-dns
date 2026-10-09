@@ -66,7 +66,7 @@ impl Entry {
             .zip(self.wall.duration_since(wall).ok())
             .filter(|(monotonic, wall)| !monotonic.is_zero() && !wall.is_zero());
         if let Some((monotonic, wall)) = remaining {
-            Some(monotonic.min(wall).as_secs().min(u32::MAX as u64) as u32)
+            Some(u32::try_from(monotonic.min(wall).as_secs()).unwrap_or(u32::MAX))
         } else {
             self.expired.store(true, Ordering::Relaxed);
             None

@@ -64,6 +64,7 @@ impl Decision {
     };
 }
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum CompileError {
     #[error("invalid domain: {0}")]
     Domain(String),

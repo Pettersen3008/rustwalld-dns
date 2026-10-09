@@ -122,12 +122,16 @@ pub fn validate_size(config: &PolicyConfigSet) -> Result<(), String> {
         .map_err(|_| "downloaded candidate exceeds 16 MiB configuration API limit".into())
 }
 
+/// Lowercase hexadecimal SHA-256 of `bytes`.
 pub fn sha256(bytes: &[u8]) -> String {
-    digest::digest(&digest::SHA256, bytes)
-        .as_ref()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let digest = digest::digest(&digest::SHA256, bytes);
+    let mut text = String::with_capacity(digest.as_ref().len() * 2);
+    for byte in digest.as_ref() {
+        text.push(char::from(HEX[usize::from(byte >> 4)]));
+        text.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    text
 }
 
 pub fn validate_config(config: &PolicyConfigSet) -> Result<(), String> {
@@ -283,21 +287,7 @@ pub async fn fetch_conditional(
 ) -> Result<Fetch, String> {
     let (url, name, tls) = transport(source)?;
     timeout(DOWNLOAD_TIMEOUT, async {
-        let port = url.port_or_known_default().ok_or("invalid source port")?;
-        let connector = TlsConnector::from(tls);
-        let mut stream = None;
-        for ip in &source.bootstrap_ips {
-            let attempt = timeout(Duration::from_secs(3), async {
-                let socket = TcpStream::connect(SocketAddr::new(*ip, port)).await?;
-                connector.connect(name.clone(), socket).await
-            })
-            .await;
-            if let Ok(Ok(connected)) = attempt {
-                stream = Some(connected);
-                break;
-            }
-        }
-        let stream = stream.ok_or("HTTPS connection or certificate validation failed")?;
+        let stream = connect(source, &url, name, tls).await?;
         let (mut sender, connection) = http1::Builder::new()
             .max_headers(32)
             .max_buf_size(65536)
@@ -307,27 +297,8 @@ pub async fn fetch_conditional(
         let _driver = Driver(tokio::spawn(async move {
             let _ = connection.await;
         }));
-        let mut request = Request::builder()
-            .method("GET")
-            .uri(&url[Position::BeforePath..Position::AfterQuery])
-            .header(
-                header::HOST,
-                &url[Position::BeforeHost..Position::AfterPort],
-            )
-            .header(header::ACCEPT, "text/plain, application/octet-stream")
-            .header(header::ACCEPT_ENCODING, "identity")
-            .header(header::CONNECTION, "close")
-            .header(header::USER_AGENT, "rustwalld-dns/0.1.0");
-        if let Some(etag) = validators.and_then(|values| values.etag.as_ref()) {
-            request = request.header(header::IF_NONE_MATCH, etag);
-        } else if let Some(date) = validators.and_then(|values| values.last_modified.as_ref()) {
-            request = request.header(header::IF_MODIFIED_SINCE, date);
-        }
-        let request = request
-            .body(Empty::<Bytes>::new())
-            .map_err(|_| "invalid HTTP request")?;
         let response = sender
-            .send_request(request)
+            .send_request(request(&url, validators)?)
             .await
             .map_err(|_| "invalid HTTP response")?;
         if response.status() == StatusCode::NOT_MODIFIED {
@@ -346,54 +317,9 @@ pub async fn fetch_conditional(
                 response.status().as_u16()
             ));
         }
-        if response
-            .headers()
-            .get(header::CONTENT_ENCODING)
-            .is_some_and(|value| value != "identity")
-        {
-            return Err("compressed downloads are not supported".into());
-        }
-        if let Some(content_type) = response.headers().get(header::CONTENT_TYPE) {
-            let media = content_type
-                .to_str()
-                .map_err(|_| "invalid content type")?
-                .split(';')
-                .next()
-                .unwrap_or("")
-                .trim();
-            if !media.eq_ignore_ascii_case("text/plain")
-                && !media.eq_ignore_ascii_case("application/octet-stream")
-            {
-                return Err("download must be plain UTF-8 list text".into());
-            }
-        }
-        if let Some(length) = response.headers().get(header::CONTENT_LENGTH) {
-            let length = length
-                .to_str()
-                .ok()
-                .and_then(|value| value.parse::<u64>().ok())
-                .ok_or("invalid content length")?;
-            if length > MAX_DOWNLOAD_BYTES as u64 {
-                return Err("download exceeds 8 MiB".into());
-            }
-        }
+        check_envelope(response.headers())?;
         let validators = Validators::from_headers(response.headers());
-        let mut body = response.into_body();
-        let mut bytes = Vec::new();
-        while let Some(frame) = body.frame().await {
-            let frame = frame.map_err(|_| "incomplete HTTP body")?;
-            if let Some(data) = frame.data_ref() {
-                if data.len() > MAX_DOWNLOAD_BYTES.saturating_sub(bytes.len()) {
-                    return Err("download exceeds 8 MiB".into());
-                }
-                bytes.extend_from_slice(data);
-            } else {
-                return Err("HTTP trailers are not supported".into());
-            }
-        }
-        if bytes.is_empty() {
-            return Err("downloaded list is empty".into());
-        }
+        let bytes = read_body(response.into_body()).await?;
         let stamp = DownloadStamp {
             retrieved_at: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -412,11 +338,116 @@ pub async fn fetch_conditional(
     .await
     .map_err(|_| "download deadline exceeded".to_string())?
 }
+/// Connect to the first pinned address that completes TLS for the source name.
+async fn connect(
+    source: &FilterSource,
+    url: &Url,
+    name: ServerName<'static>,
+    tls: Arc<ClientConfig>,
+) -> Result<tokio_rustls::client::TlsStream<TcpStream>, String> {
+    let port = url.port_or_known_default().ok_or("invalid source port")?;
+    let connector = TlsConnector::from(tls);
+    for ip in &source.bootstrap_ips {
+        let attempt = timeout(Duration::from_secs(3), async {
+            let socket = TcpStream::connect(SocketAddr::new(*ip, port)).await?;
+            connector.connect(name.clone(), socket).await
+        })
+        .await;
+        // Each address's failure cause is deliberately not reported: a
+        // failed connect should reveal as little as possible about the network.
+        if let Ok(Ok(connected)) = attempt {
+            return Ok(connected);
+        }
+    }
+    Err("HTTPS connection or certificate validation failed".into())
+}
+/// Identity-encoded GET with the strongest available validator.
+fn request(url: &Url, validators: Option<&Validators>) -> Result<Request<Empty<Bytes>>, String> {
+    let mut request = Request::builder()
+        .method("GET")
+        .uri(&url[Position::BeforePath..Position::AfterQuery])
+        .header(
+            header::HOST,
+            &url[Position::BeforeHost..Position::AfterPort],
+        )
+        .header(header::ACCEPT, "text/plain, application/octet-stream")
+        .header(header::ACCEPT_ENCODING, "identity")
+        .header(header::CONNECTION, "close")
+        .header(header::USER_AGENT, "rustwalld-dns/0.1.0");
+    if let Some(etag) = validators.and_then(|values| values.etag.as_ref()) {
+        request = request.header(header::IF_NONE_MATCH, etag);
+    } else if let Some(date) = validators.and_then(|values| values.last_modified.as_ref()) {
+        request = request.header(header::IF_MODIFIED_SINCE, date);
+    }
+    request
+        .body(Empty::<Bytes>::new())
+        .map_err(|_| "invalid HTTP request".into())
+}
+/// Reject compressed, non-text or declared-oversize bodies before reading.
+fn check_envelope(headers: &header::HeaderMap) -> Result<(), String> {
+    if headers
+        .get(header::CONTENT_ENCODING)
+        .is_some_and(|value| value != "identity")
+    {
+        return Err("compressed downloads are not supported".into());
+    }
+    if let Some(content_type) = headers.get(header::CONTENT_TYPE) {
+        let media = content_type
+            .to_str()
+            .map_err(|_| "invalid content type")?
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim();
+        if !media.eq_ignore_ascii_case("text/plain")
+            && !media.eq_ignore_ascii_case("application/octet-stream")
+        {
+            return Err("download must be plain UTF-8 list text".into());
+        }
+    }
+    if let Some(length) = headers.get(header::CONTENT_LENGTH) {
+        let length = length
+            .to_str()
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .ok_or("invalid content length")?;
+        if u64::try_from(MAX_DOWNLOAD_BYTES).is_ok_and(|max| length > max) {
+            return Err("download exceeds 8 MiB".into());
+        }
+    }
+    Ok(())
+}
+/// Read the body incrementally, never past the download limit.
+async fn read_body(mut body: hyper::body::Incoming) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    while let Some(frame) = body.frame().await {
+        let frame = frame.map_err(|_| "incomplete HTTP body")?;
+        let Some(data) = frame.data_ref() else {
+            return Err("HTTP trailers are not supported".into());
+        };
+        if data.len() > MAX_DOWNLOAD_BYTES.saturating_sub(bytes.len()) {
+            return Err("download exceeds 8 MiB".into());
+        }
+        bytes.extend_from_slice(data);
+    }
+    if bytes.is_empty() {
+        return Err("downloaded list is empty".into());
+    }
+    Ok(bytes)
+}
 
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+    #[test]
+    fn sha256_is_lowercase_hex() {
+        assert_eq!(
+            sha256(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(sha256(b"").len(), 64);
+    }
     fn config() -> PolicyConfigSet {
         let mut config = PolicyConfigSet::default();
         config.policies[0].lists = vec![rustwalld_dns_filter::ListInput {

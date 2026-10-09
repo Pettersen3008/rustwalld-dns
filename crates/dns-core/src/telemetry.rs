@@ -57,7 +57,7 @@ pub struct Metrics {
 pub const LATENCY_US: [u64; 8] = [20, 50, 100, 150, 500, 1000, 10000, u64::MAX];
 impl Metrics {
     pub fn observe(&self, start: Instant) -> u64 {
-        let us = start.elapsed().as_micros().min(u64::MAX as u128) as u64;
+        let us = u64::try_from(start.elapsed().as_micros()).unwrap_or(u64::MAX);
         self.latency_sum_us.fetch_add(us, Ordering::Relaxed);
         if let Some(index) = LATENCY_US.iter().position(|bound| us <= *bound) {
             self.latency_buckets[index].fetch_add(1, Ordering::Relaxed);
@@ -88,7 +88,9 @@ impl Telemetry {
     }
 }
 
+/// How a query was answered.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum QuerySource {
     Rewrite,
     Blocked,

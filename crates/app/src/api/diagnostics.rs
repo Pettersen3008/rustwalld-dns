@@ -26,9 +26,10 @@ pub(super) async fn upstreams(State(state): State<Arc<AppState>>) -> Json<Value>
                 rustwalld_dns_policy::UpstreamTransport::Https {
                     server_name, path, ..
                 } => ("https", Some(server_name), Some(path)),
+                _ => ("other", None, None),
             };
             let servers = upstream
-                .health
+                .health()
                 .iter()
                 .map(|health| {
                     let failures = rustwalld_dns_resolver::FailureKind::ALL

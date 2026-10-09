@@ -19,6 +19,7 @@ pub enum PublicationTarget {
 
 /// A policy update was rejected before changing live state.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum PublicationError {
     #[error("policy publication already running")]
     Busy,

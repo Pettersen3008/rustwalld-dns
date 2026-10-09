@@ -21,7 +21,9 @@ The example requires an explicitly configured local resolver. Wire questions
 must use fully qualified DNS names (including the root dot). Replies are validated
 against transaction, opcode and questions; transport connections, deadlines,
 backoff and request concurrency are bounded. TLS verification requires a server
-name and explicit trust policy. `Resolver` adds generation/policy-partitioned
-caching and coalescing; cache keys must not be reused for changed policy content.
+name and explicit trust policy. `Resolver` adds caching and coalescing keyed by
+each `Forwarder`'s content identity (`UpstreamId`), so unchanged upstream profiles
+keep their answers across policy generations. Decide blocking/rewrites before
+calling it; only upstream answers belong in this cache.
 Call `Resolver::shutdown` when retiring a lifecycle. No zero-allocation claim is
 made for complete requests. Rust 1.95+, edition 2024; MIT OR Apache-2.0.

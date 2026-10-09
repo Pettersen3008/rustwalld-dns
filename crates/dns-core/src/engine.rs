@@ -267,12 +267,7 @@ impl Engine {
             } else {
                 match self
                     .resolver
-                    .resolve(
-                        &request,
-                        policy.upstream(),
-                        snapshot.generation(),
-                        snapshot.upstreams()[policy.upstream()].clone(),
-                    )
+                    .resolve(&request, snapshot.upstreams()[policy.upstream()].clone())
                     .await
                 {
                     Ok(result) => (

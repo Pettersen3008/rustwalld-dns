@@ -14,6 +14,12 @@ resolver probed its response cache. The resolver then cloned that message again
 when admitting a new upstream flight. Only the admitted leader needs an owned
 forwarding message.
 
+Update (2026-10-09): response cache and flight keys now use the forwarder's
+content identity (`UpstreamId`) instead of profile index plus generation, so a
+publication that leaves an upstream profile unchanged keeps its cached answers.
+`Resolver::lookup` probes synchronously and `Resolver::forward` admits misses;
+`Resolver::resolve` composes both. The text below describes the earlier slice.
+
 The resolver boundary now gives `Resolver::resolve` the accepted client message,
 upstream profile and generation. The resolver constructs its existing `CacheKey`
 from that message, probes the cache and checks bounded flight admission. Only a

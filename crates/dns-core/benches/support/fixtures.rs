@@ -78,7 +78,7 @@ pub fn setup(exception_domain: Option<&str>) -> (Engine, Vec<u8>, Vec<u8>) {
         RData::A(A("192.0.2.1".parse().unwrap())),
     ));
     engine.resolver().cache.insert(
-        CacheKey::new(&request, 0, 1).unwrap(),
+        CacheKey::new(&request, engine.active.load().upstreams()[0].id()).unwrap(),
         response,
         Instant::now(),
     );
@@ -105,7 +105,7 @@ pub fn dnssec_cache(long_name: bool) -> (Engine, Vec<u8>) {
     edns.set_max_payload(4096);
     edns.set_dnssec_ok(true);
     request.edns = Some(edns);
-    let key = CacheKey::new(&request, 0, 1).unwrap();
+    let key = CacheKey::new(&request, engine.active.load().upstreams()[0].id()).unwrap();
     let mut response = reply(&request, ResponseCode::NoError);
     // Match canonical upstream owner casing while preserving the client's
     // original question on encoding, including long names that allocate.

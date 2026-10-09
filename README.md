@@ -402,10 +402,15 @@ inspect the two full revisions for their detailed contents.
 - A/AAAA/CNAME and other ordinary records are forwarded through Hickory.
 - Sequential fallback across up to eight addresses/profile; no racing of providers.
 - Random upstream IDs and connected ephemeral UDP sockets; match ID, QR, opcode
-  and question. Truncated UDP upstream replies retry TCP; truncated TCP/TLS replies are rejected. Client UDP replies respect
-  512 bytes without EDNS and a capped advertised size of 1,232 with EDNS.
-- Separate bounded decision/response caches. Keys partition by policy generation,
-  upstream profile, name, type, class and DO/CD. TTLs age on hits. Whole messages
+  and question. Truncated or oversized UDP upstream replies retry TCP; truncated
+  TCP/TLS replies are rejected. Client UDP replies respect 512 bytes without EDNS
+  and a capped advertised size of 1,232 with EDNS.
+- Separate bounded decision/response caches. Decisions partition by policy
+  generation and policy. Responses partition by upstream identity (ordered
+  addresses plus transport trust/identity settings, not timeouts or pool sizes),
+  name, type, class and DO/CD, so publishing unchanged upstream profiles keeps
+  warm answers while any upstream change starts a disjoint partition. Blocking
+  and rewrites are decided before the response cache. TTLs age on hits. Whole messages
   expire conservatively at the earliest RR TTL; negative responses require SOA
   and use `min(SOA TTL, SOA MINIMUM)`. SERVFAIL, zero TTL and truncated responses
   are not cached. Final block/rewrite answers never enter the upstream cache.

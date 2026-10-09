@@ -27,6 +27,7 @@ h2 = "0.4"
 http = "1"
 bytes = "1"
 hashbrown.workspace = true
+ring = "0.17"
 
 [dev-dependencies]
 criterion = "0.8"

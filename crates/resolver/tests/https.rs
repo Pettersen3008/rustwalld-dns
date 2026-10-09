@@ -82,7 +82,7 @@ async fn negative_http_age_is_subtracted_from_soa_minimum_before_caching() {
         assert_eq!(response.authorities[0].ttl, 20);
         let now = Instant::now();
         let cache = ResponseCache::new(8);
-        let key = CacheKey::new(&query(), 0, 1).unwrap();
+        let key = CacheKey::new(&query(), forward(&mock).id()).unwrap();
         assert!(cache.insert(key.clone(), response, now));
         assert!(cache.get(&key, now + Duration::from_secs(19)).is_some());
         assert!(cache.get(&key, now + Duration::from_secs(20)).is_none());
@@ -309,11 +309,22 @@ fn trailing_dns_data_is_rejected_and_expired_http_data_is_not_cached() {
     headers.insert(header::AGE, "999999999999999999999999999".parse().unwrap());
     let response = decode_response(&request, StatusCode::OK, &headers, &bytes).unwrap();
     assert_eq!(response.answers[0].ttl, 0);
-    assert!(!ResponseCache::new(8).insert(
-        CacheKey::new(&request, 0, 1).unwrap(),
-        response,
-        Instant::now()
-    ));
+    assert!(
+        !ResponseCache::new(8).insert(
+            CacheKey::new(
+                &request,
+                rustwalld_dns_resolver::Forwarder::new(
+                    vec!["127.0.0.1:9".parse().unwrap()],
+                    Duration::from_secs(1)
+                )
+                .unwrap()
+                .id()
+            )
+            .unwrap(),
+            response,
+            Instant::now()
+        )
+    );
 }
 
 #[tokio::test]

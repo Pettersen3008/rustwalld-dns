@@ -194,7 +194,7 @@ async fn normalized_upstream_flight_preserves_each_clients_question_and_size() {
 }
 
 #[tokio::test]
-async fn raw_client_requests_keep_flag_type_profile_and_generation_cache_partitions() {
+async fn raw_client_requests_keep_flag_type_and_upstream_identity_cache_partitions() {
     use rustwalld_dns_core::telemetry::QuerySource;
     let mock = Mock::start(false, false).await;
     let mut config = PolicyConfigSet {
@@ -202,8 +202,11 @@ async fn raw_client_requests_keep_flag_type_profile_and_generation_cache_partiti
         ..Default::default()
     };
     config.upstreams[0].addresses = vec![mock.addr];
+    // A different address list is a different upstream identity, even though
+    // the first (answering) address is the same mock.
     let mut other = config.upstreams[0].clone();
     other.name = "second".into();
+    other.addresses.push("127.0.0.1:9".parse().unwrap());
     config.upstreams.push(other);
     let mut policy = config.policies[0].clone();
     policy.name = "second".into();
@@ -271,9 +274,30 @@ async fn raw_client_requests_keep_flag_type_profile_and_generation_cache_partiti
         assert_eq!(events.try_recv().unwrap().source, source);
     }
     assert_eq!(mock.hits.load(Ordering::Relaxed), expected + 1);
+    // Publishing unchanged upstream profiles keeps their cached answers.
+    engine.active.store(Arc::new(
+        PolicySnapshot::compile(config.clone(), 2).unwrap(),
+    ));
+    for _ in 0..2 {
+        engine
+            .answer(&request.to_vec().unwrap(), client, false)
+            .await
+            .unwrap();
+        let event = events.try_recv().unwrap();
+        assert_eq!(event.source, QuerySource::Cache);
+        assert_eq!(event.generation, 2);
+    }
+    assert_eq!(mock.hits.load(Ordering::Relaxed), expected + 1);
+    // Changing a profile's content selects a fresh partition for its policies.
+    config.upstreams[0]
+        .addresses
+        .push("127.0.0.1:9".parse().unwrap());
+    config.upstreams[0]
+        .addresses
+        .push("127.0.0.1:7".parse().unwrap());
     engine
         .active
-        .store(Arc::new(PolicySnapshot::compile(config, 2).unwrap()));
+        .store(Arc::new(PolicySnapshot::compile(config, 3).unwrap()));
     for source in [QuerySource::Upstream, QuerySource::Cache] {
         engine
             .answer(&request.to_vec().unwrap(), client, false)
@@ -281,7 +305,7 @@ async fn raw_client_requests_keep_flag_type_profile_and_generation_cache_partiti
             .unwrap();
         let event = events.try_recv().unwrap();
         assert_eq!(event.source, source);
-        assert_eq!(event.generation, 2);
+        assert_eq!(event.generation, 3);
     }
     assert_eq!(mock.hits.load(Ordering::Relaxed), expected + 2);
 }
@@ -731,11 +755,17 @@ async fn tls_forwarding_filter_cache_generation_and_retirement() {
         ResponseCode::ServFail
     );
     assert_eq!(mock.queries.load(Ordering::SeqCst), 2);
+    // Restoring the original identity may reuse its still-valid cached answer;
+    // a different question still needs the new authenticated connection.
     config.upstreams[0].transport = mock.transport.clone();
     engine
         .active
         .store(Arc::new(PolicySnapshot::compile(config, 3).unwrap()));
     assert_eq!(udp_query(addr, &request).await.answers.len(), 1);
+    assert_eq!(mock.queries.load(Ordering::SeqCst), 2);
+    let mut fresh = request.clone();
+    fresh.queries[0].set_name(Name::from_ascii("fresh.test.").unwrap());
+    assert_eq!(udp_query(addr, &fresh).await.answers.len(), 1);
     assert_eq!(mock.queries.load(Ordering::SeqCst), 3);
     cancel.cancel();
     timeout(Duration::from_secs(1), task)
@@ -828,11 +858,17 @@ async fn https_filter_cache_coalescing_generation_and_shutdown() {
         ResponseCode::ServFail
     );
     assert_eq!(mock.queries.load(Ordering::SeqCst), 2);
+    // Restoring the original identity may reuse its still-valid cached answer;
+    // a different question still needs the new authenticated connection.
     config.upstreams[0].transport = mock.transport.clone();
     engine
         .active
         .store(Arc::new(PolicySnapshot::compile(config, 3).unwrap()));
     assert_eq!(udp_query(address, &request).await.answers.len(), 1);
+    assert_eq!(mock.queries.load(Ordering::SeqCst), 2);
+    let mut fresh = request.clone();
+    fresh.queries[0].set_name(Name::from_ascii("fresh.test.").unwrap());
+    assert_eq!(udp_query(address, &fresh).await.answers.len(), 1);
     assert_eq!(mock.queries.load(Ordering::SeqCst), 3);
     cancel.cancel();
     timeout(Duration::from_secs(1), task)

@@ -66,7 +66,10 @@ async fn reload_under_traffic_generation_invalidation_and_shadow() {
         );
     }
     assert_eq!(mock.hits.load(Ordering::Relaxed), 1);
-    // Rollback compiles the old content into a fresh generation.
+    // Rollback compiles the old content into a fresh generation. Decisions are
+    // per generation, so the block lifts immediately; the upstream profile is
+    // unchanged (only its timeout differs), so the still-valid cached answer is
+    // reused instead of querying upstream again.
     let mut old = PolicyConfigSet::default();
     old.upstreams[0].addresses = vec![mock.addr];
     engine
@@ -79,5 +82,5 @@ async fn reload_under_traffic_generation_invalidation_and_shadow() {
             .len(),
         1
     );
-    assert_eq!(mock.hits.load(Ordering::Relaxed), 2);
+    assert_eq!(mock.hits.load(Ordering::Relaxed), 1);
 }

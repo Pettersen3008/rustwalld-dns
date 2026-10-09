@@ -988,6 +988,7 @@ dependencies = [
  "hickory-proto",
  "http",
  "rand 0.9.5",
+ "ring",
  "serde",
  "thiserror",
  "tokio",

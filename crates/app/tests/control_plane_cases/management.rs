@@ -257,7 +257,12 @@ async fn upstream_diagnostics_survive_failures_and_reset_with_generation() {
     let fresh: Value = harness.get("/api/v1/upstreams").await.json().await.unwrap();
     assert!(fresh[0]["generation"].as_u64().unwrap() > old.generation());
     assert_eq!(fresh[0]["servers"][0]["attempts"], 0);
+    // Answers cached before the publish stay warm for the unchanged upstream,
+    // so use a new name to exercise the fresh forwarder's counters.
     assert_eq!(harness.dns("cached.test.").await.answers.len(), 1);
+    let fresh: Value = harness.get("/api/v1/upstreams").await.json().await.unwrap();
+    assert_eq!(fresh[0]["servers"][0]["attempts"], 0);
+    assert_eq!(harness.dns("fresh.test.").await.answers.len(), 1);
     let fresh: Value = harness.get("/api/v1/upstreams").await.json().await.unwrap();
     assert_eq!(fresh[0]["servers"][0]["attempts"], 1);
     assert_eq!(fresh[0]["servers"][0]["successes"], 1);

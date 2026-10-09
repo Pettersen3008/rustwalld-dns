@@ -1,4 +1,4 @@
-use crate::cache::BoundedCache;
+use crate::{UpstreamId, cache::BoundedCache};
 use hickory_proto::{
     op::{Message, Query, ResponseCode},
     rr::RData,
@@ -8,31 +8,51 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Response cache and coalescing identity. Policy decisions are made before a
+/// query reaches the resolver and blocked/rewritten answers never enter this
+/// cache, so the key holds only what can change upstream content: the
+/// normalized question, the upstream profile identity and the DO/CD bits.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct CacheKey {
     pub query: Query,
-    pub profile: usize,
-    pub generation: u64,
+    pub upstream: UpstreamId,
     pub dnssec_ok: bool,
     pub checking_disabled: bool,
 }
 impl CacheKey {
-    pub fn new(request: &Message, profile: usize, generation: u64) -> Option<Self> {
+    /// `None` when the request has no question.
+    pub fn new(request: &Message, upstream: UpstreamId) -> Option<Self> {
         let mut query = request.queries.first()?.clone();
         query.set_name(query.name().to_lowercase());
         Some(Self {
             query,
-            profile,
-            generation,
+            upstream,
             dnssec_ok: request.edns.as_ref().is_some_and(|e| e.flags().dnssec_ok),
             checking_disabled: request.metadata.checking_disabled,
         })
     }
 }
-struct Entry {
+pub(crate) struct Entry {
     response: Message,
     inserted: Instant,
     expires: Instant,
+}
+impl Entry {
+    /// A private copy with TTLs aged by whole seconds since insertion.
+    pub(crate) fn materialize(&self, now: Instant) -> Message {
+        let elapsed = now.saturating_duration_since(self.inserted).as_secs();
+        let elapsed = u32::try_from(elapsed).unwrap_or(u32::MAX);
+        let mut response = self.response.clone();
+        for record in response
+            .answers
+            .iter_mut()
+            .chain(&mut response.authorities)
+            .chain(&mut response.additionals)
+        {
+            record.ttl = record.ttl.saturating_sub(elapsed);
+        }
+        response
+    }
 }
 pub struct ResponseCache {
     entries: BoundedCache<CacheKey, Arc<Entry>>,
@@ -43,25 +63,12 @@ impl ResponseCache {
             entries: BoundedCache::new(capacity),
         }
     }
+    /// A live entry without copying its message; cheap enough under other locks.
+    pub(crate) fn entry(&self, key: &CacheKey, now: Instant) -> Option<Arc<Entry>> {
+        self.entries.get(key).filter(|entry| now < entry.expires)
+    }
     pub fn get(&self, key: &CacheKey, now: Instant) -> Option<Message> {
-        let entry = self.entries.get(key)?;
-        if now >= entry.expires {
-            return None;
-        }
-        let elapsed = now
-            .saturating_duration_since(entry.inserted)
-            .as_secs()
-            .min(u32::MAX as u64) as u32;
-        let mut response = entry.response.clone();
-        for record in response
-            .answers
-            .iter_mut()
-            .chain(&mut response.authorities)
-            .chain(&mut response.additionals)
-        {
-            record.ttl = record.ttl.saturating_sub(elapsed);
-        }
-        Some(response)
+        self.entry(key, now).map(|entry| entry.materialize(now))
     }
     pub fn insert(&self, key: CacheKey, mut response: Message, now: Instant) -> bool {
         if response.metadata.truncation
@@ -102,7 +109,14 @@ impl ResponseCache {
         };
         let Some(mut ttl) = response
             .all_sections()
-            .map(|r| if r.ttl > i32::MAX as u32 { 0 } else { r.ttl })
+            // RFC 2181 section 8: a TTL with the top bit set is treated as zero.
+            .map(|r| {
+                if r.ttl > i32::MAX.unsigned_abs() {
+                    0
+                } else {
+                    r.ttl
+                }
+            })
             .min()
         else {
             return false;
@@ -122,7 +136,7 @@ impl ResponseCache {
             Arc::new(Entry {
                 response,
                 inserted: now,
-                expires: now + Duration::from_secs(ttl as u64),
+                expires: now + Duration::from_secs(u64::from(ttl)),
             }),
         );
         true
@@ -146,13 +160,21 @@ mod tests {
             rdata::{A, SOA},
         },
     };
+    fn upstream(port: u16) -> UpstreamId {
+        crate::Forwarder::new(
+            vec![std::net::SocketAddr::from(([127, 0, 0, 1], port))],
+            Duration::from_secs(1),
+        )
+        .unwrap()
+        .id()
+    }
     fn fixture() -> (CacheKey, Message) {
         let mut request = Message::new(1, MessageType::Query, OpCode::Query);
         request.add_query(Query::query(
             Name::from_ascii("cache.example.").unwrap(),
             RecordType::A,
         ));
-        let key = CacheKey::new(&request, 0, 1).unwrap();
+        let key = CacheKey::new(&request, upstream(0)).unwrap();
         let mut response = request.into_response();
         response.add_answer(Record::from_rdata(
             key.query.name().clone(),
@@ -177,10 +199,7 @@ mod tests {
         );
         assert!(cache.get(&key, now + Duration::from_secs(30)).is_none());
         let mut other = key.clone();
-        other.generation += 1;
-        assert!(cache.get(&other, now).is_none());
-        other = key.clone();
-        other.profile += 1;
+        other.upstream = upstream(1);
         assert!(cache.get(&other, now).is_none());
         other = key.clone();
         other.dnssec_ok = true;

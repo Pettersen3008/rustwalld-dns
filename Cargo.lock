@@ -1642,6 +1642,7 @@ dependencies = [
  "http",
  "rand 0.9.5",
  "rcgen",
+ "ring",
  "serde",
  "thiserror",
  "tokio",

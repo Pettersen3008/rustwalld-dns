@@ -1,6 +1,6 @@
 use crate::{
     Forwarder, ResolveError,
-    response_cache::{CacheKey, ResponseCache},
+    response_cache::{CacheKey, Entry, ResponseCache},
 };
 use hickory_proto::op::{Edns, Message};
 use std::{
@@ -16,6 +16,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
 use tokio_util::sync::CancellationToken;
 type SharedResult = Option<Result<Arc<(Message, Instant)>, ()>>;
 type Flights = Arc<Vec<Mutex<HashMap<CacheKey, watch::Receiver<SharedResult>>>>>;
+const FLIGHT_SHARDS: usize = 32;
 #[derive(Default)]
 pub struct ResolverMetrics {
     pub cache_hits: AtomicU64,
@@ -23,6 +24,7 @@ pub struct ResolverMetrics {
     pub upstream_lookups: AtomicU64,
     pub overloads: AtomicU64,
 }
+/// Bounded response cache plus single-flight forwarding shared by all policies.
 pub struct Resolver {
     pub cache: ResponseCache,
     pub metrics: ResolverMetrics,
@@ -41,12 +43,29 @@ pub struct Resolution {
     pub response: Message,
     pub source: ResolutionSource,
 }
+/// Outcome of the synchronous cache probe.
+pub enum Lookup {
+    /// A cached response with TTLs aged to now.
+    Hit(Message),
+    /// Not cached; pass the key to [`Resolver::forward`].
+    Miss(CacheKey),
+}
+/// What a caller found while holding its flight shard.
+enum Admission {
+    Cached(Arc<Entry>),
+    Waiting(watch::Receiver<SharedResult>),
+    Admitted(watch::Sender<SharedResult>, FlightGuard),
+}
 impl Resolver {
     pub fn new(cache_entries: usize, max_inflight: usize) -> Arc<Self> {
         Arc::new(Self {
             cache: ResponseCache::new(cache_entries),
             metrics: ResolverMetrics::default(),
-            flights: Arc::new((0..32).map(|_| Mutex::new(HashMap::new())).collect()),
+            flights: Arc::new(
+                (0..FLIGHT_SHARDS)
+                    .map(|_| Mutex::new(HashMap::new()))
+                    .collect(),
+            ),
             hash: RandomState::new(),
             slots: Arc::new(Semaphore::new(max_inflight)),
             cancel: CancellationToken::new(),
@@ -61,88 +80,91 @@ impl Resolver {
             .map(|s| s.lock().unwrap_or_else(|e| e.into_inner()).len())
             .sum()
     }
-    /// Resolve an accepted client query. Upstream normalization is deferred until
-    /// a new bounded flight is admitted; cache hits and waiters need no forwarding copy.
+    /// Probe the response cache without waiting. Fails only for a request
+    /// without a question, which can never be forwarded.
+    pub fn lookup(&self, request: &Message, upstream: &Forwarder) -> Result<Lookup, ResolveError> {
+        let key = CacheKey::new(request, upstream.id()).ok_or(ResolveError::Encoding)?;
+        Ok(match self.cache.get(&key, Instant::now()) {
+            Some(response) => {
+                self.metrics.cache_hits.fetch_add(1, Ordering::Relaxed);
+                Lookup::Hit(response)
+            }
+            None => Lookup::Miss(key),
+        })
+    }
+    /// Resolve an accepted client query: cache, then coalescing, then upstream.
     pub async fn resolve(
         self: &Arc<Self>,
         request: &Message,
-        profile: usize,
-        generation: u64,
+        upstream: Arc<Forwarder>,
+    ) -> Result<Resolution, ResolveError> {
+        match self.lookup(request, &upstream)? {
+            Lookup::Hit(response) => Ok(Resolution {
+                response,
+                source: ResolutionSource::Cache,
+            }),
+            Lookup::Miss(key) => self.forward(request, key, upstream).await,
+        }
+    }
+    /// Resolve a cache miss from [`Resolver::lookup`]. Joins an identical flight
+    /// or admits a new bounded one; upstream normalization is deferred until a
+    /// flight is admitted, so waiters need no forwarding copy.
+    pub async fn forward(
+        self: &Arc<Self>,
+        request: &Message,
+        key: CacheKey,
         upstream: Arc<Forwarder>,
     ) -> Result<Resolution, ResolveError> {
         if self.cancel.is_cancelled() {
             return Err(ResolveError::Unavailable);
         }
-        let key = CacheKey::new(request, profile, generation).ok_or(ResolveError::Encoding)?;
-        if let Some(response) = self.cache.get(&key, Instant::now()) {
-            self.metrics.cache_hits.fetch_add(1, Ordering::Relaxed);
-            return Ok(Resolution {
-                response,
-                source: ResolutionSource::Cache,
-            });
-        }
-        let index = self.hash.hash_one(&key) as usize % self.flights.len();
-        let (mut receiver, source) = {
+        let index = self.shard(&key);
+        // The shard lock covers only map, cache-pointer and permit operations.
+        // Message copies, request construction and spawning happen after it.
+        let admission = {
             let mut shard = self.flights[index]
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            if let Some(response) = self.cache.get(&key, Instant::now()) {
-                self.metrics.cache_hits.fetch_add(1, Ordering::Relaxed);
-                return Ok(Resolution {
-                    response,
-                    source: ResolutionSource::Cache,
-                });
-            }
-            if let Some(receiver) = shard.get(&key) {
-                self.metrics.coalesced.fetch_add(1, Ordering::Relaxed);
-                (receiver.clone(), ResolutionSource::Coalesced)
+            // A flight caches its result before leaving the map, so rechecking
+            // here closes the window in which a duplicate flight could start.
+            if let Some(entry) = self.cache.entry(&key, Instant::now()) {
+                Admission::Cached(entry)
+            } else if let Some(receiver) = shard.get(&key) {
+                Admission::Waiting(receiver.clone())
             } else {
-                let permit = match self.slots.clone().try_acquire_owned() {
-                    Ok(p) => p,
-                    Err(_) => {
-                        self.metrics.overloads.fetch_add(1, Ordering::Relaxed);
-                        return Err(ResolveError::Unavailable);
-                    }
+                let Ok(permit) = self.slots.clone().try_acquire_owned() else {
+                    drop(shard);
+                    self.metrics.overloads.fetch_add(1, Ordering::Relaxed);
+                    return Err(ResolveError::Unavailable);
                 };
                 let (sender, receiver) = watch::channel(None);
-                shard.insert(key.clone(), receiver.clone());
+                shard.insert(key.clone(), receiver);
+                // Created under the lock so the entry is removed even if this
+                // future is dropped before the flight task is spawned.
                 let guard = FlightGuard {
                     flights: self.flights.clone(),
                     index,
                     key: key.clone(),
                     _permit: permit,
                 };
-                let resolver = self.clone();
-                let mut request = request.clone();
-                if let Some(query) = request.queries.first_mut() {
-                    query.set_name(key.query.name().clone());
-                }
-                // Client casing, AD and UDP payload size do not partition flights.
-                // Use one canonical upstream question/EDNS envelope, then let the
-                // engine restore each client's question and transport constraints.
-                request.metadata.authentic_data = false;
-                let mut edns = Edns::new();
-                edns.set_max_payload(1232);
-                edns.set_dnssec_ok(key.dnssec_ok);
-                request.edns = Some(edns);
-                // Owned task survives the initiating waiter's cancellation; guard removes
-                // the flight and releases admission even on task cancellation/panic.
-                tokio::spawn(async move {
-                    let _guard = guard;
-                    resolver
-                        .metrics
-                        .upstream_lookups
-                        .fetch_add(1, Ordering::Relaxed);
-                    let result = tokio::select! {_ = resolver.cancel.cancelled()=>Err(ResolveError::Unavailable),result=upstream.resolve(&request)=>result};
-                    let result = result
-                        .map(|response| {
-                            let received = Instant::now();
-                            resolver.cache.insert(key, response.clone(), received);
-                            Arc::new((response, received))
-                        })
-                        .map_err(|_| ());
-                    sender.send_replace(Some(result));
+                Admission::Admitted(sender, guard)
+            }
+        };
+        let (mut receiver, source) = match admission {
+            Admission::Cached(entry) => {
+                self.metrics.cache_hits.fetch_add(1, Ordering::Relaxed);
+                return Ok(Resolution {
+                    response: entry.materialize(Instant::now()),
+                    source: ResolutionSource::Cache,
                 });
+            }
+            Admission::Waiting(receiver) => {
+                self.metrics.coalesced.fetch_add(1, Ordering::Relaxed);
+                (receiver, ResolutionSource::Coalesced)
+            }
+            Admission::Admitted(sender, guard) => {
+                let receiver = sender.subscribe();
+                self.spawn_flight(request, key, upstream, sender, guard);
                 (receiver, ResolutionSource::Upstream)
             }
         };
@@ -151,7 +173,8 @@ impl Resolver {
             if let Some(result) = result {
                 return result
                     .map(|response| {
-                        let elapsed = response.1.elapsed().as_secs().min(u32::MAX as u64) as u32;
+                        let elapsed = response.1.elapsed().as_secs();
+                        let elapsed = u32::try_from(elapsed).unwrap_or(u32::MAX);
                         let mut message = response.0.clone();
                         for record in message
                             .answers
@@ -166,12 +189,61 @@ impl Resolver {
                             source,
                         }
                     })
-                    .map_err(|_| ResolveError::Unavailable);
+                    .map_err(|()| ResolveError::Unavailable);
             }
             if receiver.changed().await.is_err() {
                 return Err(ResolveError::Unavailable);
             }
         }
+    }
+    fn shard(&self, key: &CacheKey) -> usize {
+        // Reduce in u64 first: the modulus is tiny, so the cast cannot truncate.
+        let shard = self.hash.hash_one(key) % self.flights.len() as u64;
+        usize::try_from(shard).unwrap_or_default()
+    }
+    /// Start the owned upstream task. It survives the initiating waiter's
+    /// cancellation; its guard removes the flight and releases admission even on
+    /// task cancellation or panic.
+    fn spawn_flight(
+        self: &Arc<Self>,
+        request: &Message,
+        key: CacheKey,
+        upstream: Arc<Forwarder>,
+        sender: watch::Sender<SharedResult>,
+        guard: FlightGuard,
+    ) {
+        let mut request = request.clone();
+        if let Some(query) = request.queries.first_mut() {
+            query.set_name(key.query.name().clone());
+        }
+        // Client casing, AD and UDP payload size do not partition flights.
+        // Use one canonical upstream question/EDNS envelope, then let the
+        // engine restore each client's question and transport constraints.
+        request.metadata.authentic_data = false;
+        let mut edns = Edns::new();
+        edns.set_max_payload(1232);
+        edns.set_dnssec_ok(key.dnssec_ok);
+        request.edns = Some(edns);
+        let resolver = self.clone();
+        tokio::spawn(async move {
+            let _guard = guard;
+            resolver
+                .metrics
+                .upstream_lookups
+                .fetch_add(1, Ordering::Relaxed);
+            let result = tokio::select! {
+                () = resolver.cancel.cancelled() => Err(ResolveError::Unavailable),
+                result = upstream.resolve(&request) => result,
+            };
+            let result = result
+                .map(|response| {
+                    let received = Instant::now();
+                    resolver.cache.insert(key, response.clone(), received);
+                    Arc::new((response, received))
+                })
+                .map_err(|_| ());
+            sender.send_replace(Some(result));
+        });
     }
 }
 struct FlightGuard {
@@ -209,7 +281,7 @@ mod tests {
             .unwrap(),
         );
         assert!(matches!(
-            resolver.resolve(&Message::query(), 0, 1, forwarder).await,
+            resolver.resolve(&Message::query(), forwarder).await,
             Err(ResolveError::Encoding)
         ));
         assert_eq!(resolver.inflight(), 0);
@@ -223,7 +295,14 @@ mod tests {
             Name::from_ascii("waiter.test.").unwrap(),
             RecordType::A,
         ));
-        let key = CacheKey::new(&request, 0, 1).unwrap();
+        let forwarder = Arc::new(
+            Forwarder::new(
+                vec!["127.0.0.1:9".parse().unwrap()],
+                Duration::from_millis(10),
+            )
+            .unwrap(),
+        );
+        let key = CacheKey::new(&request, forwarder.id()).unwrap();
         let mut response = request.clone().into_response();
         response.add_answer(Record::from_rdata(
             key.query.name().clone(),
@@ -235,22 +314,15 @@ mod tests {
             5,
             RData::A(A("192.0.2.2".parse().unwrap())),
         ));
-        let index = resolver.hash.hash_one(&key) as usize % resolver.flights.len();
+        let index = resolver.shard(&key);
         let (sender, receiver) = watch::channel(None);
         resolver.flights[index]
             .lock()
             .unwrap()
             .insert(key.clone(), receiver);
-        let forwarder = Arc::new(
-            Forwarder::new(
-                vec!["127.0.0.1:9".parse().unwrap()],
-                Duration::from_millis(10),
-            )
-            .unwrap(),
-        );
         let waiter = {
             let resolver = resolver.clone();
-            tokio::spawn(async move { resolver.resolve(&request, 0, 1, forwarder).await.unwrap() })
+            tokio::spawn(async move { resolver.resolve(&request, forwarder).await.unwrap() })
         };
         tokio::task::yield_now().await;
         sender.send_replace(Some(Ok(Arc::new((

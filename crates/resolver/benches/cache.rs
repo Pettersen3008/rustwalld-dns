@@ -5,17 +5,21 @@ use hickory_proto::{
     rr::{Name, RData, Record, RecordType, rdata::A},
 };
 use rustwalld_dns_resolver::{
+    Forwarder,
     cache::BoundedCache,
     response_cache::{CacheKey, ResponseCache},
 };
-use std::time::Instant;
+use std::time::{Duration, Instant};
 fn bench(c: &mut Criterion) {
     let mut request = Message::query();
     request.add_query(Query::query(
         Name::from_ascii("bench.example.").unwrap(),
         RecordType::A,
     ));
-    let key = CacheKey::new(&request, 0, 1).unwrap();
+    let upstream = Forwarder::new(vec!["127.0.0.1:9".parse().unwrap()], Duration::from_secs(1))
+        .unwrap()
+        .id();
+    let key = CacheKey::new(&request, upstream).unwrap();
     let mut response = request.into_response();
     response.add_answer(Record::from_rdata(
         key.query.name().clone(),

@@ -1,5 +1,11 @@
 use rustwalld_dns_policy::PolicyConfigSet;
 use std::{io, net::SocketAddr};
+/// Host-specific policy checks: download sources, direct self-forwarding to
+/// `listen`, and explicit client access for non-loopback listeners.
+///
+/// # Errors
+///
+/// A description of the first violated rule.
 pub fn validate_policy(config: &PolicyConfigSet, listen: SocketAddr) -> Result<(), String> {
     crate::downloads::validate_config(config)?;
     for profile in &config.upstreams {
@@ -39,6 +45,7 @@ fn targets_listener(upstream: SocketAddr, listen: SocketAddr) -> bool {
         upstream == listen || (listen.is_loopback() && upstream.is_loopback())
     }
 }
+/// Wrap a validation message as an `InvalidInput` I/O error.
 pub fn invalid(message: String) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
 }

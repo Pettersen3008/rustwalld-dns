@@ -3,32 +3,47 @@ use crate::{PolicyConfigSet, PolicyError, config::validate_name};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, net::IpAddr};
 
+/// Largest accepted downloaded list body.
 pub const MAX_DOWNLOAD_BYTES: usize = 8 * 1024 * 1024;
+/// Shortest scheduled refresh interval, in seconds.
 pub const MIN_REFRESH_INTERVAL: u64 = 300;
+/// Longest scheduled refresh interval, in seconds.
 pub const MAX_REFRESH_INTERVAL: u64 = 30 * 86400;
 /// Last representable second of 9999-12-31 UTC, shared by all absolute timestamps.
 pub(crate) const MAX_UNIX_SECONDS: u64 = 253_402_300_799;
 
+/// A remote HTTPS list that supplies one policy list's rules.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct FilterSource {
+    /// Policy owning the list.
     pub policy: String,
+    /// List name within that policy.
     pub list: String,
+    /// HTTPS URL of the list.
     pub url: String,
+    /// Pinned server addresses (1..=8); no DNS lookup is performed.
     pub bootstrap_ips: Vec<IpAddr>,
+    /// CA certificates replacing the bundled public roots.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ca_pem: Option<String>,
+    /// Fingerprint of the content currently in the list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub download: Option<DownloadStamp>,
+    /// Scheduled check interval; `None` disables scheduling.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refresh_interval_secs: Option<u64>,
 }
 
+/// Provenance of downloaded list content.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DownloadStamp {
+    /// Retrieval time, in Unix seconds.
     pub retrieved_at: u64,
+    /// Lowercase hex SHA-256 of the body.
     pub sha256: String,
+    /// Body length in bytes.
     pub bytes: usize,
 }
 

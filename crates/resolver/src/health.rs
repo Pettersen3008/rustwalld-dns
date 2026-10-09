@@ -13,20 +13,33 @@ use std::{
 #[repr(usize)]
 #[non_exhaustive]
 pub enum FailureKind {
+    /// The per-attempt deadline expired.
     Deadline,
+    /// TCP connect, socket or I/O failure.
     Connection,
+    /// The server's certificate or identity was rejected.
     TlsAuthentication,
+    /// Any other TLS failure, including a missing `h2` ALPN.
     TlsProtocol,
+    /// HTTP/2 protocol failure.
     HttpProtocol,
+    /// A non-2xx DoH status.
     HttpStatus,
+    /// Invalid DoH headers, size or content type.
     HttpEnvelope,
+    /// A reply that failed DNS validation.
     DnsResponse,
+    /// The upstream answered SERVFAIL.
     Servfail,
+    /// The upstream answered REFUSED.
     Refused,
+    /// The attempt was dropped before completing.
     Cancelled,
+    /// A local error, such as encoding failure or exhausted admission.
     LocalError,
 }
 impl FailureKind {
+    /// Every kind, in counter order.
     pub const ALL: [Self; 12] = [
         Self::Deadline,
         Self::Connection,
@@ -43,14 +56,23 @@ impl FailureKind {
     ];
 }
 
+/// Counters and circuit-breaker state for one upstream address. Counters only
+/// increase (except `inflight` and `ewma_us`); read them with relaxed loads.
 #[derive(Debug)]
 pub struct UpstreamHealth {
+    /// The upstream address these counters describe.
     pub address: SocketAddr,
+    /// Admitted attempts.
     pub attempts: AtomicU64,
+    /// Attempts that produced a validated, non-SERVFAIL/REFUSED reply.
     pub successes: AtomicU64,
+    /// Attempts currently in progress.
     pub inflight: AtomicU64,
+    /// Exponentially weighted mean latency of successes, in microseconds.
     pub ewma_us: AtomicU64,
+    /// Attempts skipped because the address was cooling down.
     pub backoff_skips: AtomicU64,
+    /// Single attempts admitted to test recovery after a cooldown.
     pub recovery_probes: AtomicU64,
     admission: Admission,
     failures: [AtomicU64; FailureKind::ALL.len()],
@@ -69,9 +91,11 @@ impl UpstreamHealth {
             failures: std::array::from_fn(|_| AtomicU64::new(0)),
         }
     }
+    /// Failures recorded as `kind`.
     pub fn failure_count(&self, kind: FailureKind) -> u64 {
         self.failures[kind as usize].load(Ordering::Relaxed)
     }
+    /// Current circuit-breaker state.
     pub fn admission_status(&self) -> AdmissionStatus {
         self.admission.status(Instant::now())
     }

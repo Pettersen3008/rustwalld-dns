@@ -17,16 +17,23 @@ use tokio_util::sync::CancellationToken;
 type SharedResult = Option<Result<Arc<(Message, Instant)>, ()>>;
 type Flights = Arc<Vec<Mutex<HashMap<CacheKey, watch::Receiver<SharedResult>>>>>;
 const FLIGHT_SHARDS: usize = 32;
+/// Monotonic resolver counters.
 #[derive(Default)]
 pub struct ResolverMetrics {
+    /// Answers served from the response cache.
     pub cache_hits: AtomicU64,
+    /// Misses that joined an identical in-flight lookup.
     pub coalesced: AtomicU64,
+    /// Upstream lookups started.
     pub upstream_lookups: AtomicU64,
+    /// Misses refused because `max_inflight` lookups were running.
     pub overloads: AtomicU64,
 }
 /// Bounded response cache plus single-flight forwarding shared by all policies.
 pub struct Resolver {
+    /// Shared response cache (inspection and diagnostics).
     pub cache: ResponseCache,
+    /// Aggregate counters.
     pub metrics: ResolverMetrics,
     flights: Flights,
     hash: RandomState,
@@ -37,12 +44,18 @@ pub struct Resolver {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ResolutionSource {
+    /// The response cache.
     Cache,
+    /// A lookup this call started.
     Upstream,
+    /// An identical lookup already in flight.
     Coalesced,
 }
+/// A resolved response with TTLs aged to now.
 pub struct Resolution {
+    /// Private copy of the response; callers restore their own ID and question.
     pub response: Message,
+    /// Where the answer came from.
     pub source: ResolutionSource,
 }
 /// Outcome of the synchronous cache probe.
@@ -59,6 +72,8 @@ enum Admission {
     Admitted(watch::Sender<SharedResult>, FlightGuard),
 }
 impl Resolver {
+    /// A resolver caching up to `cache_entries` responses and running at most
+    /// `max_inflight` distinct upstream lookups at once.
     pub fn new(cache_entries: usize, max_inflight: usize) -> Arc<Self> {
         Arc::new(Self {
             cache: ResponseCache::new(cache_entries),
@@ -73,9 +88,11 @@ impl Resolver {
             cancel: CancellationToken::new(),
         })
     }
+    /// Cancel in-flight lookups and refuse new ones.
     pub fn shutdown(&self) {
         self.cancel.cancel();
     }
+    /// Distinct lookups currently in flight.
     pub fn inflight(&self) -> usize {
         self.flights
             .iter()

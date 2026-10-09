@@ -6,59 +6,95 @@ use serde::Serialize;
 
 const MAX_REPORTED_SOURCES: usize = 16;
 
+/// Result of checking a candidate configuration without publishing it.
 #[derive(Debug, Serialize)]
 pub struct CheckReport {
+    /// What the assertions were evaluated against (`permanent_policy`:
+    /// temporary exceptions are ignored).
     pub basis: &'static str,
+    /// Whether the configuration compiled and every assertion held.
     pub valid: bool,
+    /// Assertions evaluated.
     pub assertions: usize,
+    /// Assertions that failed.
     pub failed: usize,
+    /// Compiled policies.
     pub policies: usize,
+    /// One result per assertion, in configuration order.
     pub results: Vec<AssertionResult>,
+    /// Per-policy list statistics.
     pub list_stats: Vec<PolicyListStats>,
 }
 
+/// List statistics for one policy.
 #[derive(Debug, Serialize)]
 pub struct PolicyListStats {
+    /// Policy name.
     pub policy: String,
+    /// Counts per list, in input order.
     pub lists: Vec<rustwalld_dns_filter::ListStats>,
 }
 
+/// Outcome of one assertion.
 #[derive(Debug, Serialize)]
 pub struct AssertionResult {
+    /// The assertion checked.
     pub assertion: Assertion,
+    /// Whether the client is inside `allowed_clients`.
     pub permitted: bool,
+    /// How the policy decided, when the domain was valid.
     pub trace: Option<AssertionTrace>,
+    /// Why the assertion failed, if it did.
     pub failure: Option<AssertionFailure>,
 }
 
+/// Why an assertion failed.
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum AssertionFailure {
+    /// The client is outside `allowed_clients`.
     ClientNotPermitted,
+    /// The domain is not a valid name.
     InvalidDomain,
+    /// The policy reached a different decision.
     UnexpectedDecision,
 }
 
+/// How a policy decided an assertion's query.
 #[derive(Debug, Serialize)]
 pub struct AssertionTrace {
+    /// Normalized domain.
     pub domain: String,
+    /// Name of the matching binding, if any.
     pub client_name: Option<String>,
+    /// Network of the matching binding, if any.
     pub network: Option<IpNet>,
+    /// Annotations of the matching binding.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub binding_metadata: Option<crate::BindingMetadata>,
+    /// Selected policy name.
     pub policy: String,
+    /// Filter decision.
     pub decision: Decision,
+    /// Whether a local rewrite answers the name.
     pub rewrite: bool,
+    /// Upstream profile name.
     pub upstream: String,
+    /// Deciding rule, if any.
     pub rule: Option<MatchedRule>,
 }
 
+/// A deciding rule with bounded provenance.
 #[derive(Debug, Serialize)]
 pub struct MatchedRule {
+    /// Rule name.
     pub domain: String,
+    /// Exact or suffix.
     pub matcher: Matcher,
+    /// First declaring sources (at most 16).
     pub sources: Vec<Source>,
+    /// Total declaring sources.
     pub total_sources: usize,
 }
 

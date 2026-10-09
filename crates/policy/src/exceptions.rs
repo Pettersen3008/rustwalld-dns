@@ -11,13 +11,18 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+/// Longest time a newly accepted temporary exception may last.
 pub const MAX_EXCEPTION_REMAINING: Duration = Duration::from_secs(7 * 86400);
 
+/// An operator-approved, time-limited exact-domain allow.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TemporaryException {
+    /// Unique label within its policy.
     pub name: String,
+    /// Domain allowed exactly (not its subdomains).
     pub domain: String,
+    /// Absolute expiry, in Unix seconds.
     pub expires_at: u64,
 }
 
@@ -45,12 +50,17 @@ struct Entry {
 }
 pub(crate) struct Entries(HashMap<String, Entry>);
 
+/// A temporary exception in force for a query.
 pub struct TemporaryMatch<'a> {
+    /// Index within the policy's `temporary_exceptions`.
     pub index: u16,
+    /// The configured exception.
     pub exception: &'a TemporaryException,
     entry: &'a Entry,
 }
 impl TemporaryMatch<'_> {
+    /// Seconds of validity left at `now` by both the monotonic and wall
+    /// clocks, or `None` once expired. Answers' TTLs are capped by this.
     pub fn remaining_ttl(&self, now: Instant) -> Option<u32> {
         self.entry.remaining_at(now, SystemTime::now())
     }

@@ -3,6 +3,7 @@ use crate::{Explanation, PolicyError, PolicySnapshot, Selection};
 use rustwalld_dns_filter::Decision;
 use std::{net::IpAddr, time::Instant};
 impl PolicySnapshot {
+    /// Whether `ip` is inside `allowed_clients`; DNS drops other clients.
     pub fn permits(&self, ip: IpAddr) -> bool {
         let ip = ip.to_canonical();
         self.config
@@ -10,6 +11,7 @@ impl PolicySnapshot {
             .iter()
             .any(|network| network.contains(&ip))
     }
+    /// The policy for `ip`: the longest matching binding, or the default policy.
     pub fn select(&self, ip: IpAddr) -> Selection<'_> {
         let ip = ip.to_canonical();
         let binding = match ip {
@@ -36,6 +38,13 @@ impl PolicySnapshot {
             network: binding.map(|b| b.network),
         }
     }
+    /// How the current generation would answer `domain` for `client`, including
+    /// temporary exceptions. Check `permitted`: DNS drops clients outside
+    /// `allowed_clients`.
+    ///
+    /// # Errors
+    ///
+    /// [`PolicyError::Filter`] when `domain` is not a valid name.
     pub fn explain(&self, client: IpAddr, domain: &str) -> Result<Explanation<'_>, PolicyError> {
         let domain = rustwalld_dns_filter::normalize(domain)?;
         let mut explanation = self.explain_normalized(client, &domain);
@@ -79,6 +88,11 @@ impl PolicySnapshot {
             temporary_exception: None,
         }
     }
+    /// Check every required assertion against this snapshot.
+    ///
+    /// # Errors
+    ///
+    /// [`PolicyError::Assertion`] for the first failing assertion.
     pub fn test_assertions(&self) -> Result<(), PolicyError> {
         for assertion in &self.config.assertions {
             if !self.permits(assertion.client) {

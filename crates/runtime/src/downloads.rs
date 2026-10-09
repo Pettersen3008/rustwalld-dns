@@ -21,15 +21,19 @@ use tokio_rustls::{
 };
 use url::{Host, Position, Url};
 
+/// Deadline for a complete download, including connection and TLS.
 pub const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15);
+/// Largest serialized configuration accepted by the management API.
 pub const MAX_CONFIG_BYTES: usize = 16 * 1024 * 1024;
 
+/// Conditional-request validators remembered from a previous download.
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct Validators {
     etag: Option<String>,
     last_modified: Option<String>,
 }
 impl Validators {
+    /// Single, well-formed `ETag`/`Last-Modified` values from a response.
     pub fn from_headers(headers: &hyper::HeaderMap) -> Self {
         fn single(headers: &hyper::HeaderMap, name: header::HeaderName) -> Option<&str> {
             let mut values = headers.get_all(name).iter();
@@ -51,6 +55,7 @@ impl Validators {
             last_modified,
         }
     }
+    /// Whether a conditional request can be made.
     pub fn usable(&self) -> bool {
         self.etag.is_some() || self.last_modified.is_some()
     }
@@ -91,13 +96,20 @@ fn valid_etag(tag: &str) -> bool {
             .iter()
             .all(|byte| *byte == 0x21 || (0x23..=0x7e).contains(byte))
 }
+/// Outcome of a conditional download.
 pub enum Fetch {
+    /// New content (HTTP 200).
     Modified {
+        /// UTF-8 list text.
         text: String,
+        /// Fingerprint and retrieval time.
         stamp: DownloadStamp,
+        /// Validators for the next conditional request.
         validators: Validators,
     },
+    /// The server confirmed the cached content (HTTP 304).
     NotModified {
+        /// Validators for the next conditional request.
         validators: Validators,
     },
 }
@@ -134,6 +146,11 @@ pub fn sha256(bytes: &[u8]) -> String {
     text
 }
 
+/// Check download sources: count, URL shape, pinned addresses and CA bundles.
+///
+/// # Errors
+///
+/// A description of the first invalid source.
 pub fn validate_config(config: &PolicyConfigSet) -> Result<(), String> {
     if config.filter_sources.len() > 64 {
         return Err("too many downloaded-list sources".into());
@@ -275,12 +292,23 @@ impl Drop for Driver {
     }
 }
 
+/// Unconditionally download `source` over HTTPS to its pinned addresses.
+///
+/// # Errors
+///
+/// A description of the connection, HTTP or content failure.
 pub async fn fetch(source: &FilterSource) -> Result<(String, DownloadStamp), String> {
     match fetch_conditional(source, None).await? {
         Fetch::Modified { text, stamp, .. } => Ok((text, stamp)),
         Fetch::NotModified { .. } => Err("unsolicited HTTP 304".into()),
     }
 }
+/// Download `source`, revalidating with `validators` when given. Bounded by
+/// [`DOWNLOAD_TIMEOUT`] and [`rustwalld_dns_policy::MAX_DOWNLOAD_BYTES`].
+///
+/// # Errors
+///
+/// A description of the connection, HTTP or content failure.
 pub async fn fetch_conditional(
     source: &FilterSource,
     validators: Option<&Validators>,

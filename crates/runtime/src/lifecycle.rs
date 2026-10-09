@@ -10,18 +10,28 @@ type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 /// Resolved configuration values. File loading and HTTP settings belong to hosts.
 #[derive(Clone, Debug)]
 pub struct RuntimeConfig {
+    /// DNS listen address (UDP and TCP); port 0 selects one.
     pub dns_listen: SocketAddr,
+    /// SQLite database path; created 0600 when absent.
     pub database: PathBuf,
+    /// Response-cache entries.
     pub dns_cache_entries: usize,
+    /// Decision-cache entries.
     pub decision_cache_entries: usize,
+    /// Distinct upstream lookups in flight.
     pub max_inflight: usize,
+    /// UDP queries in local processing at once.
     pub max_udp_queries: usize,
     /// UDP cache misses that may wait on upstreams at once; see
     /// [`ServerConfig::max_udp_upstream_waits`].
     pub max_udp_upstream_waits: usize,
+    /// Concurrent DNS TCP connections.
     pub max_tcp_connections: usize,
+    /// Query events buffered for history persistence.
     pub event_queue: usize,
+    /// Query history rows retained.
     pub history_rows: usize,
+    /// Policy that seeds a new database (ignored once one exists).
     pub policy: PolicyConfigSet,
 }
 impl Default for RuntimeConfig {
@@ -42,6 +52,11 @@ impl Default for RuntimeConfig {
     }
 }
 impl RuntimeConfig {
+    /// Validate limits and the seed policy.
+    ///
+    /// # Errors
+    ///
+    /// A description of the first violated bound or rule.
     pub fn validate(&self) -> std::result::Result<(), String> {
         self.validate_limits()?;
         config::validate_policy(&self.policy, self.dns_listen)

@@ -8,10 +8,14 @@ const BATCH_BYTES: usize = 1024 * 1024;
 const PARSE_MIN_BYTES: usize = 64 * 1024;
 const INDEX_MIN_RULES: usize = 32768;
 
+/// Why a [`ParallelCompiler`] could not be created.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum PoolError {
+    /// Worker count outside 1..=4.
     #[error("compilation workers must be between 1 and 4")]
     Workers,
+    /// The thread pool failed to start.
     #[error("could not start compilation workers: {0}")]
     Start(#[from] rayon::ThreadPoolBuildError),
 }
@@ -22,6 +26,11 @@ pub struct ParallelCompiler {
     pool: ThreadPool,
 }
 impl ParallelCompiler {
+    /// Start an owned pool of `workers` threads.
+    ///
+    /// # Errors
+    ///
+    /// [`PoolError::Workers`] outside 1..=4, or [`PoolError::Start`].
     pub fn new(workers: usize) -> Result<Self, PoolError> {
         if !(1..=4).contains(&workers) {
             return Err(PoolError::Workers);
@@ -32,6 +41,12 @@ impl ParallelCompiler {
             .build()?;
         Ok(Self { pool })
     }
+    /// Same result as [`FilterSnapshot::compile`], parsing and indexing large
+    /// inputs on this pool.
+    ///
+    /// # Errors
+    ///
+    /// As for [`FilterSnapshot::compile`].
     pub fn compile(
         &self,
         lists: &[ListInput],

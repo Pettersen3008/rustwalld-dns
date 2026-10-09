@@ -4,68 +4,100 @@ use ipnet::IpNet;
 use rustwalld_dns_filter::{Action, ListInput};
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, SocketAddr};
+/// A named set of upstream addresses sharing one transport.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UpstreamProfile {
+    /// Unique profile name referenced by policies.
     pub name: String,
+    /// Addresses tried in order (1..=8).
     pub addresses: Vec<SocketAddr>,
+    /// Per-attempt deadline in milliseconds.
     pub timeout_ms: u64,
     #[serde(
         default,
         skip_serializing_if = "rustwalld_dns_resolver::UpstreamTransport::is_udp"
     )]
+    /// UDP (default), DNS-over-TLS or DNS-over-HTTPS.
     pub transport: rustwalld_dns_resolver::UpstreamTransport,
 }
+/// Filtering, rewrites and exceptions applied to the clients bound to it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyConfig {
+    /// Unique policy name.
     pub name: String,
+    /// Upstream profile name.
     pub upstream: String,
+    /// Filter lists; any allow rule wins over every block rule.
     #[serde(default)]
     pub lists: Vec<ListInput>,
+    /// Local answers that bypass filtering and forwarding.
     #[serde(default)]
     pub rewrites: Vec<Rewrite>,
+    /// Time-limited exact allows.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub temporary_exceptions: Vec<TemporaryException>,
 }
+/// Local A/AAAA answers for one exact name.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Rewrite {
+    /// Exact name answered locally.
     pub domain: String,
+    /// Addresses returned (A for IPv4, AAAA for IPv6).
     pub addresses: Vec<IpAddr>,
+    /// Answer TTL in seconds (default 60).
     #[serde(default = "rewrite_ttl")]
     pub ttl: u32,
 }
 fn rewrite_ttl() -> u32 {
     60
 }
+/// Selects a policy for clients in a network.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Binding {
+    /// Client network; the longest matching prefix wins.
     pub network: IpNet,
+    /// Policy name.
     pub policy: String,
+    /// Label shown in diagnostics.
     pub name: String,
+    /// Descriptive annotations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<BindingMetadata>,
 }
+/// A required outcome checked before any generation is published.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Assertion {
+    /// Client address to evaluate.
     pub client: IpAddr,
+    /// Domain to evaluate.
     pub domain: String,
+    /// Required decision.
     pub expected: Action,
 }
+/// Complete policy configuration; compiled into an immutable snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyConfigSet {
+    /// Policy for clients without a binding.
     pub default_policy: String,
+    /// Policies in stable order.
     pub policies: Vec<PolicyConfig>,
+    /// Upstream profiles.
     pub upstreams: Vec<UpstreamProfile>,
+    /// Client-to-policy bindings.
     #[serde(default)]
     pub bindings: Vec<Binding>,
+    /// Networks allowed to query; others are dropped without a reply.
     pub allowed_clients: Vec<IpNet>,
+    /// Required assertions.
     #[serde(default)]
     pub assertions: Vec<Assertion>,
+    /// Remote list sources.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub filter_sources: Vec<FilterSource>,
 }
@@ -110,20 +142,31 @@ pub enum PolicyError {
     /// A field failed validation. `field` is a configuration path such as
     /// `policies[2].name`; `reason` explains the rule that failed.
     #[error("invalid configuration: {field}: {reason}")]
-    Field { field: String, reason: String },
+    Field {
+        /// Configuration path, such as `policies[2].name`.
+        field: String,
+        /// The rule that failed.
+        reason: String,
+    },
     /// A collection is outside its documented bounds.
     #[error("invalid configuration: {field} has {actual} entries; expected {min} through {max}")]
     Count {
+        /// Configuration path of the collection.
         field: String,
+        /// Entries supplied.
         actual: usize,
+        /// Fewest entries allowed.
         min: usize,
+        /// Most entries allowed.
         max: usize,
     },
     /// Generation zero is reserved; hosts allocate identifiers from one.
     #[error("invalid configuration: generation must be nonzero")]
     Generation,
+    /// Filter compilation failed.
     #[error(transparent)]
     Filter(#[from] rustwalld_dns_filter::CompileError),
+    /// A required assertion failed.
     #[error("required policy assertion failed: {0}")]
     Assertion(String),
 }

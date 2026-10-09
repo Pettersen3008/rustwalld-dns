@@ -11,17 +11,25 @@ use tokio_util::sync::CancellationToken;
 
 const RETRY_BUSY: Duration = Duration::from_secs(30);
 
+/// Result of the most recent check of a source.
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
+    /// Not checked yet.
     #[default]
     Waiting,
+    /// The content matched the live list.
     Unchanged,
+    /// New content was staged as a shadow for review.
     Staged,
+    /// The check failed; see the error.
     Failed,
+    /// Postponed by a concurrent download, mutation or change.
     Deferred,
+    /// Stopped by shutdown or retirement.
     Cancelled,
 }
+/// The check currently in progress.
 #[derive(Clone, Serialize)]
 pub struct Running {
     generation: u64,
@@ -29,11 +37,13 @@ pub struct Running {
     policy: String,
     list: String,
 }
+/// A manual check waiting for a download slot.
 #[derive(Clone, Copy, Serialize)]
 pub struct Queued {
     generation: u64,
     source: usize,
 }
+/// Schedule and last result for one source.
 #[derive(Serialize)]
 pub struct EntryStatus {
     source: usize,
@@ -48,10 +58,11 @@ pub struct EntryStatus {
     last_http_status: Option<u16>,
     last_download_bytes: Option<usize>,
 }
+/// Refresh state for the active generation.
 #[derive(Serialize)]
 pub struct Status {
     generation: u64,
-    pub paused: Option<&'static str>,
+    pub(crate) paused: Option<&'static str>,
     running: Option<Running>,
     queued: Option<Queued>,
     entries: Vec<EntryStatus>,
@@ -82,6 +93,7 @@ struct Runtime {
     running: Option<Running>,
     queued: Option<Queued>,
 }
+/// Schedule state for scheduled list checks; checks never promote.
 #[derive(Default)]
 pub struct Refresher {
     inner: Mutex<Runtime>,
@@ -165,6 +177,11 @@ impl Refresher {
             .queued = None;
         Ok(())
     }
+    /// Schedule and results for `snapshot`'s sources.
+    ///
+    /// # Errors
+    ///
+    /// When the schedule state is poisoned.
     pub fn status(&self, snapshot: &PolicySnapshot) -> Result<Status, String> {
         let now = Instant::now();
         let wall = wall_now();
@@ -195,6 +212,11 @@ impl Refresher {
                 .collect(),
         })
     }
+    /// Queue an immediate check of source `index`.
+    ///
+    /// # Errors
+    ///
+    /// When a check is already queued or running, or the source has no schedule.
     pub fn enqueue(&self, snapshot: &PolicySnapshot, index: usize) -> Result<(), String> {
         let mut runtime = self.inner.lock().map_err(|_| "refresh state unavailable")?;
         runtime.synchronize(snapshot, Instant::now(), wall_now());
@@ -552,6 +574,7 @@ async fn stage(
     Ok(())
 }
 
+/// Run scheduled checks until `stop`; changed content is staged as a shadow.
 pub async fn run(state: Arc<ControlService>, stop: CancellationToken) {
     loop {
         if stop.is_cancelled() {

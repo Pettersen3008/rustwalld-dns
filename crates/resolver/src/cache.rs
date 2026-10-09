@@ -17,6 +17,7 @@ use std::{
 
 const MAX_SHARDS: usize = 32;
 
+/// Fixed-capacity concurrent cache; see the module documentation.
 pub struct BoundedCache<K, V> {
     shards: Vec<Mutex<Shard<K, V>>>,
     hash: RandomState,
@@ -35,6 +36,7 @@ struct Shard<K, V> {
     capacity: usize,
 }
 impl<K: Eq + Hash, V: Clone> BoundedCache<K, V> {
+    /// A cache holding at most `capacity` entries; zero disables caching.
     pub fn new(capacity: usize) -> Self {
         let count = capacity.clamp(1, MAX_SHARDS);
         let shards = (0..count)
@@ -62,6 +64,7 @@ impl<K: Eq + Hash, V: Clone> BoundedCache<K, V> {
         let shard = &self.shards[usize::try_from(index).unwrap_or_default()];
         (hash, shard)
     }
+    /// A clone of the value for `key`, marking it recently used.
     pub fn get<Q: Hash + Equivalent<K> + ?Sized>(&self, key: &Q) -> Option<V> {
         let (hash, shard) = self.locate(key);
         let mut shard = shard.lock().unwrap_or_else(|e| e.into_inner());
@@ -71,6 +74,7 @@ impl<K: Eq + Hash, V: Clone> BoundedCache<K, V> {
         slot.referenced = true;
         Some(slot.value.clone())
     }
+    /// Insert or replace `key`, evicting a not-recently-used entry when full.
     pub fn insert(&self, key: K, value: V) {
         let (hash, shard) = self.locate(&key);
         let mut shard = shard.lock().unwrap_or_else(|e| e.into_inner());
@@ -117,12 +121,14 @@ impl<K: Eq + Hash, V: Clone> BoundedCache<K, V> {
         };
         index.insert_unique(hash, position, |&slot| slots[slot].hash);
     }
+    /// Entries currently cached (locks each shard briefly).
     pub fn len(&self) -> usize {
         self.shards
             .iter()
             .map(|s| s.lock().unwrap_or_else(|e| e.into_inner()).slots.len())
             .sum()
     }
+    /// Whether no entries are cached.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

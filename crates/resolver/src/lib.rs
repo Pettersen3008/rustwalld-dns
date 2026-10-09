@@ -1,4 +1,5 @@
 #![doc = include_str!("../README.md")]
+#![warn(missing_docs)]
 use hickory_proto::op::{Message, MessageType, ResponseCode};
 use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{
@@ -45,6 +46,7 @@ impl From<h2::Error> for ResolveError {
 }
 
 impl ResolveError {
+    /// Classification used for upstream health counters and backoff.
     pub fn failure_kind(&self) -> FailureKind {
         match self {
             Self::Failure(kind) => *kind,
@@ -156,9 +158,22 @@ pub struct Forwarder {
     health: Arc<Vec<UpstreamHealth>>,
 }
 impl Forwarder {
+    /// Plain UDP (with TCP fallback) to `upstreams`, each attempt bounded by
+    /// `timeout`.
+    ///
+    /// # Errors
+    ///
+    /// [`ResolveError::Configuration`] for 0 or more than 8 addresses or a zero
+    /// timeout.
     pub fn new(upstreams: Vec<SocketAddr>, timeout: Duration) -> Result<Self, ResolveError> {
         Self::with_transport(upstreams, timeout, &UpstreamTransport::Udp)
     }
+    /// `upstreams` over `transport`, compiling TLS trust and pools now.
+    ///
+    /// # Errors
+    ///
+    /// [`ResolveError::Configuration`] for invalid limits, server names, paths
+    /// or CA certificates.
     pub fn with_transport(
         upstreams: Vec<SocketAddr>,
         timeout: Duration,
@@ -199,6 +214,7 @@ impl Forwarder {
             health,
         })
     }
+    /// Upstream addresses in failover order.
     pub fn upstreams(&self) -> &[SocketAddr] {
         &self.addresses
     }
@@ -212,6 +228,13 @@ impl Forwarder {
     pub fn id(&self) -> UpstreamId {
         self.id
     }
+    /// Try each admitted address in order until one returns a validated reply
+    /// other than SERVFAIL/REFUSED. No caching or coalescing; see [`Resolver`].
+    ///
+    /// # Errors
+    ///
+    /// [`ResolveError::Unavailable`] when every address failed or was cooling
+    /// down.
     pub async fn resolve(&self, request: &Message) -> Result<Message, ResolveError> {
         for (endpoint, health) in self.endpoints.iter().zip(self.health.iter()) {
             let Some(attempt) = health.start() else {
@@ -327,12 +350,15 @@ async fn exchange_tcp(
     Ok(response)
 }
 
+/// Strict DNS-over-HTTPS (HTTP/2) forwarding.
 pub mod https;
 mod tls;
 pub use tls::UpstreamTransport;
 
+/// Bounded CLOCK caches shared by response and decision caching.
 pub mod cache;
 mod inflight;
+/// TTL-aware response cache keyed by question, upstream identity and DO/CD.
 pub mod response_cache;
 pub use inflight::{Lookup, Resolution, ResolutionSource, Resolver, ResolverMetrics};
 

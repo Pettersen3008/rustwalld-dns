@@ -1,4 +1,5 @@
 #![doc = include_str!("../README.md")]
+#![warn(missing_docs)]
 mod compile;
 #[cfg(feature = "parallel")]
 mod parallel;
@@ -8,55 +9,89 @@ pub use parallel::{ParallelCompiler, PoolError};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+/// What a matching rule does. Any matching allow rule wins over every block rule.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Action {
+    /// Resolve the name normally.
     Allow,
+    /// Answer NXDOMAIN locally.
     Block,
 }
+/// Which names a rule covers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Matcher {
+    /// Only the rule's own name (`=example.com`).
     Exact,
+    /// The name and every name below it (`example.com`, `||example.com^`).
     Suffix,
 }
+/// One named filter list to compile.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ListInput {
+    /// Unique, nonempty list name of at most 128 bytes; used for provenance.
     pub name: String,
+    /// Default action for the list's rules; `@@` lines are always allows.
     pub action: Action,
+    /// Rule text: domains, `=exact`, `||adblock^`, `*.wildcard` or hosts
+    /// lines, with `#`/`!` comments.
     pub rules: String,
 }
+/// Where a rule came from.
 #[derive(Clone, Debug, Serialize)]
 pub struct Source {
+    /// List name.
     pub list: Arc<str>,
+    /// One-based line number within the list text.
     pub line: usize,
 }
+/// One deduplicated compiled rule with every place it was declared.
 #[derive(Clone, Debug, Serialize)]
 pub struct Rule {
+    /// Identifier within this snapshot; see [`FilterSnapshot::rule`].
     pub id: u32,
+    /// Allow or block.
     pub action: Action,
+    /// Exact or suffix matching.
     pub matcher: Matcher,
+    /// Normalized ASCII name without the root dot.
     pub domain: Arc<str>,
+    /// Every list line that declared this rule, in input order.
     pub sources: Vec<Source>,
+    /// A same-action suffix rule already decides every name this rule matches,
+    /// so it is not indexed; decisions report the subsuming rule instead.
     pub redundant: bool,
 }
+/// Per-list compilation counts.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct ListStats {
+    /// List name.
     pub name: String,
+    /// Non-comment, non-empty lines.
     pub raw: usize,
+    /// Rules first declared by this list.
     pub unique: usize,
+    /// Rules already declared earlier (in this or another list).
     pub duplicates: usize,
+    /// Lines that could not be parsed.
     pub invalid: usize,
+    /// Rules this list declared that are subsumed by a same-action suffix rule.
     pub redundant: usize,
 }
+/// Result of [`FilterSnapshot::evaluate`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct Decision {
+    /// Allow or block.
     pub action: Action,
+    /// Deciding rule, or `None` for the default allow.
     pub rule: Option<u32>,
+    /// How the deciding rule matched.
     pub matcher: Option<Matcher>,
 }
 impl Decision {
+    /// Default allow: no rule matched.
     pub const ALLOW: Self = Self {
         action: Action::Allow,
         rule: None,
@@ -65,15 +100,26 @@ impl Decision {
 }
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
+/// Why compilation or normalization failed.
 pub enum CompileError {
+    /// A name is not a valid DNS name after IDNA conversion.
     #[error("invalid domain: {0}")]
     Domain(String),
+    /// The rule-count or byte budget was exceeded.
     #[error("filter input exceeds rule/byte limits")]
     Limit,
+    /// A list name is empty, longer than 128 bytes or repeated.
     #[error("list names must be unique, nonempty and at most 128 bytes")]
     ListName,
 }
 /// Control-plane normalization. Query names are already ASCII DNS labels.
+///
+/// Converts to lowercase IDNA ASCII without the root dot.
+///
+/// # Errors
+///
+/// [`CompileError::Domain`] for names that are empty, too long, or contain
+/// invalid labels.
 pub fn normalize(input: &str) -> Result<String, CompileError> {
     let input = input.strip_suffix('.').unwrap_or(input);
     let ascii = idna::domain_to_ascii(input)
@@ -145,6 +191,8 @@ impl Ids {
 /// operator-selected lists and lookups never insert.
 pub(crate) type Index = hashbrown::HashMap<Arc<str>, Ids, foldhash::fast::RandomState>;
 
+/// Immutable compiled filter set with rule provenance. Build once off the DNS
+/// executor and share it; evaluation never allocates or locks.
 #[derive(Debug)]
 pub struct FilterSnapshot {
     rules: Vec<Rule>,
@@ -155,9 +203,20 @@ pub struct FilterSnapshot {
     suffix_allows: bool,
     effective_rules: usize,
     payload_bytes: usize,
+    /// Counts per input list, in input order.
     pub stats: Vec<ListStats>,
 }
 impl FilterSnapshot {
+    /// Parse, normalize, deduplicate and index `lists` sequentially.
+    ///
+    /// `max_rules` bounds both raw rule lines and unique rules; `max_bytes`
+    /// bounds the combined list text.
+    ///
+    /// # Errors
+    ///
+    /// [`CompileError::Limit`] when a bound is exceeded and
+    /// [`CompileError::ListName`] for an invalid or repeated list name.
+    /// Invalid rule lines are counted in [`ListStats::invalid`], not errors.
     pub fn compile(
         lists: &[ListInput],
         max_rules: usize,
@@ -199,9 +258,11 @@ impl FilterSnapshot {
         }
         Decision::ALLOW
     }
+    /// The rule with identifier `id`, as reported by [`Decision::rule`].
     pub fn rule(&self, id: u32) -> Option<&Rule> {
         self.rules.get(id as usize)
     }
+    /// Every compiled rule, indexed by identifier.
     pub fn rules(&self) -> &[Rule] {
         &self.rules
     }

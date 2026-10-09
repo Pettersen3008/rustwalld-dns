@@ -99,8 +99,11 @@ struct Outcome<'a> {
 /// Named bounds for caches and upstream work. Zero cache sizes disable caching.
 #[derive(Clone, Copy, Debug)]
 pub struct EngineConfig {
+    /// Response-cache entries.
     pub cache_entries: usize,
+    /// Decision-cache entries.
     pub decision_entries: usize,
+    /// Distinct upstream lookups in flight at once.
     pub max_inflight: usize,
 }
 impl Default for EngineConfig {

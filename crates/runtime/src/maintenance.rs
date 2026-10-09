@@ -13,12 +13,18 @@ use std::{
     time::{Duration, Instant},
 };
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
+/// Summary of a verified database.
 #[derive(Debug, Serialize)]
 pub struct Report {
+    /// Schema version.
     pub schema: i64,
+    /// Active revision.
     pub active_generation: u64,
+    /// Shadow revision, if staged.
     pub shadow_generation: Option<u64>,
+    /// Stored revisions.
     pub revisions: u64,
+    /// Stored query history rows.
     pub history_rows: u64,
 }
 fn read_only(path: &Path) -> Result<Connection> {
@@ -27,6 +33,12 @@ fn read_only(path: &Path) -> Result<Connection> {
     connection.execute_batch("PRAGMA trusted_schema=OFF; PRAGMA query_only=ON;")?;
     Ok(connection)
 }
+/// Open `path` read-only and check its schema, pointers and revisions.
+///
+/// # Errors
+///
+/// When the database is unreadable, has an unsupported schema, unsafe
+/// objects, or dangling pointers.
 pub fn verify(path: &Path) -> Result<Report> {
     let mut connection = read_only(path)?;
     // One read transaction keeps the runtime pointers and revision content consistent.
@@ -120,6 +132,13 @@ fn sidecar(path: &Path, suffix: &str) -> PathBuf {
     name.push(suffix);
     PathBuf::from(name)
 }
+/// Copy a live database (including WAL content) to a new private file,
+/// verify it and publish it without clobbering an existing file.
+///
+/// # Errors
+///
+/// When the copy cannot complete within 30 seconds, verification fails, or
+/// `output` exists.
 pub fn snapshot(source: &Path, output: &Path) -> Result<Report> {
     for path in [
         output.to_path_buf(),

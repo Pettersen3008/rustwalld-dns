@@ -6,6 +6,7 @@ use rustwalld_dns_filter::{Decision, FilterSnapshot};
 use rustwalld_dns_resolver::Forwarder;
 use serde::Serialize;
 use std::{collections::HashMap, net::IpAddr, sync::Arc};
+/// One compiled policy within a snapshot.
 pub struct CompiledPolicy {
     pub(crate) id: usize,
     pub(crate) name: String,
@@ -20,27 +21,43 @@ pub(crate) struct ClientBinding {
     pub(crate) name: String,
     pub(crate) network: IpNet,
 }
+/// Answer to [`PolicySnapshot::explain`].
 #[derive(Serialize)]
 pub struct Explanation<'a> {
+    /// Generation explained.
     pub generation: u64,
+    /// Client address explained.
     pub client: IpAddr,
     /// Whether `allowed_clients` admits this client. DNS silently drops queries
     /// from clients that are not admitted; the remaining trace is hypothetical.
     pub permitted: bool,
+    /// Name of the matching binding, if any.
     pub client_name: Option<&'a str>,
+    /// Network of the matching binding, if any.
     pub network: Option<IpNet>,
+    /// Annotations of the matching binding.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub binding_metadata: Option<&'a BindingMetadata>,
+    /// Selected policy name.
     pub policy: &'a str,
+    /// Filter decision (allow when a rewrite or temporary exception applies).
     pub decision: Decision,
+    /// Deciding rule with provenance.
     pub rule: Option<&'a rustwalld_dns_filter::Rule>,
+    /// Whether a local rewrite answers the name.
     pub rewrite: bool,
+    /// Upstream profile the policy forwards to.
     pub upstream: &'a str,
+    /// Temporary exception in force, if any.
     pub temporary_exception: Option<&'a TemporaryException>,
 }
+/// Policy selected for a client.
 pub struct Selection<'a> {
+    /// The selected policy.
     pub policy: &'a CompiledPolicy,
+    /// Name of the matching binding, if any.
     pub client_name: Option<&'a str>,
+    /// Network of the matching binding, if any.
     pub network: Option<IpNet>,
 }
 /// Complete immutable generation, constructible only through validated compilation.

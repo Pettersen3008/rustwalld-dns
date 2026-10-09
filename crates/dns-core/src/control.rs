@@ -6,14 +6,18 @@ use std::sync::{Arc, Mutex};
 /// Active and optional shadow identifiers used for optimistic concurrency.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PolicyVersion {
+    /// Active generation.
     pub active: u64,
+    /// Shadow generation, if one is staged.
     pub shadow: Option<u64>,
 }
 
 /// Target of an assertion-gated publication.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PublicationTarget {
+    /// Enforce the snapshot; clears any shadow.
     Active,
+    /// Stage the snapshot for side-by-side evaluation without enforcing it.
     Shadow,
 }
 
@@ -21,12 +25,16 @@ pub enum PublicationTarget {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum PublicationError {
+    /// Another reservation is outstanding.
     #[error("policy publication already running")]
     Busy,
+    /// The live version differs from the caller's expected version.
     #[error("configuration changed; inspect the current revision before retrying")]
     Stale,
+    /// The snapshot's generation was already reserved or published.
     #[error("policy generation must exceed all previously reserved generations")]
     Generation,
+    /// A restored generation high-water mark is lower than a snapshot's generation.
     #[error("restored generation high-water mark is invalid")]
     Restore,
 }

@@ -22,6 +22,7 @@ use tokio_rustls::{
     },
 };
 
+/// How a profile reaches its upstream addresses.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 #[non_exhaustive]
@@ -31,20 +32,26 @@ pub enum UpstreamTransport {
     Udp,
     /// Every address in the profile uses this authenticated DNS server identity.
     Tls {
+        /// DNS name the server's certificate must present (no root dot).
         server_name: String,
         /// When present, replaces bundled public roots (private resolvers).
         #[serde(default)]
         ca_pem: Option<String>,
+        /// Connections per address, 1..=8 (default 2).
         #[serde(default = "pool_size")]
         max_connections: usize,
     },
     /// Strict HTTP/2 DNS over HTTPS, POST wire format only.
     Https {
+        /// DNS name the server's certificate must present (no root dot).
         server_name: String,
+        /// Absolute request path and query (default `/dns-query`).
         #[serde(default = "doh_path")]
         path: String,
+        /// When present, replaces bundled public roots (private resolvers).
         #[serde(default)]
         ca_pem: Option<String>,
+        /// Connections per address, 1..=8 (default 2).
         #[serde(default = "pool_size")]
         max_connections: usize,
     },
@@ -56,6 +63,7 @@ fn pool_size() -> usize {
     2
 }
 impl UpstreamTransport {
+    /// Whether this is the default plain-DNS transport.
     pub fn is_udp(&self) -> bool {
         matches!(self, Self::Udp)
     }

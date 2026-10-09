@@ -14,9 +14,13 @@ use std::{
 /// normalized question, the upstream profile identity and the DO/CD bits.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct CacheKey {
+    /// The question with a lowercased name.
     pub query: Query,
+    /// Content identity of the forwarding profile.
     pub upstream: UpstreamId,
+    /// The client's EDNS DO bit.
     pub dnssec_ok: bool,
+    /// The client's CD bit.
     pub checking_disabled: bool,
 }
 impl CacheKey {
@@ -54,10 +58,13 @@ impl Entry {
         response
     }
 }
+/// Bounded cache of upstream responses. Entries expire at their smallest TTL
+/// (capped at one day); negative answers need an SOA and use its minimum.
 pub struct ResponseCache {
     entries: BoundedCache<CacheKey, Arc<Entry>>,
 }
 impl ResponseCache {
+    /// A cache of at most `capacity` responses; zero disables caching.
     pub fn new(capacity: usize) -> Self {
         Self {
             entries: BoundedCache::new(capacity),
@@ -67,9 +74,12 @@ impl ResponseCache {
     pub(crate) fn entry(&self, key: &CacheKey, now: Instant) -> Option<Arc<Entry>> {
         self.entries.get(key).filter(|entry| now < entry.expires)
     }
+    /// A private copy with TTLs aged to `now`, if a live entry exists.
     pub fn get(&self, key: &CacheKey, now: Instant) -> Option<Message> {
         self.entry(key, now).map(|entry| entry.materialize(now))
     }
+    /// Cache a cacheable response, returning whether it was stored. Truncated,
+    /// signed, SERVFAIL-like, zero-TTL and SOA-less negative replies are not.
     pub fn insert(&self, key: CacheKey, mut response: Message, now: Instant) -> bool {
         if response.metadata.truncation
             || response.signature.is_some()
@@ -141,9 +151,11 @@ impl ResponseCache {
         );
         true
     }
+    /// Cached responses, including expired ones not yet evicted.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
+    /// Whether nothing is cached.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }

@@ -101,6 +101,12 @@ impl<'a> FilterSets<'a> {
     }
 }
 impl PolicySnapshot {
+    /// Validate, compile and assertion-check `config` as `generation`.
+    ///
+    /// # Errors
+    ///
+    /// [`PolicyError`] for invalid configuration, filter limits or a failed
+    /// required assertion; no snapshot is produced.
     pub fn compile(config: PolicyConfigSet, generation: u64) -> Result<Self, PolicyError> {
         let snapshot = Self::build(config, generation)?;
         snapshot.test_assertions()?;

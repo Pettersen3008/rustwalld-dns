@@ -45,6 +45,7 @@ impl Default for ServerConfig {
         }
     }
 }
+/// Bounded UDP/TCP DNS listener for one [`Engine`].
 pub struct Server {
     config: ServerConfig,
     udp: Arc<UdpSocket>,
@@ -52,6 +53,11 @@ pub struct Server {
     engine: Arc<Engine>,
 }
 impl Server {
+    /// Bind TCP, then UDP on the same address (the OS-selected port when 0).
+    ///
+    /// # Errors
+    ///
+    /// `InvalidInput` for zero limits or idle timeout, and bind failures.
     pub async fn bind(config: ServerConfig, engine: Arc<Engine>) -> io::Result<Self> {
         if config.max_udp_queries == 0
             || config.max_udp_upstream_waits == 0
@@ -72,6 +78,11 @@ impl Server {
             engine,
         })
     }
+    /// The bound address.
+    ///
+    /// # Errors
+    ///
+    /// When the socket address cannot be read.
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
         self.tcp.local_addr()
     }

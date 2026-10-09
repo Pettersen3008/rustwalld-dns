@@ -35,6 +35,7 @@ pub enum ControlError {
     /// The caller's expected version is no longer current.
     #[error("configuration changed; inspect the current revision before retrying")]
     Stale,
+    /// The requested revision does not exist.
     #[error("revision not found")]
     MissingRevision,
     /// A remote list download failed.
@@ -51,10 +52,15 @@ fn unavailable(error: impl ToString) -> ControlError {
 /// Input to the same assertion-gated workflow used by manual and scheduled edits.
 #[non_exhaustive]
 pub enum Candidate {
+    /// Operator-supplied configuration; temporary exceptions are new intake.
     Config(PolicyConfigSet),
+    /// The live shadow's configuration (promotion).
     Shadow,
+    /// Downloaded list content for a scheduled source.
     Refresh {
+        /// Candidate configuration containing the new content.
         config: PolicyConfigSet,
+        /// Index of the source in `filter_sources`.
         source: usize,
     },
 }
@@ -63,7 +69,9 @@ pub enum Candidate {
 /// every assertion, without creating or publishing a revision.
 #[derive(Debug, Serialize)]
 pub struct DownloadPreview {
+    /// Candidate configuration with the downloaded list applied.
     pub config: PolicyConfigSet,
+    /// Assertion results for the candidate.
     pub report: CheckReport,
     /// Whether the downloaded text differs from the candidate's current list.
     pub changed: bool,
@@ -321,9 +329,15 @@ impl ControlService {
             Ok(())
         }
     }
+    /// Consistent live active/shadow version.
     pub fn version(&self) -> PolicyVersion {
         self.controller.version()
     }
+    /// Fail when `expected` is set and is not the live version.
+    ///
+    /// # Errors
+    ///
+    /// [`ControlError::Stale`].
     pub fn check_revision(&self, expected: Option<PolicyVersion>) -> Result<(), ControlError> {
         if expected.is_some_and(|expected| self.version() != expected) {
             Err(ControlError::Stale)

@@ -25,9 +25,12 @@ pub(crate) struct Ticket {
     epoch: u64,
     pub(crate) probe: bool,
 }
+/// Circuit-breaker state of one upstream address.
 #[derive(Debug, Serialize)]
 pub struct AdmissionStatus {
+    /// `ready`, `cooldown` or `probing`.
     pub state: &'static str,
+    /// Milliseconds until the next probe is admitted (0 when ready).
     pub retry_after_ms: u64,
 }
 

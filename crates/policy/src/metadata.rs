@@ -6,17 +6,24 @@ use std::collections::HashSet;
 /// Combined bytes of all binding annotation text in one configuration.
 pub const MAX_METADATA_BYTES: usize = 8 * 1024 * 1024;
 
+/// Descriptive annotations for a client binding; never used for admission or
+/// policy selection.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct BindingMetadata {
+    /// Grouping label, such as a household or department.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
+    /// Person or team responsible for the client.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
+    /// VLAN identifier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vlan: Option<u16>,
+    /// Free-form labels.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// Free-form note.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }

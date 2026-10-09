@@ -2,6 +2,9 @@
 
 ## 0.1.0 — unreleased
 
+- Explanations (`PolicySnapshot::explain`, `GET /api/v1/explain`) include
+  `permitted`; the console labels non-admitted clients as dropped. Assertion
+  failure messages summarize the matched rule with at most three sources.
 - Policies with identical list inputs share one compiled `FilterSnapshot`, and
   distinct compiled rules are capped at 10,000,000 per snapshot (previously per
   policy, so reused lists multiplied memory).

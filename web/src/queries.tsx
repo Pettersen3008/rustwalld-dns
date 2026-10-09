@@ -344,14 +344,27 @@ export function Queries({ api }: { api: Api }) {
                   This evaluation uses the current configuration; it may differ
                   from the recorded event.
                 </p>
+                {!explanation.permitted && (
+                  <p role="alert">
+                    This client is outside the allowed client networks. DNS
+                    drops its queries without an answer; the trace below is
+                    hypothetical.
+                  </p>
+                )}
                 <dl className="detail-list">
                   <div>
                     <dt>Decision</dt>
                     <dd>
-                      {explanation.rewrite
-                        ? "REWRITE"
-                        : explanation.decision.action.toUpperCase()}
+                      {!explanation.permitted
+                        ? "DROPPED (client not admitted)"
+                        : explanation.rewrite
+                          ? "REWRITE"
+                          : explanation.decision.action.toUpperCase()}
                     </dd>
+                  </div>
+                  <div>
+                    <dt>Client admitted</dt>
+                    <dd>{explanation.permitted ? "Yes" : "No"}</dd>
                   </div>
                   <div>
                     <dt>Effective policy</dt>

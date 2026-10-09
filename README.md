@@ -366,7 +366,7 @@ curl -X POST -H "Authorization: Bearer $RUSTWALLD_API_TOKEN" \
 | `GET /api/v1/shadow` | Current shadow generation/configuration or null, with revision ETag |
 | `PUT /api/v1/config` | Validate, assert, compile, persist and atomically promote |
 | `POST /api/v1/policy/test` | Compile and report all assertions without publication; failures return 422 with a report |
-| `GET /api/v1/explain?client=127.0.0.1&domain=ads.example` | Current policy, matcher, rule and source explanation |
+| `GET /api/v1/explain?client=127.0.0.1&domain=ads.example` | Current policy, matcher, rule and source explanation; `permitted: false` means DNS drops the client and the trace is hypothetical |
 | `POST /api/v1/shadow` | Compile/persist a non-enforcing candidate |
 | `DELETE /api/v1/shadow` | Clear the candidate |
 | `POST /api/v1/shadow/promote` | Promote candidate content as a fresh generation |

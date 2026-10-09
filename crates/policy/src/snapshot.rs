@@ -24,6 +24,9 @@ pub(crate) struct ClientBinding {
 pub struct Explanation<'a> {
     pub generation: u64,
     pub client: IpAddr,
+    /// Whether `allowed_clients` admits this client. DNS silently drops queries
+    /// from clients that are not admitted; the remaining trace is hypothetical.
+    pub permitted: bool,
     pub client_name: Option<&'a str>,
     pub network: Option<IpNet>,
     #[serde(skip_serializing_if = "Option::is_none")]

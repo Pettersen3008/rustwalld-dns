@@ -38,6 +38,14 @@ async fn real_http_auth_assertions_explanations_history_and_metrics() {
         .unwrap();
     assert_eq!(explanation["decision"]["action"], "block");
     assert_eq!(explanation["rule"]["sources"][0]["list"], "test");
+    assert_eq!(explanation["permitted"], true);
+    let dropped: Value = harness
+        .get("/api/v1/explain?client=192.0.2.1&domain=safe.test")
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(dropped["permitted"], false);
     let mut config = harness.state.control.engine.active().config().clone();
     config.assertions.push(rustwalld_dns_policy::Assertion {
         client: "127.0.0.1".parse().unwrap(),

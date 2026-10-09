@@ -277,6 +277,8 @@ export type HistoryEvent = {
 export type Explanation = {
   generation: number;
   client: string;
+  /** False when allowed_clients does not admit the client; DNS drops its queries. */
+  permitted: boolean;
   client_name: string | null;
   network: string | null;
   binding_metadata?: BindingMetadata;

@@ -417,8 +417,14 @@ inspect the two full revisions for their detailed contents.
 - Bounded, sharded single-flight entries survive individual waiter cancellation.
   Cache/inflight mutexes never cover awaits or network operations.
 - The engine passes DO/CD but performs **no DNSSEC validation** and clears AD.
-  Unknown EDNS options (including ECS/cookies), TSIG, transfers, ANY, non-IN,
-  updates and nonrecursive requests are refused. Malformed packets are dropped.
+  EDNS options (including ECS and cookies) are ignored and never forwarded.
+  TSIG, transfers, ANY, non-IN, updates and nonrecursive requests are refused.
+  Malformed packets are dropped.
+- UDP ingress bounds local work (`max_udp_queries`) separately from cache misses
+  waiting on upstreams (`max_udp_upstream_waits`, default 1,024). Blocks,
+  rewrites and cache hits are answered without waiting, so a slow upstream
+  cannot starve them; misses beyond the wait limit get SERVFAIL at once.
+  Listener errors (including descriptor exhaustion) pause only that listener.
 - Input frames are capped at 4,096 bytes; upstream responses at the DNS wire
   maximum. Cache limits are entry counts, not exact byte budgets; record/message
   and request bounds keep growth finite. Tune limits for available memory.

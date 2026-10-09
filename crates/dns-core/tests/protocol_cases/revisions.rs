@@ -9,7 +9,7 @@ async fn reload_under_traffic_generation_invalidation_and_shadow() {
     let client = "127.0.0.1".parse().unwrap();
     let bytes = query(RecordType::A).to_vec().unwrap();
     assert_eq!(
-        Message::from_vec(&engine.answer(&bytes, client, false).await.unwrap())
+        Message::from_vec(&engine.answer(&bytes, client, Transport::Udp).await.unwrap())
             .unwrap()
             .answers
             .len(),
@@ -25,7 +25,7 @@ async fn reload_under_traffic_generation_invalidation_and_shadow() {
         PolicySnapshot::compile(candidate.clone(), 2).unwrap(),
     )));
     assert_eq!(
-        Message::from_vec(&engine.answer(&bytes, client, false).await.unwrap())
+        Message::from_vec(&engine.answer(&bytes, client, Transport::Udp).await.unwrap())
             .unwrap()
             .answers
             .len(),
@@ -41,9 +41,10 @@ async fn reload_under_traffic_generation_invalidation_and_shadow() {
         let bytes = bytes.clone();
         tokio::spawn(async move {
             for _ in 0..200 {
-                let response =
-                    Message::from_vec(&engine.answer(&bytes, client, false).await.unwrap())
-                        .unwrap();
+                let response = Message::from_vec(
+                    &engine.answer(&bytes, client, Transport::Udp).await.unwrap(),
+                )
+                .unwrap();
                 assert!(matches!(
                     response.metadata.response_code,
                     ResponseCode::NoError | ResponseCode::NXDomain
@@ -58,7 +59,7 @@ async fn reload_under_traffic_generation_invalidation_and_shadow() {
     tasks.await.unwrap();
     for _ in 0..10 {
         assert_eq!(
-            Message::from_vec(&engine.answer(&bytes, client, false).await.unwrap())
+            Message::from_vec(&engine.answer(&bytes, client, Transport::Udp).await.unwrap())
                 .unwrap()
                 .metadata
                 .response_code,
@@ -76,7 +77,7 @@ async fn reload_under_traffic_generation_invalidation_and_shadow() {
         .active
         .store(Arc::new(PolicySnapshot::compile(old, 4).unwrap()));
     assert_eq!(
-        Message::from_vec(&engine.answer(&bytes, client, false).await.unwrap())
+        Message::from_vec(&engine.answer(&bytes, client, Transport::Udp).await.unwrap())
             .unwrap()
             .answers
             .len(),

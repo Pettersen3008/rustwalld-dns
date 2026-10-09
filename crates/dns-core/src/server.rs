@@ -1,4 +1,4 @@
-use crate::Engine;
+use crate::{Engine, Prepared, Transport};
 use std::{
     io,
     net::{IpAddr, SocketAddr},
@@ -13,12 +13,24 @@ use tokio::{
     time::{Instant, sleep_until, timeout},
 };
 use tokio_util::sync::CancellationToken;
+/// Listener address and ingress bounds for [`Server`].
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
+    /// UDP and TCP listen address (both transports share the port).
     pub listen: SocketAddr,
+    /// UDP queries being parsed, policy-checked or answered locally at once.
+    /// Further datagrams are dropped. Queries waiting on an upstream do not
+    /// count against this limit.
     pub max_udp_queries: usize,
+    /// UDP cache misses waiting on upstream resolution at once (including
+    /// coalesced waiters). Further misses are answered SERVFAIL immediately, so
+    /// a slow upstream cannot starve blocked, rewritten or cached answers.
+    pub max_udp_upstream_waits: usize,
+    /// Concurrent TCP connections; each serves one query at a time.
     pub max_tcp_connections: usize,
+    /// Per-read/write idle limit for TCP connections.
     pub tcp_idle_timeout: Duration,
+    /// Drain time for in-flight work after cancellation.
     pub shutdown_timeout: Duration,
 }
 impl Default for ServerConfig {
@@ -26,6 +38,7 @@ impl Default for ServerConfig {
         Self {
             listen: SocketAddr::from(([127, 0, 0, 1], 5353)),
             max_udp_queries: 256,
+            max_udp_upstream_waits: 1024,
             max_tcp_connections: 128,
             tcp_idle_timeout: Duration::from_secs(10),
             shutdown_timeout: Duration::from_secs(5),
@@ -41,6 +54,7 @@ pub struct Server {
 impl Server {
     pub async fn bind(config: ServerConfig, engine: Arc<Engine>) -> io::Result<Self> {
         if config.max_udp_queries == 0
+            || config.max_udp_upstream_waits == 0
             || config.max_tcp_connections == 0
             || config.tcp_idle_timeout.is_zero()
         {
@@ -68,6 +82,7 @@ impl Server {
     /// listener briefly, so one transport cannot take the other down.
     pub async fn run(self, cancel: CancellationToken) -> io::Result<()> {
         let udp_limit = Arc::new(Semaphore::new(self.config.max_udp_queries));
+        let wait_limit = Arc::new(Semaphore::new(self.config.max_udp_upstream_waits));
         let tcp_limit = Arc::new(Semaphore::new(self.config.max_tcp_connections));
         let metrics = self.engine.telemetry().metrics.clone();
         let mut tasks = JoinSet::new();
@@ -110,10 +125,25 @@ impl Server {
                     let bytes = buffer[..len].to_vec();
                     let engine = self.engine.clone();
                     let socket = self.udp.clone();
+                    let waits = wait_limit.clone();
+                    let metrics = metrics.clone();
                     tasks.spawn(async move {
-                        let _permit = permit;
-                        if let Some(response) = engine.answer(&bytes, client.ip(), false).await {
-                            let _ = socket.send_to(&response, client).await;
+                        let reply = match engine.prepare(&bytes, client.ip(), Transport::Udp) {
+                            Prepared::Drop => None,
+                            Prepared::Reply(reply) => Some(reply),
+                            Prepared::Forward(pending) => {
+                                // Waiting has its own bound; release the local slot.
+                                drop(permit);
+                                if let Ok(_wait) = waits.try_acquire_owned() {
+                                    engine.forward(pending).await
+                                } else {
+                                    metrics.forward_overloads.fetch_add(1, Ordering::Relaxed);
+                                    engine.reject(pending)
+                                }
+                            }
+                        };
+                        if let Some(reply) = reply {
+                            let _ = socket.send_to(&reply, client).await;
                         }
                     });
                 }
@@ -182,32 +212,31 @@ async fn serve_tcp(
     cancel: CancellationToken,
     idle: Duration,
 ) -> io::Result<()> {
-    // Length and DNS payload are separate writes. Disable Nagle once per
-    // connection so a delayed ACK cannot stall the remaining frame payload.
+    // Replies are written whole; disable Nagle so they are not held back
+    // waiting for the client's ACK of a previous reply.
     stream.set_nodelay(true)?;
     loop {
         let bytes = tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
             result = timeout(idle, async {
-                let len = stream.read_u16().await? as usize;
+                let len = usize::from(stream.read_u16().await?);
                 if !(12..=MAX_QUERY_BYTES).contains(&len) { return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid DNS frame")); }
                 let mut bytes = vec![0; len];
                 stream.read_exact(&mut bytes).await?;
                 Ok::<_, io::Error>(bytes)
             }) => result.map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "DNS idle timeout"))??,
         };
-        let Some(response) = engine.answer(&bytes, client, true).await else {
+        let Some(response) = engine.answer(&bytes, client, Transport::Tcp).await else {
             return Ok(());
         };
-        timeout(idle, async {
-            stream
-                .write_u16(u16::try_from(response.len()).map_err(|_| {
-                    io::Error::new(io::ErrorKind::InvalidData, "DNS response too long")
-                })?)
-                .await?;
-            stream.write_all(&response).await
-        })
-        .await
-        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "DNS write timeout"))??;
+        // Length prefix and message leave in one write (one segment when small).
+        let len = u16::try_from(response.len())
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "DNS response too long"))?;
+        let mut frame = Vec::with_capacity(response.len() + 2);
+        frame.extend_from_slice(&len.to_be_bytes());
+        frame.extend_from_slice(&response);
+        timeout(idle, stream.write_all(&frame))
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "DNS write timeout"))??;
     }
 }

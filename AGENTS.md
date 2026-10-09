@@ -37,6 +37,7 @@ DNS_BENCH_SIZES to expand filter datasets. Network tests use local mock resolver
 and must not query public DNS. Run cargo audit/deny and targeted fuzzing for
 security/dependency/parser changes. Details are in README.md.
 
-The current MVP deliberately refuses transfers, ANY, non-IN, signed queries,
-nonrecursive requests and unknown EDNS options. Extend protocol/cache semantics
-and regression tests together when lifting those limits.
+The current MVP deliberately refuses transfers, ANY, non-IN, signed queries and
+nonrecursive requests. EDNS options are ignored (RFC 6891) and never forwarded;
+upstream requests carry a fresh envelope. Extend protocol/cache semantics and
+regression tests together when lifting those limits or forwarding options.

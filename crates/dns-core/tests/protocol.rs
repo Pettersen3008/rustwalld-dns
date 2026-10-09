@@ -7,7 +7,7 @@ use hickory_proto::{
     },
 };
 use rustwalld_dns_core::telemetry::Telemetry;
-use rustwalld_dns_core::{Server, ServerConfig, reply};
+use rustwalld_dns_core::{Server, ServerConfig, Transport, reply};
 use rustwalld_dns_policy::{Binding, PolicyConfig, TemporaryException};
 use rustwalld_dns_policy::{PolicyConfigSet, PolicySnapshot};
 use std::{

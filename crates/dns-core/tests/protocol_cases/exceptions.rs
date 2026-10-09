@@ -67,7 +67,7 @@ async fn temporary_exact_allow_caps_udp_tcp_cache_ttls_and_expires_without_telem
     assert!(Message::from_vec(&output).unwrap().answers[0].ttl <= 2);
     // Same profile/generation cache, another permanent policy: no TTL contamination.
     let other = engine
-        .answer(&bytes, "127.0.0.2".parse().unwrap(), false)
+        .answer(&bytes, "127.0.0.2".parse().unwrap(), Transport::Udp)
         .await
         .unwrap();
     assert!(Message::from_vec(&other).unwrap().answers[0].ttl >= 50);
@@ -121,7 +121,7 @@ async fn temporary_coalesced_waiters_and_pinned_generation_cannot_answer_after_e
                     .answer(
                         &query(RecordType::A).to_vec().unwrap(),
                         "127.0.0.1".parse().unwrap(),
-                        false,
+                        Transport::Udp,
                     )
                     .await
                     .unwrap(),
@@ -189,13 +189,13 @@ async fn shadow_temporary_allows_expire_without_enforcement_or_reload() {
     )));
     let bytes = query(RecordType::A).to_vec().unwrap();
     let client = "127.0.0.1".parse().unwrap();
-    engine.answer(&bytes, client, false).await.unwrap();
+    engine.answer(&bytes, client, Transport::Udp).await.unwrap();
     let shadow = receiver.recv().await.unwrap().shadow.unwrap();
     assert!(shadow.differs);
     assert_eq!(shadow.temporary_exception, Some(0));
     assert_eq!(shadow.decision.action, rustwalld_dns_filter::Action::Allow);
     wait_exception_expiry(expiry).await;
-    engine.answer(&bytes, client, false).await.unwrap();
+    engine.answer(&bytes, client, Transport::Udp).await.unwrap();
     let shadow = receiver.recv().await.unwrap().shadow.unwrap();
     assert!(!shadow.differs);
     assert!(shadow.temporary_exception.is_none());

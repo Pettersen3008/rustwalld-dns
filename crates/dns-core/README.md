@@ -25,14 +25,19 @@ include the highest retired revision identifier; caches start empty. Publication
 never waits on persistence. Requests already holding a snapshot may finish under
 that generation. Active publication clears shadow state.
 
-`Engine::answer` accepts a wire message and client address; `Server::bind` plus
-`Server::run(CancellationToken)` provides bounded ingress and graceful retirement.
+`Engine::answer` accepts a wire message, client address and `Transport`.
+Servers that bound slow work separately call `Engine::prepare`, which answers
+refusals, blocks, rewrites and cache hits synchronously and returns a
+`PendingQuery` only for cache misses; finish those with `Engine::forward` or shed
+them with `Engine::reject` (SERVFAIL). `Server::bind` plus
+`Server::run(CancellationToken)` provides this bounded ingress, keeps serving
+through listener errors and retires gracefully.
 Events use a bounded channel and may be dropped under pressure; aggregate counters
 record drops. Keep history consumers off DNS workers. See the `embedded` example.
 No app, Axum, SQLite or JSON dependency. HTTP/2 dependencies implement DoH forwarding.
 
-The current protocol contract refuses transfers, ANY, non-IN, signed queries,
-nonrecursive requests and unknown EDNS options. Unsupported requests are not
-silently forwarded. Zero cache capacities disable caching; hosts must select
+The current protocol contract refuses transfers, ANY, non-IN, signed queries and
+nonrecursive requests; EDNS options are ignored and never forwarded. Unsupported
+requests are not silently forwarded. Zero cache capacities disable caching; hosts must select
 finite sensible capacities and isolate DNS/control executors for latency.
 Rust 1.95+, edition 2024; MIT OR Apache-2.0.

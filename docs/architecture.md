@@ -48,8 +48,10 @@ a randomized ID and an OS-selected ephemeral connected UDP socket; validate ID,
 QR, opcode and the complete question before accepting it. Retry truncation via
 TCP. Bound the entire exchange, listeners, connections, frames, cache, inflight
 keys and telemetry. Refuse nonrecursive requests, updates, transfers and signed
-queries; only one IN question is supported. Unknown EDNS options are refused
-until their cache/forwarding semantics are implemented. Pass DO/CD explicitly;
+queries; only one IN question is supported. EDNS options (cookies, ECS, padding
+and unknown codes) are ignored as RFC 6891 requires and never forwarded: the
+resolver sends a fresh EDNS envelope, so options cannot change cached content.
+Implement cache/forwarding semantics before forwarding any. Pass DO/CD explicitly;
 clear AD: this server does not perform DNSSEC validation.
 
 Accepted TCP streams use TCP_NODELAY once per connection. DNS length/payload are

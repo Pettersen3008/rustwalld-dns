@@ -61,7 +61,7 @@ async fn normalized_upstream_flight_preserves_each_clients_question_and_size() {
     let initial = {
         let engine = engine.clone();
         let bytes = request.to_vec().unwrap();
-        tokio::spawn(async move { engine.answer(&bytes, client, false).await.unwrap() })
+        tokio::spawn(async move { engine.answer(&bytes, client, Transport::Udp).await.unwrap() })
     };
     let forwarded = timeout(Duration::from_secs(1), received)
         .await
@@ -80,11 +80,12 @@ async fn normalized_upstream_flight_preserves_each_clients_question_and_size() {
     assert!(edns.options().as_ref().is_empty());
 
     let mut waiters = Vec::new();
-    for (id, lowercase, extended, tcp) in [
-        (43, true, false, false),
-        (44, false, true, false),
-        (45, false, false, true),
+    for (id, lowercase, extended, transport) in [
+        (43, true, false, Transport::Udp),
+        (44, false, true, Transport::Udp),
+        (45, false, false, Transport::Tcp),
     ] {
+        let tcp = transport == Transport::Tcp;
         let mut caller = request.clone();
         caller.metadata.id = id;
         caller.metadata.authentic_data = false;
@@ -101,7 +102,7 @@ async fn normalized_upstream_flight_preserves_each_clients_question_and_size() {
         waiters.push(tokio::spawn(async move {
             let response = Message::from_vec(
                 &engine
-                    .answer(&caller.to_vec().unwrap(), client, tcp)
+                    .answer(&caller.to_vec().unwrap(), client, transport)
                     .await
                     .unwrap(),
             )
@@ -154,7 +155,7 @@ async fn normalized_upstream_flight_preserves_each_clients_question_and_size() {
     // cache without losing the original question or legacy truncation behavior.
     let cached = Message::from_vec(
         &engine
-            .answer(&request.to_vec().unwrap(), client, false)
+            .answer(&request.to_vec().unwrap(), client, Transport::Udp)
             .await
             .unwrap(),
     )
@@ -243,7 +244,7 @@ async fn raw_client_requests_keep_flag_type_and_upstream_identity_cache_partitio
                 for source in [QuerySource::Upstream, QuerySource::Cache] {
                     let response = Message::from_vec(
                         &engine
-                            .answer(&request.to_vec().unwrap(), client, false)
+                            .answer(&request.to_vec().unwrap(), client, Transport::Udp)
                             .await
                             .unwrap(),
                     )
@@ -267,7 +268,7 @@ async fn raw_client_requests_keep_flag_type_and_upstream_identity_cache_partitio
             .answer(
                 &request.to_vec().unwrap(),
                 "127.0.0.2".parse().unwrap(),
-                true,
+                Transport::Tcp,
             )
             .await
             .unwrap();
@@ -280,7 +281,7 @@ async fn raw_client_requests_keep_flag_type_and_upstream_identity_cache_partitio
     ));
     for _ in 0..2 {
         engine
-            .answer(&request.to_vec().unwrap(), client, false)
+            .answer(&request.to_vec().unwrap(), client, Transport::Udp)
             .await
             .unwrap();
         let event = events.try_recv().unwrap();
@@ -300,7 +301,7 @@ async fn raw_client_requests_keep_flag_type_and_upstream_identity_cache_partitio
         .store(Arc::new(PolicySnapshot::compile(config, 3).unwrap()));
     for source in [QuerySource::Upstream, QuerySource::Cache] {
         engine
-            .answer(&request.to_vec().unwrap(), client, false)
+            .answer(&request.to_vec().unwrap(), client, Transport::Udp)
             .await
             .unwrap();
         let event = events.try_recv().unwrap();
@@ -420,7 +421,11 @@ async fn normalized_event_names_preserve_wire_questions_and_all_decision_paths()
                     .answer(
                         &request.to_vec().unwrap(),
                         "::ffff:127.0.0.1".parse().unwrap(),
-                        cached,
+                        if cached {
+                            Transport::Tcp
+                        } else {
+                            Transport::Udp
+                        },
                     )
                     .await
                     .unwrap(),
@@ -494,7 +499,7 @@ async fn normalized_event_names_preserve_wire_questions_and_all_decision_paths()
             .answer(
                 &legacy.to_vec().unwrap(),
                 "127.0.0.1".parse().unwrap(),
-                false,
+                Transport::Udp,
             )
             .await
             .unwrap(),
@@ -522,7 +527,7 @@ async fn normalized_event_names_preserve_wire_questions_and_all_decision_paths()
     assert_eq!(
         Message::from_vec(
             &engine
-                .answer(&invalid, "127.0.0.1".parse().unwrap(), false)
+                .answer(&invalid, "127.0.0.1".parse().unwrap(), Transport::Udp)
                 .await
                 .unwrap()
         )
@@ -554,7 +559,7 @@ async fn full_and_closed_event_queues_preserve_replies_and_drop_accounting() {
     for _ in 0..2 {
         let response = Message::from_vec(
             &engine
-                .answer(&bytes, "127.0.0.1".parse().unwrap(), false)
+                .answer(&bytes, "127.0.0.1".parse().unwrap(), Transport::Udp)
                 .await
                 .unwrap(),
         )
@@ -573,7 +578,7 @@ async fn full_and_closed_event_queues_preserve_replies_and_drop_accounting() {
     drop(receiver);
     let response = Message::from_vec(
         &engine
-            .answer(&bytes, "127.0.0.1".parse().unwrap(), true)
+            .answer(&bytes, "127.0.0.1".parse().unwrap(), Transport::Tcp)
             .await
             .unwrap(),
     )
@@ -599,7 +604,7 @@ async fn simultaneous_misses_coalesce_and_initiator_cancellation_is_safe() {
     let initial = {
         let engine = engine.clone();
         let bytes = bytes.clone();
-        tokio::spawn(async move { engine.answer(&bytes, client, false).await })
+        tokio::spawn(async move { engine.answer(&bytes, client, Transport::Udp).await })
     };
     timeout(Duration::from_secs(1), async {
         while mock.hits.load(Ordering::Relaxed) == 0 {
@@ -613,7 +618,7 @@ async fn simultaneous_misses_coalesce_and_initiator_cancellation_is_safe() {
     for _ in 0..1000 {
         let engine = engine.clone();
         let bytes = bytes.clone();
-        tasks.spawn(async move { engine.answer(&bytes, client, false).await.unwrap() });
+        tasks.spawn(async move { engine.answer(&bytes, client, Transport::Udp).await.unwrap() });
     }
     while let Some(result) = tasks.join_next().await {
         assert_eq!(
@@ -641,7 +646,7 @@ async fn inflight_limit_and_telemetry_overload_do_not_stall_dns() {
     let initial = {
         let engine = engine.clone();
         let bytes = bytes.clone();
-        tokio::spawn(async move { engine.answer(&bytes, client, false).await })
+        tokio::spawn(async move { engine.answer(&bytes, client, Transport::Udp).await })
     };
     timeout(Duration::from_secs(1), async {
         while mock.hits.load(Ordering::Relaxed) == 0 {
@@ -651,7 +656,7 @@ async fn inflight_limit_and_telemetry_overload_do_not_stall_dns() {
     .await
     .unwrap();
     let other = query(RecordType::AAAA).to_vec().unwrap();
-    let response = engine.answer(&other, client, false).await.unwrap();
+    let response = engine.answer(&other, client, Transport::Udp).await.unwrap();
     assert_eq!(
         Message::from_vec(&response).unwrap().metadata.response_code,
         ResponseCode::ServFail
@@ -659,7 +664,12 @@ async fn inflight_limit_and_telemetry_overload_do_not_stall_dns() {
     assert!(engine.resolver().inflight() <= 1);
     initial.await.unwrap();
     for _ in 0..10 {
-        assert!(engine.answer(&bytes, client, false).await.is_some());
+        assert!(
+            engine
+                .answer(&bytes, client, Transport::Udp)
+                .await
+                .is_some()
+        );
     }
     assert!(
         engine

@@ -9,7 +9,7 @@ pub mod telemetry;
 pub use control::{
     PendingPublication, PolicyController, PolicyVersion, PublicationError, PublicationTarget,
 };
-pub use engine::{Engine, EngineConfig};
+pub use engine::{Engine, EngineConfig, PendingQuery, Prepared, Transport};
 pub use response::reply;
 pub use rustwalld_dns_filter::{Action, ListInput};
 pub use rustwalld_dns_policy::{

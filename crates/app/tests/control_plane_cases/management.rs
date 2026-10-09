@@ -216,7 +216,7 @@ async fn upstream_diagnostics_survive_failures_and_reset_with_generation() {
             .answer(
                 &request.to_vec().unwrap(),
                 "127.0.0.1".parse().unwrap(),
-                false,
+                Transport::Udp,
             )
             .await
             .unwrap()

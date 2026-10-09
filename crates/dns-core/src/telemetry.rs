@@ -44,6 +44,9 @@ pub struct Metrics {
     pub temporary_allows: AtomicU64,
     /// UDP queries dropped because `max_udp_queries` workers were busy.
     pub udp_overloads: AtomicU64,
+    /// UDP cache misses answered SERVFAIL because `max_udp_upstream_waits`
+    /// queries were already waiting on upstreams.
+    pub forward_overloads: AtomicU64,
     /// TCP connections closed because `max_tcp_connections` were open.
     pub tcp_overloads: AtomicU64,
     /// Failed UDP receives or TCP accepts; the listener keeps serving.

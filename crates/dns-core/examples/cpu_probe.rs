@@ -4,6 +4,7 @@ use hickory_proto::{
     op::{Message, MessageType, ResponseCode},
     rr::{RData, rdata::A},
 };
+use rustwalld_dns_core::Transport;
 use std::{error::Error, io, sync::atomic::Ordering, time::Instant};
 
 #[path = "../benches/support/fixtures.rs"]
@@ -218,11 +219,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     {
         let (mut engine, bytes) = scenario.fixture();
         let warm = runtime
-            .block_on(engine.answer(&bytes, client, false))
+            .block_on(engine.answer(&bytes, client, Transport::Udp))
             .ok_or_else(|| invalid("missing warm reply"))?;
         validate(scenario, &bytes, &warm)?;
         for _ in 0..10_000 {
-            if std::hint::black_box(runtime.block_on(engine.answer(&bytes, client, false)))
+            if std::hint::black_box(runtime.block_on(engine.answer(&bytes, client, Transport::Udp)))
                 .is_none()
                 || engine
                     .resolver()
@@ -256,7 +257,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 if std::hint::black_box(runtime.block_on(engine.answer(
                     std::hint::black_box(&bytes),
                     client,
-                    false,
+                    Transport::Udp,
                 )))
                 .is_none()
                     || engine
@@ -286,7 +287,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 return Err(invalid("query/source counters failed to reconcile").into());
             }
             let sample = runtime
-                .block_on(engine.answer(&bytes, client, false))
+                .block_on(engine.answer(&bytes, client, Transport::Udp))
                 .ok_or_else(|| invalid("missing final reply"))?;
             validate(scenario, &bytes, &sample)?;
             println!(
@@ -366,7 +367,7 @@ mod tests {
             .build()
             .unwrap();
         let response = runtime
-            .block_on(engine.answer(&bytes, "127.0.0.1".parse().unwrap(), false))
+            .block_on(engine.answer(&bytes, "127.0.0.1".parse().unwrap(), Transport::Udp))
             .unwrap();
         validate(Scenario::Cache, &bytes, &response).unwrap();
         let mut wrong = Message::from_vec(&response).unwrap();

@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used)]
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use hickory_proto::op::Message;
-use rustwalld_dns_core::telemetry::Telemetry;
+use rustwalld_dns_core::{Transport, telemetry::Telemetry};
 use std::time::Instant;
 #[path = "support/fixtures.rs"]
 mod fixtures;
@@ -30,9 +30,9 @@ fn bench(c: &mut Criterion) {
         ("decision_cache_blocked_wire", &blocked),
         ("dns_cache_hit_wire", &cached),
     ] {
-        runtime.block_on(engine.answer(bytes, client, false));
+        runtime.block_on(engine.answer(bytes, client, Transport::Udp));
         let allocations = allocation_counter::measure(|| {
-            std::hint::black_box(runtime.block_on(engine.answer(bytes, client, false)));
+            std::hint::black_box(runtime.block_on(engine.answer(bytes, client, Transport::Udp)));
         });
         eprintln!(
             "{name}: {} allocations / {} allocated bytes per warm query",
@@ -43,7 +43,7 @@ fn bench(c: &mut Criterion) {
                 std::hint::black_box(runtime.block_on(engine.answer(
                     std::hint::black_box(bytes),
                     client,
-                    false,
+                    Transport::Udp,
                 )))
             })
         });
@@ -63,21 +63,27 @@ fn bench(c: &mut Criterion) {
         let (engine, bytes) = fixtures::dnssec_cache(long_name);
         let request = Message::from_vec(&bytes).unwrap();
         let warm = runtime
-            .block_on(engine.answer(&bytes, client, false))
+            .block_on(engine.answer(&bytes, client, Transport::Udp))
             .unwrap();
         let response = Message::from_vec(&warm).unwrap();
         assert_eq!(response.answers.len(), 1);
         assert_eq!(response.queries, request.queries);
         assert!(!response.metadata.truncation);
         let allocations = allocation_counter::measure(|| {
-            std::hint::black_box(runtime.block_on(engine.answer(&bytes, client, false)));
+            std::hint::black_box(runtime.block_on(engine.answer(&bytes, client, Transport::Udp)));
         });
         eprintln!(
             "{name}: {} allocations / {} allocated bytes per warm query",
             allocations.count_total, allocations.bytes_total
         );
         c.bench_function(name, |b| {
-            b.iter(|| std::hint::black_box(runtime.block_on(engine.answer(&bytes, client, false))))
+            b.iter(|| {
+                std::hint::black_box(runtime.block_on(engine.answer(
+                    &bytes,
+                    client,
+                    Transport::Udp,
+                )))
+            })
         });
         assert_eq!(
             engine
@@ -115,9 +121,9 @@ fn bench(c: &mut Criterion) {
             );
         }
         let bytes = if cached_path { cached } else { blocked };
-        runtime.block_on(engine.answer(&bytes, client, false));
+        runtime.block_on(engine.answer(&bytes, client, Transport::Udp));
         let allocations = allocation_counter::measure(|| {
-            std::hint::black_box(runtime.block_on(engine.answer(&bytes, client, false)));
+            std::hint::black_box(runtime.block_on(engine.answer(&bytes, client, Transport::Udp)));
         });
         eprintln!(
             "{name}: {} allocations / {} allocated bytes per warm query",
@@ -128,7 +134,7 @@ fn bench(c: &mut Criterion) {
                 std::hint::black_box(runtime.block_on(engine.answer(
                     std::hint::black_box(&bytes),
                     client,
-                    false,
+                    Transport::Udp,
                 )))
             })
         });
@@ -143,19 +149,21 @@ fn bench(c: &mut Criterion) {
     }
     let (engine, blocked) = fixtures::rewrite();
     let response = runtime
-        .block_on(engine.answer(&blocked, client, false))
+        .block_on(engine.answer(&blocked, client, Transport::Udp))
         .unwrap();
     assert_eq!(Message::from_vec(&response).unwrap().answers.len(), 1);
     // Keep response parsing outside the allocation probe.
     let allocations = allocation_counter::measure(|| {
-        std::hint::black_box(runtime.block_on(engine.answer(&blocked, client, false)));
+        std::hint::black_box(runtime.block_on(engine.answer(&blocked, client, Transport::Udp)));
     });
     eprintln!(
         "local_rewrite_wire: {} allocations / {} allocated bytes per query",
         allocations.count_total, allocations.bytes_total
     );
     c.bench_function("local_rewrite_wire", |b| {
-        b.iter(|| std::hint::black_box(runtime.block_on(engine.answer(&blocked, client, false))))
+        b.iter(|| {
+            std::hint::black_box(runtime.block_on(engine.answer(&blocked, client, Transport::Udp)))
+        })
     });
     assert_eq!(
         engine
@@ -176,12 +184,12 @@ fn bench(c: &mut Criterion) {
         let (telemetry, mut receiver) = Telemetry::channel(1);
         engine = engine.with_telemetry(telemetry);
         let bytes = if cached_path { cached } else { blocked };
-        runtime.block_on(engine.answer(&bytes, client, false));
+        runtime.block_on(engine.answer(&bytes, client, Transport::Udp));
         if !full {
             receiver.try_recv().unwrap();
         }
         let allocations = allocation_counter::measure(|| {
-            std::hint::black_box(runtime.block_on(engine.answer(&bytes, client, false)));
+            std::hint::black_box(runtime.block_on(engine.answer(&bytes, client, Transport::Udp)));
         });
         eprintln!(
             "{name}: {} allocations / {} allocated bytes per warm query",
@@ -190,7 +198,11 @@ fn bench(c: &mut Criterion) {
         c.bench_function(name, |b| {
             if full {
                 b.iter(|| {
-                    std::hint::black_box(runtime.block_on(engine.answer(&bytes, client, false)))
+                    std::hint::black_box(runtime.block_on(engine.answer(
+                        &bytes,
+                        client,
+                        Transport::Udp,
+                    )))
                 });
             } else {
                 // PerIteration guarantees an empty live queue for every answer.
@@ -200,7 +212,11 @@ fn bench(c: &mut Criterion) {
                         receiver.try_recv().unwrap();
                     },
                     |()| {
-                        std::hint::black_box(runtime.block_on(engine.answer(&bytes, client, false)))
+                        std::hint::black_box(runtime.block_on(engine.answer(
+                            &bytes,
+                            client,
+                            Transport::Udp,
+                        )))
                     },
                     BatchSize::PerIteration,
                 );

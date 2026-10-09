@@ -7,7 +7,7 @@ use rustwalld_dns::{
     api::{self, AppState},
     store::Store,
 };
-use rustwalld_dns_core::{Engine, Server, ServerConfig, telemetry::Telemetry};
+use rustwalld_dns_core::{Engine, Server, ServerConfig, Transport, telemetry::Telemetry};
 use rustwalld_dns_filter::{Action, ListInput};
 use rustwalld_dns_policy::{PolicyConfigSet, PolicySnapshot};
 use serde_json::Value;

@@ -116,7 +116,7 @@ async fn conditional_schedules_preserve_revisions_and_bind_validators_to_live_co
     let harness = Harness::start().await;
     let fixture = download_fixture::Fixture::start().await;
     let (upstream, mock) = local_dns().await;
-    let mut config = harness.state.control.engine.active().config().clone();
+    let mut config = harness.state.control.engine().active().config().clone();
     config.upstreams[0].addresses = vec![upstream];
     let mut source = fixture.source("/conditional");
     source.refresh_interval_secs = Some(300);
@@ -173,7 +173,7 @@ async fn conditional_schedules_preserve_revisions_and_bind_validators_to_live_co
     );
     checked(&harness, &fixture, "unchanged", 304).await;
     // New generation, same stored body: fingerprint is still valid.
-    let mut config = harness.state.control.engine.active().config().clone();
+    let mut config = harness.state.control.engine().active().config().clone();
     config.policies[0]
         .rewrites
         .push(rustwalld_dns_policy::Rewrite {
@@ -222,7 +222,7 @@ async fn conditional_schedules_preserve_revisions_and_bind_validators_to_live_co
             .contains("contradicts")
     );
     assert_eq!(harness.state.control.next_generation(), next);
-    assert!(harness.state.control.engine.shadow().is_none());
+    assert!(harness.state.control.engine().shadow().is_none());
     assert_eq!(
         harness.dns("changed.test").await.metadata.response_code,
         ResponseCode::NXDomain
@@ -245,14 +245,14 @@ async fn conditional_schedules_preserve_revisions_and_bind_validators_to_live_co
             .clone()
             .with_refresher(Arc::new(rustwalld_dns::refreshes::Refresher::default())),
     );
-    state.refreshes.enqueue(&state.engine.active(), 0).unwrap();
+    state.queue_refresh(0, state.version()).unwrap();
     let worker = tokio::spawn(rustwalld_dns::refreshes::run(
         state.clone(),
         worker_stop.clone(),
     ));
     timeout(Duration::from_secs(3), async {
         loop {
-            if serde_json::to_value(state.refreshes.status(&state.engine.active()).unwrap())
+            if serde_json::to_value(state.refresh_status().unwrap())
                 .unwrap()["entries"][0]["outcome"]
                 == "unchanged"
             {
@@ -281,7 +281,7 @@ async fn conditional_schedules_preserve_revisions_and_bind_validators_to_live_co
 async fn delayed_conditional_reply_cannot_validate_a_concurrently_edited_generation() {
     let harness = Harness::start().await;
     let fixture = download_fixture::Fixture::start().await;
-    let mut config = harness.state.control.engine.active().config().clone();
+    let mut config = harness.state.control.engine().active().config().clone();
     let mut source = fixture.source("/conditional");
     source.refresh_interval_secs = Some(300);
     config.filter_sources = vec![source];
@@ -305,8 +305,8 @@ async fn delayed_conditional_reply_cannot_validate_a_concurrently_edited_generat
         200
     );
     refresh_state(&harness, "deferred").await;
-    assert_eq!(harness.state.control.engine.active().generation(), 3);
-    assert!(harness.state.control.engine.shadow().is_none());
+    assert_eq!(harness.state.control.engine().active().generation(), 3);
+    assert!(harness.state.control.engine().shadow().is_none());
     assert_eq!(
         harness.dns("manual.test").await.metadata.response_code,
         ResponseCode::NXDomain
@@ -329,7 +329,7 @@ async fn periodic_refresh_is_durable_shadow_only_pauses_and_unchanged_allocates_
     let harness = Harness::start().await;
     let fixture = download_fixture::Fixture::start().await;
     let (upstream, mock) = local_dns().await;
-    let mut config = harness.state.control.engine.active().config().clone();
+    let mut config = harness.state.control.engine().active().config().clone();
     config.upstreams[0].addresses = vec![upstream];
     let mut source = fixture.source("/ok");
     source.refresh_interval_secs = Some(300);
@@ -357,12 +357,12 @@ async fn periodic_refresh_is_durable_shadow_only_pauses_and_unchanged_allocates_
     );
     let status = refresh_state(&harness, "staged").await;
     assert_eq!(status["paused"], "shadow_review");
-    assert_eq!(harness.state.control.engine.active().generation(), 2);
+    assert_eq!(harness.state.control.engine().active().generation(), 2);
     assert_eq!(
         harness
             .state
             .control
-            .engine
+            .engine()
             .shadow()
             .as_ref()
             .unwrap()
@@ -376,7 +376,7 @@ async fn periodic_refresh_is_durable_shadow_only_pauses_and_unchanged_allocates_
     let boot = harness
         .state
         .control
-        .store
+        .store()
         .bootstrap("ignored".into())
         .await
         .unwrap();
@@ -384,7 +384,7 @@ async fn periodic_refresh_is_durable_shadow_only_pauses_and_unchanged_allocates_
     assert_eq!(boot.shadow, Some(3));
     let revisions: Value = harness.get("/api/v1/revisions").await.json().await.unwrap();
     assert_eq!(revisions[0]["actor"], "scheduled-refresh");
-    let saved = harness.state.control.store.revision(3).await.unwrap();
+    let saved = harness.state.control.store().revision(3).await.unwrap();
     let restored: PolicyConfigSet = serde_json::from_value(saved.unwrap().config).unwrap();
     assert_eq!(restored.filter_sources[0].refresh_interval_secs, Some(300));
     assert_eq!(
@@ -430,12 +430,12 @@ async fn periodic_refresh_is_durable_shadow_only_pauses_and_unchanged_allocates_
     let status = refresh_state(&harness, "unchanged").await;
     assert_eq!(status["entries"][0]["checked_generation"], 4);
     assert_eq!(harness.state.control.next_generation(), next);
-    assert!(harness.state.control.engine.shadow().is_none());
+    assert!(harness.state.control.engine().shadow().is_none());
     assert_eq!(
         fixture.requests.load(std::sync::atomic::Ordering::SeqCst),
         2
     );
-    let mut disabled = harness.state.control.engine.active().config().clone();
+    let mut disabled = harness.state.control.engine().active().config().clone();
     disabled.filter_sources[0].refresh_interval_secs = None;
     assert_eq!(
         harness
@@ -465,7 +465,7 @@ async fn periodic_refresh_is_durable_shadow_only_pauses_and_unchanged_allocates_
 async fn scheduled_failures_keep_last_good_dns_and_shutdown_cancels_stalled_io() {
     let harness = Harness::start().await;
     let fixture = download_fixture::Fixture::start().await;
-    let mut config = harness.state.control.engine.active().config().clone();
+    let mut config = harness.state.control.engine().active().config().clone();
     config.assertions = vec![rustwalld_dns_policy::Assertion {
         client: "127.0.0.1".parse().unwrap(),
         domain: "ads.test".into(),
@@ -483,7 +483,7 @@ async fn scheduled_failures_keep_last_good_dns_and_shutdown_cancels_stalled_io()
             harness.send("/api/v1/config", &config, true).await.status(),
             200
         );
-        let generation = harness.state.control.engine.active().generation();
+        let generation = harness.state.control.engine().active().generation();
         let status = refresh_state(&harness, "failed").await;
         assert!(
             status["entries"][0]["error"]
@@ -493,9 +493,9 @@ async fn scheduled_failures_keep_last_good_dns_and_shutdown_cancels_stalled_io()
             "{status}"
         );
         assert!(status["entries"][0]["error"].as_str().unwrap().len() <= 1024);
-        assert!(harness.state.control.engine.shadow().is_none());
+        assert!(harness.state.control.engine().shadow().is_none());
         assert_eq!(
-            harness.state.control.engine.active().generation(),
+            harness.state.control.engine().active().generation(),
             generation
         );
         assert_eq!(
@@ -540,15 +540,15 @@ async fn scheduled_failures_keep_last_good_dns_and_shutdown_cancels_stalled_io()
         .await
         .unwrap();
     fixture.wait_closed().await;
-    assert!(state.control.engine.shadow().is_none());
-    assert_eq!(state.control.downloads.available_permits(), 1);
+    assert!(state.control.engine().shadow().is_none());
+    assert!(!state.control.is_downloading());
 }
 
 #[tokio::test]
 async fn a_generation_or_operator_shadow_during_fetch_cannot_be_overwritten() {
     let harness = Harness::start().await;
     let fixture = download_fixture::Fixture::start().await;
-    let mut config = harness.state.control.engine.active().config().clone();
+    let mut config = harness.state.control.engine().active().config().clone();
     let mut source = fixture.source("/slow");
     source.refresh_interval_secs = Some(300);
     config.filter_sources = vec![source];
@@ -566,8 +566,8 @@ async fn a_generation_or_operator_shadow_during_fetch_cannot_be_overwritten() {
     );
     let status = refresh_state(&harness, "deferred").await;
     assert_eq!(status["entries"][0]["checked_generation"], 2);
-    assert_eq!(harness.state.control.engine.active().generation(), 3);
-    assert!(harness.state.control.engine.shadow().is_none());
+    assert_eq!(harness.state.control.engine().active().generation(), 3);
+    assert!(harness.state.control.engine().shadow().is_none());
     assert_eq!(
         queue_check(&harness, Some(&current_etag(&harness).await))
             .await
@@ -583,7 +583,7 @@ async fn a_generation_or_operator_shadow_during_fetch_cannot_be_overwritten() {
             .status(),
         200
     );
-    let shadow = harness.state.control.engine.shadow_snapshot().unwrap();
+    let shadow = harness.state.control.engine().shadow_snapshot().unwrap();
     // Wait for the second attempt's completion, not the previous deferred result.
     timeout(Duration::from_secs(3), async {
         loop {
@@ -605,7 +605,7 @@ async fn a_generation_or_operator_shadow_during_fetch_cannot_be_overwritten() {
         harness
             .state
             .control
-            .engine
+            .engine()
             .shadow()
             .as_ref()
             .unwrap()
@@ -628,7 +628,7 @@ async fn a_generation_or_operator_shadow_during_fetch_cannot_be_overwritten() {
 async fn scheduled_sqlite_failure_leaves_dns_and_revision_live_then_recovers() {
     let harness = Harness::start().await;
     let fixture = download_fixture::Fixture::start().await;
-    let mut config = harness.state.control.engine.active().config().clone();
+    let mut config = harness.state.control.engine().active().config().clone();
     let mut source = fixture.source("/ok");
     source.refresh_interval_secs = Some(300);
     source.download = Some(rustwalld_dns_policy::DownloadStamp {
@@ -659,8 +659,8 @@ async fn scheduled_sqlite_failure_leaves_dns_and_revision_live_then_recovers() {
             .unwrap()
             .contains("locked")
     );
-    assert_eq!(harness.state.control.engine.active().generation(), 2);
-    assert!(harness.state.control.engine.shadow().is_none());
+    assert_eq!(harness.state.control.engine().active().generation(), 2);
+    assert!(harness.state.control.engine().shadow().is_none());
     assert_eq!(
         harness.dns("ads.test").await.metadata.response_code,
         ResponseCode::NXDomain
@@ -675,7 +675,7 @@ async fn scheduled_sqlite_failure_leaves_dns_and_revision_live_then_recovers() {
     );
     let status = refresh_state(&harness, "staged").await;
     assert_eq!(status["paused"], "shadow_review");
-    assert_eq!(harness.state.control.engine.active().generation(), 2);
+    assert_eq!(harness.state.control.engine().active().generation(), 2);
     harness.shutdown().await;
 }
 
@@ -684,7 +684,7 @@ async fn downloaded_list_preview_durable_shadow_promotion_provenance_and_rollbac
     let harness = Harness::start().await;
     let fixture = download_fixture::Fixture::start().await;
     let (upstream, mock) = local_dns().await;
-    let mut baseline = harness.state.control.engine.active().config().clone();
+    let mut baseline = harness.state.control.engine().active().config().clone();
     baseline.upstreams[0].addresses = vec![upstream];
     baseline.assertions = vec![rustwalld_dns_policy::Assertion {
         client: "127.0.0.1".parse().unwrap(),
@@ -698,7 +698,7 @@ async fn downloaded_list_preview_durable_shadow_promotion_provenance_and_rollbac
             .status(),
         200
     );
-    let original = harness.state.control.engine.active().generation();
+    let original = harness.state.control.engine().active().generation();
     let response = harness.get("/api/v1/config").await;
     let etag = response.headers()["etag"].to_str().unwrap().to_owned();
     let mut config = baseline.clone();
@@ -737,7 +737,10 @@ async fn downloaded_list_preview_durable_shadow_promotion_provenance_and_rollbac
         rustwalld_dns::downloads::sha256(candidate.policies[0].lists[0].rules.as_bytes())
     );
     assert_eq!(harness.state.control.next_generation(), next);
-    assert_eq!(harness.state.control.engine.active().generation(), original);
+    assert_eq!(
+        harness.state.control.engine().active().generation(),
+        original
+    );
     assert_eq!(
         harness.dns("downloaded.test.").await.metadata.response_code,
         ResponseCode::NoError
@@ -765,11 +768,12 @@ async fn downloaded_list_preview_durable_shadow_promotion_provenance_and_rollbac
     let promoted = reqwest::Client::new()
         .post(format!("{}/api/v1/shadow/promote", harness.base))
         .bearer_auth(TOKEN)
+        .header("If-Match", current_etag(&harness).await)
         .send()
         .await
         .unwrap();
     assert_eq!(promoted.status(), 200);
-    let generation = harness.state.control.engine.active().generation();
+    let generation = harness.state.control.engine().active().generation();
     assert!(generation > original);
     assert_eq!(
         harness.dns("downloaded.test.").await.metadata.response_code,
@@ -818,7 +822,7 @@ async fn downloaded_list_preview_durable_shadow_promotion_provenance_and_rollbac
         422
     );
     assert_eq!(
-        harness.state.control.engine.active().generation(),
+        harness.state.control.engine().active().generation(),
         generation
     );
     assert_eq!(
@@ -851,6 +855,7 @@ async fn downloaded_list_preview_durable_shadow_promotion_provenance_and_rollbac
                 harness.base
             ))
             .bearer_auth(TOKEN)
+            .header("If-Match", current_etag(&harness).await)
             .send()
             .await
             .unwrap()
@@ -865,7 +870,7 @@ async fn downloaded_list_preview_durable_shadow_promotion_provenance_and_rollbac
         harness
             .state
             .control
-            .engine
+            .engine()
             .active()
             .config()
             .filter_sources
@@ -880,7 +885,7 @@ async fn downloaded_list_preview_durable_shadow_promotion_provenance_and_rollbac
 async fn downloads_reject_tls_http_body_rules_and_assertion_failures_without_publication() {
     let harness = Harness::start().await;
     let fixture = download_fixture::Fixture::start().await;
-    let config = harness.state.control.engine.active().config().clone();
+    let config = harness.state.control.engine().active().config().clone();
     let etag = harness.get("/api/v1/config").await.headers()["etag"]
         .to_str()
         .unwrap()
@@ -953,7 +958,7 @@ async fn downloads_reject_tls_http_body_rules_and_assertion_failures_without_pub
         .bootstrap_ips
         .insert(0, "127.0.0.2".parse().unwrap());
     assert!(rustwalld_dns::downloads::fetch(&fallback).await.is_ok());
-    assert_eq!(harness.state.control.engine.active().generation(), 1);
+    assert_eq!(harness.state.control.engine().active().generation(), 1);
     assert_eq!(harness.state.control.next_generation(), 2);
     fixture.wait_closed().await;
     harness.shutdown().await;
@@ -963,7 +968,7 @@ async fn downloads_reject_tls_http_body_rules_and_assertion_failures_without_pub
 async fn stalled_bounded_downloads_allow_dns_and_mutations_cancel_close_and_reject_stale_preview() {
     let harness = Harness::start().await;
     let fixture = download_fixture::Fixture::start().await;
-    let original = harness.state.control.engine.active().config().clone();
+    let original = harness.state.control.engine().active().config().clone();
     let etag = harness.get("/api/v1/config").await.headers()["etag"]
         .to_str()
         .unwrap()
@@ -1019,8 +1024,8 @@ async fn stalled_bounded_downloads_allow_dns_and_mutations_cancel_close_and_reje
     }
     assert_eq!(preview(&harness, &config, Some(&etag)).await.status(), 409);
     assert_eq!(stalled.await.unwrap().status(), 502);
-    assert_eq!(harness.state.control.downloads.available_permits(), 1);
-    assert_eq!(harness.state.control.engine.active().generation(), 2);
+    assert!(!harness.state.control.is_downloading());
+    assert_eq!(harness.state.control.engine().active().generation(), 2);
     fixture.wait_closed().await;
     harness.shutdown().await;
 }

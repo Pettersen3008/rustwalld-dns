@@ -30,6 +30,7 @@ toml = "1"
 clap = { version = "4", features = ["derive"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 subtle = "2"
+ring = "0.17"
 tower-http = { version = "0.6", features = ["fs"] }
 
 
@@ -38,7 +39,6 @@ httpdate = "1.0.3"
 rusqlite = { version = "0.38", features = ["bundled", "backup"] }
 tempfile = "3"
 bytes = "1"
-ring = "0.17"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
 reqwest = { version = "0.13", default-features = false, features = ["json"] }
 hickory-proto.workspace = true

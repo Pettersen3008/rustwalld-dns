@@ -13,7 +13,7 @@ use std::{
 
 pub const MAX_EXCEPTION_REMAINING: Duration = Duration::from_secs(7 * 86400);
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TemporaryException {
     pub name: String,

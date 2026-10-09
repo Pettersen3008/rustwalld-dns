@@ -63,7 +63,7 @@ mod tests {
             let report = control.test(bad).await.unwrap();
             assert!(!report.valid);
             assert_eq!(report.failed, 1);
-            assert_eq!(control.engine.snapshot().generation(), 1);
+            assert_eq!(control.engine().snapshot().generation(), 1);
         }
         // A durable service must reject unrelated publication capabilities and reused IDs.
         let policy = config.policy.clone();
@@ -76,10 +76,10 @@ mod tests {
             Engine::controlled(snapshot, EngineConfig::default(), telemetry);
         assert!(matches!(
             ControlService::new(
-                control.engine.clone(),
+                control.engine().clone(),
                 foreign_controller.clone(),
-                control.store.clone(),
-                control.listen,
+                control.store().clone(),
+                control.listen(),
                 2
             ),
             Err(ControlError::Invalid(_))
@@ -88,8 +88,8 @@ mod tests {
             ControlService::new(
                 std::sync::Arc::new(foreign_engine),
                 foreign_controller,
-                control.store.clone(),
-                control.listen,
+                control.store().clone(),
+                control.listen(),
                 1
             ),
             Err(ControlError::Invalid(_))
@@ -99,7 +99,7 @@ mod tests {
         let serving = tokio::spawn(runtime.run(stop.clone()));
         let database = rusqlite::Connection::open(&config.database).unwrap();
         database.execute_batch("BEGIN IMMEDIATE").unwrap();
-        let mut candidate = control.engine.snapshot().config().clone();
+        let mut candidate = control.engine().snapshot().config().clone();
         candidate.policies[0].lists.push(ListInput {
             name: "test".into(),
             action: Action::Block,
@@ -118,7 +118,7 @@ mod tests {
                 .await
         });
         timeout(Duration::from_secs(2), async {
-            while control.mutation.available_permits() != 0 {
+            while !control.is_mutating() {
                 tokio::task::yield_now().await;
             }
         })
@@ -134,7 +134,7 @@ mod tests {
             .unwrap()
             .unwrap()
             .unwrap();
-        assert_eq!(control.engine.active().generation(), 2);
+        assert_eq!(control.engine().active().generation(), 2);
         assert!(matches!(
             control.clear_shadow(None).await,
             Err(ControlError::Unavailable(_))
@@ -143,7 +143,7 @@ mod tests {
         let report = maintenance::snapshot(&config.database, &backup).unwrap();
         assert_eq!(report.active_generation, 2);
         let restarted = start(config, workers).await;
-        assert_eq!(restarted.control().engine.active().generation(), 2);
+        assert_eq!(restarted.control().engine().active().generation(), 2);
         let stop = CancellationToken::new();
         stop.cancel();
         restarted.run(stop).await.unwrap();
@@ -190,8 +190,8 @@ mod tests {
                 .await,
             Err(ControlError::Invalid(_))
         ));
-        assert_eq!(control.engine.snapshot().generation(), 1);
-        assert!(control.engine.shadow_snapshot().is_none());
+        assert_eq!(control.engine().snapshot().generation(), 1);
+        assert!(control.engine().shadow_snapshot().is_none());
         assert_eq!(control.next_generation(), 3);
         let mut shadow = config.policy.clone();
         shadow.policies[0].lists.push(ListInput {
@@ -208,7 +208,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(control.engine.shadow_snapshot().unwrap().generation(), 3);
+        assert_eq!(control.engine().shadow_snapshot().unwrap().generation(), 3);
         let stop = CancellationToken::new();
         stop.cancel();
         runtime.run(stop).await.unwrap();
@@ -223,7 +223,7 @@ mod tests {
         let client = "127.0.0.1".parse().unwrap();
         assert_eq!(
             control
-                .engine
+                .engine()
                 .snapshot()
                 .explain(client, "shadow.test")
                 .unwrap()
@@ -233,7 +233,7 @@ mod tests {
         );
         assert_eq!(
             control
-                .engine
+                .engine()
                 .shadow_snapshot()
                 .unwrap()
                 .explain(client, "shadow.test")
@@ -255,7 +255,7 @@ mod tests {
         assert_eq!(control.version().shadow, None);
         assert_eq!(
             control
-                .engine
+                .engine()
                 .snapshot()
                 .explain(client, "shadow.test")
                 .unwrap()
@@ -277,7 +277,7 @@ mod tests {
         assert_eq!(control.version().active, 5);
         assert_eq!(
             control
-                .engine
+                .engine()
                 .snapshot()
                 .explain(client, "shadow.test")
                 .unwrap()
@@ -287,7 +287,7 @@ mod tests {
         );
         assert_eq!(
             control
-                .engine
+                .engine()
                 .snapshot()
                 .explain(client, "rule39999.test")
                 .unwrap()

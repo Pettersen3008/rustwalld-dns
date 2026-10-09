@@ -4,7 +4,7 @@ use super::*;
 #[tokio::test]
 async fn binding_metadata_is_revisioned_specific_and_failure_isolated() {
     let harness = Harness::start().await;
-    let mut config = harness.state.control.engine.active().config().clone();
+    let mut config = harness.state.control.engine().active().config().clone();
     // Legacy configuration omits metadata and remains readable.
     config.bindings.push(rustwalld_dns_policy::Binding {
         name: "Work laptop".into(),
@@ -44,7 +44,7 @@ async fn binding_metadata_is_revisioned_specific_and_failure_isolated() {
                 .status(),
             422
         );
-        assert_eq!(harness.state.control.engine.active().generation(), 1);
+        assert_eq!(harness.state.control.engine().active().generation(), 1);
     }
     assert_eq!(
         harness
@@ -72,7 +72,7 @@ async fn binding_metadata_is_revisioned_specific_and_failure_isolated() {
         .await
         .unwrap();
     assert_eq!(promoted.status(), 200);
-    let original = harness.state.control.engine.snapshot();
+    let original = harness.state.control.engine().snapshot();
     let original_generation = original.generation();
     let clients: Value = harness.get("/api/v1/clients").await.json().await.unwrap();
     assert_eq!(clients["default_policy"], "default");
@@ -95,7 +95,7 @@ async fn binding_metadata_is_revisioned_specific_and_failure_isolated() {
     let boot = harness
         .state
         .control
-        .store
+        .store()
         .bootstrap("ignored".into())
         .await
         .unwrap();
@@ -119,7 +119,7 @@ async fn binding_metadata_is_revisioned_specific_and_failure_isolated() {
         503
     );
     assert_eq!(
-        harness.state.control.engine.active().generation(),
+        harness.state.control.engine().active().generation(),
         original_generation
     );
     for _ in 0..30 {
@@ -135,7 +135,7 @@ async fn binding_metadata_is_revisioned_specific_and_failure_isolated() {
         harness.send("/api/v1/config", &config, true).await.status(),
         200
     );
-    let current_generation = harness.state.control.engine.active().generation();
+    let current_generation = harness.state.control.engine().active().generation();
     assert!(current_generation > original_generation);
     let no_metadata: Value = harness
         .get("/api/v1/explain?client=127.0.0.1&domain=ads.test")
@@ -160,6 +160,7 @@ async fn binding_metadata_is_revisioned_specific_and_failure_isolated() {
             harness.base
         ))
         .bearer_auth(TOKEN)
+        .header("If-Match", current_etag(&harness).await)
         .send()
         .await
         .unwrap();
@@ -175,7 +176,7 @@ async fn binding_metadata_is_revisioned_specific_and_failure_isolated() {
         harness
             .state
             .control
-            .engine
+            .engine()
             .resolver()
             .metrics
             .upstream_lookups
@@ -188,7 +189,7 @@ async fn binding_metadata_is_revisioned_specific_and_failure_isolated() {
 #[tokio::test]
 async fn policy_test_reports_every_case_without_publishing_or_touching_revisions() {
     let harness = Harness::start().await;
-    let mut config = harness.state.control.engine.active().config().clone();
+    let mut config = harness.state.control.engine().active().config().clone();
     config.upstreams[0].addresses = vec!["127.0.0.1:9".parse().unwrap()];
     config.assertions = vec![
         rustwalld_dns_policy::Assertion {
@@ -242,8 +243,8 @@ async fn policy_test_reports_every_case_without_publishing_or_touching_revisions
     assert_eq!(harness.state.control.next_generation(), next);
     for (path, put) in [("/api/v1/config", true), ("/api/v1/shadow", false)] {
         assert_eq!(harness.send(path, &config, put).await.status(), 422);
-        assert_eq!(harness.state.control.engine.active().generation(), 1);
-        assert!(harness.state.control.engine.shadow().is_none());
+        assert_eq!(harness.state.control.engine().active().generation(), 1);
+        assert!(harness.state.control.engine().shadow().is_none());
     }
     let revisions: Value = harness.get("/api/v1/revisions").await.json().await.unwrap();
     assert_eq!(revisions.as_array().unwrap().len(), 1);
@@ -271,7 +272,7 @@ async fn policy_test_reports_every_case_without_publishing_or_touching_revisions
 #[tokio::test]
 async fn shadow_promote_rollback_and_durable_generation() {
     let harness = Harness::start().await;
-    let mut config = harness.state.control.engine.active().config().clone();
+    let mut config = harness.state.control.engine().active().config().clone();
     config.policies[0].lists.clear();
     assert!(
         harness
@@ -288,7 +289,7 @@ async fn shadow_promote_rollback_and_durable_generation() {
         harness
             .state
             .control
-            .engine
+            .engine()
             .shadow()
             .as_ref()
             .unwrap()
@@ -298,20 +299,22 @@ async fn shadow_promote_rollback_and_durable_generation() {
     let response = reqwest::Client::new()
         .post(format!("{}/api/v1/shadow/promote", harness.base))
         .bearer_auth(TOKEN)
+        .header("If-Match", current_etag(&harness).await)
         .send()
         .await
         .unwrap();
     assert!(response.status().is_success());
-    assert_eq!(harness.state.control.engine.active().generation(), 3);
-    assert!(harness.state.control.engine.shadow().is_none());
+    assert_eq!(harness.state.control.engine().active().generation(), 3);
+    assert!(harness.state.control.engine().shadow().is_none());
     let response = reqwest::Client::new()
         .post(format!("{}/api/v1/revisions/1/rollback", harness.base))
         .bearer_auth(TOKEN)
+        .header("If-Match", current_etag(&harness).await)
         .send()
         .await
         .unwrap();
     assert!(response.status().is_success());
-    assert_eq!(harness.state.control.engine.active().generation(), 4);
+    assert_eq!(harness.state.control.engine().active().generation(), 4);
     assert_eq!(
         harness.dns("ads.test.").await.metadata.response_code,
         ResponseCode::NXDomain
@@ -319,7 +322,7 @@ async fn shadow_promote_rollback_and_durable_generation() {
     let boot = harness
         .state
         .control
-        .store
+        .store()
         .bootstrap("ignored".into())
         .await
         .unwrap();
@@ -335,14 +338,16 @@ async fn sqlite_lock_rejects_promotion_but_dns_keeps_answering() {
     let harness = Harness::start().await;
     let connection = rusqlite::Connection::open(&harness.path).unwrap();
     connection.execute_batch("BEGIN IMMEDIATE").unwrap();
-    let mut config = harness.state.control.engine.active().config().clone();
+    let mut config = harness.state.control.engine().active().config().clone();
     config.policies[0].lists[0].rules = "new.test".into();
     let requests = {
         let base = harness.base.clone();
+        let tag = current_etag(&harness).await;
         tokio::spawn(async move {
             reqwest::Client::new()
                 .put(format!("{base}/api/v1/config"))
                 .bearer_auth(TOKEN)
+                .header("If-Match", tag)
                 .json(&config)
                 .send()
                 .await
@@ -356,7 +361,7 @@ async fn sqlite_lock_rejects_promotion_but_dns_keeps_answering() {
         );
     }
     assert_eq!(requests.await.unwrap().status(), 503);
-    assert_eq!(harness.state.control.engine.active().generation(), 1);
+    assert_eq!(harness.state.control.engine().active().generation(), 1);
     connection.execute_batch("ROLLBACK").unwrap();
     assert_eq!(
         harness.dns("ads.test.").await.metadata.response_code,
@@ -377,6 +382,7 @@ async fn stale_edit_shadow_promotion_clear_and_rollback_cannot_publish() {
     let response = client
         .post(format!("{}/api/v1/shadow", harness.base))
         .bearer_auth(TOKEN)
+        .header("If-Match", current_etag(&harness).await)
         .header("if-match", &initial_tag)
         .json(&config)
         .send()
@@ -409,12 +415,12 @@ async fn stale_edit_shadow_promotion_clear_and_rollback_cannot_publish() {
             .await
             .unwrap();
         assert_eq!(response.status(), 412, "{path}");
-        assert_eq!(harness.state.control.engine.active().generation(), 1);
+        assert_eq!(harness.state.control.engine().active().generation(), 1);
         assert_eq!(
             harness
                 .state
                 .control
-                .engine
+                .engine()
                 .shadow()
                 .as_ref()
                 .unwrap()
@@ -426,14 +432,15 @@ async fn stale_edit_shadow_promotion_clear_and_rollback_cannot_publish() {
     let response = client
         .post(format!("{}/api/v1/shadow/promote", harness.base))
         .bearer_auth(TOKEN)
+        .header("If-Match", current_etag(&harness).await)
         .header("if-match", shadow_tag)
         .send()
         .await
         .unwrap();
     assert_eq!(response.status(), 200);
     assert_eq!(response.headers()["etag"], "\"g3-s0\"");
-    assert_eq!(harness.state.control.engine.active().generation(), 3);
-    assert!(harness.state.control.engine.shadow().is_none());
+    assert_eq!(harness.state.control.engine().active().generation(), 3);
+    assert!(harness.state.control.engine().shadow().is_none());
     assert_eq!(
         harness.dns("new.test").await.metadata.response_code,
         ResponseCode::NXDomain

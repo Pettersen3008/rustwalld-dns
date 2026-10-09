@@ -37,7 +37,7 @@ async fn temporary_exception_api_shadow_history_sqlite_failure_and_expired_rollb
         .unwrap()
         .as_secs()
         + 3;
-    let mut config = harness.state.control.engine.active().config().clone();
+    let mut config = harness.state.control.engine().active().config().clone();
     config.upstreams[0].addresses = vec![upstream_addr];
     config.policies[0]
         .temporary_exceptions
@@ -72,11 +72,12 @@ async fn temporary_exception_api_shadow_history_sqlite_failure_and_expired_rollb
     let promoted = reqwest::Client::new()
         .post(format!("{}/api/v1/shadow/promote", harness.base))
         .bearer_auth(TOKEN)
+        .header("If-Match", current_etag(&harness).await)
         .send()
         .await
         .unwrap();
     assert_eq!(promoted.status(), 200);
-    let generation = harness.state.control.engine.active().generation();
+    let generation = harness.state.control.engine().active().generation();
     let response = harness.dns("ads.test.").await;
     assert_eq!(response.metadata.response_code, ResponseCode::NoError);
     assert!(response.answers[0].ttl <= 3);
@@ -147,13 +148,14 @@ async fn temporary_exception_api_shadow_history_sqlite_failure_and_expired_rollb
             harness.base
         ))
         .bearer_auth(TOKEN)
+        .header("If-Match", current_etag(&harness).await)
         .send()
         .await
         .unwrap();
     assert_eq!(rolled.status(), 200);
-    assert!(harness.state.control.engine.active().generation() > generation);
+    assert!(harness.state.control.engine().active().generation() > generation);
     assert_eq!(
-        harness.state.control.engine.active().config().policies[0].temporary_exceptions[0]
+        harness.state.control.engine().active().config().policies[0].temporary_exceptions[0]
             .expires_at,
         expiry
     );
@@ -174,7 +176,7 @@ async fn api_intake_limits_only_new_exceptions_to_seven_days() {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    let mut config = harness.state.control.engine.active().config().clone();
+    let mut config = harness.state.control.engine().active().config().clone();
     config.policies[0]
         .temporary_exceptions
         .push(rustwalld_dns_policy::TemporaryException {
@@ -198,8 +200,8 @@ async fn api_intake_limits_only_new_exceptions_to_seven_days() {
             "{body}"
         );
     }
-    assert_eq!(harness.state.control.engine.active().generation(), 1);
-    assert!(harness.state.control.engine.shadow().is_none());
+    assert_eq!(harness.state.control.engine().active().generation(), 1);
+    assert!(harness.state.control.engine().shadow().is_none());
     config.policies[0].temporary_exceptions[0].expires_at = now + 6 * 86400;
     assert_eq!(
         harness.send("/api/v1/config", &config, true).await.status(),

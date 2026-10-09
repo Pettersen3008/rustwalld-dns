@@ -473,16 +473,16 @@ impl Job {
 
 async fn check(state: &Arc<ControlService>, stop: &CancellationToken) -> Result<(), String> {
     // A shadow is review work. Never replace it or run more checks while it exists.
-    if state.engine.shadow().is_some() {
-        state.refreshes.discard_queued()?;
+    if state.engine().shadow().is_some() {
+        state.refresher().discard_queued()?;
         return Ok(());
     }
-    if stop.is_cancelled() || state.mutation.available_permits() == 0 {
+    if stop.is_cancelled() || state.is_mutating() {
         return Ok(());
     }
     let Some(job) = state
-        .refreshes
-        .begin(state.engine.snapshot(), &state.downloads)?
+        .refresher()
+        .begin(state.engine().snapshot(), state.downloads())?
     else {
         return Ok(());
     };
@@ -505,8 +505,8 @@ async fn check(state: &Arc<ControlService>, stop: &CancellationToken) -> Result<
     if stop.is_cancelled() {
         return Ok(());
     }
-    let active = state.engine.active().generation();
-    let shadow = state.engine.shadow().is_some();
+    let active = state.engine().active().generation();
+    let shadow = state.engine().shadow().is_some();
     if let Some((text, stamp)) = job.receive(fetched, active, shadow) {
         stage(state, job, text, stamp).await?;
     }
@@ -562,7 +562,7 @@ pub async fn run(state: Arc<ControlService>, stop: CancellationToken) {
         }
         tokio::select! {
             _ = stop.cancelled() => return,
-            _ = state.refreshes.wake.notified() => {},
+            _ = state.refresher().wake.notified() => {},
             _ = tokio::time::sleep(Duration::from_secs(1)) => {},
         }
     }

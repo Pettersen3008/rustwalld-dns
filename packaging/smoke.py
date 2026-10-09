@@ -249,13 +249,13 @@ try:
     policy['upstreams'][0]['addresses'] = [f'127.0.0.1:{tls_listener.getsockname()[1]}']
     policy['upstreams'][0]['transport'] = {'kind': 'tls', 'server_name': 'resolver.test',
                                          'ca_pem': (fixture / 'ca.pem').read_text(), 'max_connections': 2}
-    assert api('/api/v1/config', 'PUT', policy)['generation'] == 2
+    assert api('/api/v1/config', 'PUT', policy, etag=configuration_tag())['generation'] == 2
     assert api('/api/v1/upstreams')[0]['transport'] == 'tls'
     assert dns('tls-one.test', answer=True) == 0 and dns('tls-two.test', tcp=True, answer=True) == 0
     assert tls_counts == {'connections': 1, 'queries': 2}
     policy['upstreams'][0]['transport']['kind'] = 'https'
     policy['upstreams'][0]['transport']['path'] = '/dns-query'
-    assert api('/api/v1/config', 'PUT', policy)['generation'] == 3
+    assert api('/api/v1/config', 'PUT', policy, etag=configuration_tag())['generation'] == 3
     assert api('/api/v1/upstreams')[0]['transport'] == 'https'
     assert dns('https-one.test', answer=True) == 0 and dns('https-two.test', tcp=True, answer=True) == 0
     assert tls_counts == {'connections': 2, 'queries': 4}
@@ -278,7 +278,7 @@ try:
         {'name': 'installed repair', 'domain': 'installed.test', 'expires_at': expiry}]
     policy['assertions'] = [{'client': '127.0.0.1', 'domain': 'installed.test', 'expected': 'block'}]
     assert api('/api/v1/policy/test', 'POST', policy)['basis'] == 'permanent_policy'
-    assert api('/api/v1/config', 'PUT', policy)['generation'] == 4
+    assert api('/api/v1/config', 'PUT', policy, etag=configuration_tag())['generation'] == 4
     assert dns('downloaded.test') == 3
     assert api('/api/v1/filter-sources')['sources'][0]['download']['sha256'] == fingerprint
     assert api('/api/v1/clients')['bindings'][0]['metadata'] == annotations
@@ -288,7 +288,7 @@ try:
     assert dns('installed.test', tcp=True, answer=True) == 0
     # A changed scheduled retrieval is durable review work, never live promotion.
     policy['filter_sources'][0]['refresh_interval_secs'] = 300
-    assert api('/api/v1/config', 'PUT', policy)['generation'] == 5
+    assert api('/api/v1/config', 'PUT', policy, etag=configuration_tag())['generation'] == 5
     def unchanged_check(expected_http):
         before = len(list_requests)
         api('/api/v1/filter-refreshes/check', 'POST', {'source': 0}, etag=configuration_tag())

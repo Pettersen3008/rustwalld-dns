@@ -2,6 +2,39 @@
 
 ## 0.1.0 — unreleased
 
+- Management API: every mutation requires `If-Match` (428 when missing); `Host`
+  must be an IP literal or `localhost` (421 otherwise, against DNS rebinding);
+  tokens compare as SHA-256 digests in constant time and 401s carry
+  `WWW-Authenticate: Bearer`; extractor errors use the `{"error": ...}` shape;
+  `/healthz` bypasses request admission; configuration-sized responses and
+  compilations share a separate limit of two and serialize from the pinned
+  snapshot without cloning; the idle timeout no longer resets a connection whose
+  request is still being processed. `ControlService` fields are private: use
+  `engine()`, `listen()`, `store()`, `is_mutating()`, `queue_refresh()`,
+  `preview_download()` (now using the configured compiler) and friends.
+  Candidate cloning, serialization and diffing run off the async executor, and
+  configuration types implement `PartialEq`/`Eq`. `max_udp_upstream_waits` is
+  configurable (default 1,024).
+- Filter matching walks each name once over merged allow/block indexes with a
+  per-process seeded foldhash: 22–80% faster evaluation, 14–30% faster
+  compilation, unchanged decisions and memory ([evidence](docs/filter-matching.md)).
+- `BoundedCache` evicts with CLOCK (second chance) and hashes each key once:
+  hot entries survive one-off names, cache hits are 8–25% and insertions ~2x
+  faster ([evidence](docs/cache-eviction.md)).
+- The response cache and coalescing are keyed by upstream content identity
+  (`UpstreamId`) instead of policy generation, so publishing unchanged upstream
+  profiles (including scheduled list refreshes) keeps warm answers.
+  `Resolver::lookup`/`forward` split the synchronous probe from forwarding.
+- DNS ingress: `Engine::prepare` answers refusals, blocks, rewrites and cache
+  hits synchronously; only misses wait, under a separate
+  `max_udp_upstream_waits` bound, so a slow upstream cannot starve local
+  answers. EDNS options are ignored (RFC 6891) and never forwarded instead of
+  refused. `Engine::answer` takes a `Transport`; the positional `Engine::new`
+  is removed. Listener errors such as `EMFILE` pause only that listener
+  instead of stopping DNS. New overload and listener-error metrics.
+- Upstream TCP fallback and DoT send one framed write with `TCP_NODELAY`;
+  upstream UDP buffers match the advertised size, retrying oversized replies
+  over TCP.
 - SQLite worker: blocking receive with a 10 ms batch flush instead of a 10 ms
   sleep-poll; in-memory retained-row count instead of `COUNT(*)` per batch (the
   `queries_created` index is dropped; older binaries recreate it); history at

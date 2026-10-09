@@ -16,6 +16,9 @@ pub struct RuntimeConfig {
     pub decision_cache_entries: usize,
     pub max_inflight: usize,
     pub max_udp_queries: usize,
+    /// UDP cache misses that may wait on upstreams at once; see
+    /// [`ServerConfig::max_udp_upstream_waits`].
+    pub max_udp_upstream_waits: usize,
     pub max_tcp_connections: usize,
     pub event_queue: usize,
     pub history_rows: usize,
@@ -30,6 +33,7 @@ impl Default for RuntimeConfig {
             decision_cache_entries: 16384,
             max_inflight: 256,
             max_udp_queries: 512,
+            max_udp_upstream_waits: 1024,
             max_tcp_connections: 128,
             event_queue: 4096,
             history_rows: 100000,
@@ -49,6 +53,7 @@ impl RuntimeConfig {
             ("decision cache", self.decision_cache_entries, 1000000),
             ("inflight", self.max_inflight, 4096),
             ("UDP admission", self.max_udp_queries, 16384),
+            ("UDP upstream waits", self.max_udp_upstream_waits, 65536),
             ("TCP admission", self.max_tcp_connections, 4096),
             ("event queue", self.event_queue, 65536),
             ("history rows", self.history_rows, 1000000),
@@ -170,6 +175,7 @@ impl Runtime {
         let settings = ServerConfig {
             listen: config.dns_listen,
             max_udp_queries: config.max_udp_queries,
+            max_udp_upstream_waits: config.max_udp_upstream_waits,
             max_tcp_connections: config.max_tcp_connections,
             ..Default::default()
         };
@@ -227,7 +233,7 @@ impl Runtime {
         let _ = refresh.await;
         // A semaphore is admission, not a mutex held across network I/O.
         // Once it is acquired every admitted durable mutation has completed.
-        let _ = self.control.mutation.acquire().await;
+        self.control.drain_mutations().await;
         self.database.cancel.cancel();
         if let Some(done) = self.database.done.take() {
             let _ = tokio::time::timeout(Duration::from_secs(3), done).await;
@@ -287,7 +293,7 @@ impl Drop for Runtime {
     fn drop(&mut self) {
         self.stop.cancel();
         self.control.stop_admission();
-        self.control.engine.resolver().shutdown();
+        self.control.engine().resolver().shutdown();
     }
 }
 
@@ -349,7 +355,7 @@ mod tests {
         }];
         store_active(&config, 2, &stored);
         let runtime = Runtime::start(config, Handle::current()).await.unwrap();
-        let active = runtime.control().engine.snapshot();
+        let active = runtime.control().engine().snapshot();
         assert_eq!(active.generation(), 2);
         let allowed = active.policies()[0]
             .temporary_allow("ads.test", std::time::Instant::now())
@@ -409,8 +415,8 @@ mod tests {
             let runtime = Runtime::start(config.clone(), Handle::current())
                 .await
                 .unwrap();
-            assert_eq!(runtime.control().engine.active().generation(), 1);
-            assert!(runtime.control().engine.shadow_snapshot().is_none());
+            assert_eq!(runtime.control().engine().active().generation(), 1);
+            assert!(runtime.control().engine().shadow_snapshot().is_none());
             // The pointer is durably cleared; the identifier is never reused.
             assert_eq!(shadow_pointer(&config), None);
             assert_eq!(runtime.control().next_generation(), id as u64 + 1);
@@ -440,11 +446,11 @@ mod tests {
         let runtime = Runtime::start(config.clone(), Handle::current())
             .await
             .unwrap();
-        assert_eq!(runtime.control().engine.active().generation(), 1);
+        assert_eq!(runtime.control().engine().active().generation(), 1);
         assert!(
             runtime
                 .control()
-                .engine
+                .engine()
                 .active()
                 .config()
                 .assertions

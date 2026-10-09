@@ -1,8 +1,5 @@
-use super::{ApiResult, AppState, invalid, unavailable};
-use axum::{
-    Json,
-    extract::{Query, State},
-};
+use super::{ApiError, ApiQuery, AppState, invalid, unavailable};
+use axum::{Json, extract::State};
 use rustwalld_dns_core::telemetry::LATENCY_US;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -12,13 +9,15 @@ use std::{
 };
 
 pub(super) async fn upstreams(State(state): State<Arc<AppState>>) -> Json<Value> {
-    let snapshot = state.control.engine.active();
+    let snapshot = state.control.engine().active();
     let profiles = snapshot
         .upstreams()
         .iter()
         .enumerate()
         .map(|(i, upstream)| {
-            let config = &snapshot.config().upstreams[i];
+            let Some(config) = snapshot.config().upstreams.get(i) else {
+                return Value::Null;
+            };
             let (transport, server_name, path) = match &config.transport {
                 rustwalld_dns_policy::UpstreamTransport::Udp => ("udp", None, None),
                 rustwalld_dns_policy::UpstreamTransport::Tls { server_name, .. } => {
@@ -66,9 +65,9 @@ pub(super) struct ExplainQuery {
 }
 pub(super) async fn explain(
     State(state): State<Arc<AppState>>,
-    Query(query): Query<ExplainQuery>,
-) -> ApiResult {
-    let snapshot = state.control.engine.active();
+    ApiQuery(query): ApiQuery<ExplainQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let snapshot = state.control.engine().active();
     let explanation = snapshot
         .explain(query.client, &query.domain)
         .map_err(invalid)?;
@@ -78,9 +77,9 @@ pub(super) async fn explain(
 }
 pub(super) async fn metrics(State(state): State<Arc<AppState>>) -> String {
     use std::fmt::Write;
-    let m = &state.control.engine.telemetry().metrics;
-    let r = &state.control.engine.resolver().metrics;
-    let db = &state.control.store.metrics;
+    let m = &state.control.engine().telemetry().metrics;
+    let r = &state.control.engine().resolver().metrics;
+    let db = state.control.store_metrics();
     let mut output = String::new();
     for (name, value) in [
         ("requests", &m.requests),
@@ -91,6 +90,10 @@ pub(super) async fn metrics(State(state): State<Arc<AppState>>) -> String {
         ("decision_cache_hits", &m.decision_hits),
         ("events_dropped", &m.dropped_events),
         ("shadow_differences", &m.shadow_differences),
+        ("udp_overloads", &m.udp_overloads),
+        ("upstream_wait_overloads", &m.forward_overloads),
+        ("tcp_overloads", &m.tcp_overloads),
+        ("listener_errors", &m.listener_errors),
         ("dns_cache_hits", &r.cache_hits),
         ("coalesced", &r.coalesced),
         ("upstream_lookups", &r.upstream_lookups),

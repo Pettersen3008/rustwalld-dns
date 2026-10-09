@@ -30,7 +30,8 @@ GET configuration/shadow responses carry an opaque ETag built from active and
 shadow generation IDs. UI writes send If-Match. Check this under the existing
 single-permit management mutation admission before compilation/commit; reject stale writes with
 412, preserving the draft. Capture shadow content under that same permit.
-Legacy CLI clients without If-Match retain explicit unconditional behavior.
+Every mutation requires If-Match (428 when missing); there is no unconditional
+write path, so a scheduled-refresh shadow cannot be discarded blindly.
 An API poll must not label older configuration with a newer generation.
 
 Optional web_root points to a compiled web/dist directory. Axum serves assets on

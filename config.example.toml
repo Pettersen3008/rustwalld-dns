@@ -7,6 +7,7 @@ dns_cache_entries = 4096
 decision_cache_entries = 16384
 max_inflight = 256
 max_udp_queries = 512
+max_udp_upstream_waits = 1024
 max_tcp_connections = 128
 event_queue = 4096
 history_rows = 100000

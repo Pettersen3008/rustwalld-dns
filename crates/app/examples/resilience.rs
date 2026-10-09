@@ -241,20 +241,30 @@ async fn main() {
         stalled.push(stream);
     }
     tokio::time::sleep(Duration::from_millis(30)).await;
+    // Admitted routes are full; liveness is deliberately exempt from admission.
     let admission = client
-        .get(format!("{base}/healthz"))
+        .get(format!("{base}/api/v1/status"))
         .send()
         .await
         .unwrap()
         .status()
         .as_u16();
     assert_eq!(admission, 429);
+    assert!(
+        client
+            .get(format!("{base}/healthz"))
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
     let stalled_http = samples(config.dns_listen, duration, args.clients).await;
     drop(stalled);
     timeout(Duration::from_secs(5), async {
         loop {
             if client
-                .get(format!("{base}/healthz"))
+                .get(format!("{base}/api/v1/status"))
                 .send()
                 .await
                 .unwrap()
@@ -279,6 +289,7 @@ async fn main() {
         let response = client
             .post(format!("{base}/api/v1/shadow"))
             .bearer_auth(TOKEN)
+            .header("If-Match", configuration_tag(&client, &base).await)
             .json(&candidate)
             .send()
             .await;
@@ -291,9 +302,11 @@ async fn main() {
     let locked = rusqlite::Connection::open(&config.database).unwrap();
     locked.execute_batch("BEGIN IMMEDIATE").unwrap();
     let before = metrics(&client, &base).await;
+    let tag = configuration_tag(&client, &base).await;
     let rejected = client
         .put(format!("{base}/api/v1/config"))
         .bearer_auth(TOKEN)
+        .header("If-Match", tag)
         .json(&config.policy)
         .send();
     let (rejected, persistence_failure) =
@@ -328,7 +341,8 @@ async fn main() {
                 .unwrap()
     );
     // Measure a real scheduled HTTPS body stalled after successful authentication.
-    // Activate a new generation, warm its cache, then keep the download pending.
+    // Activate a new generation (its unchanged upstream keeps the warm response
+    // cache), then keep the download pending.
     let publisher = download_fixture::Fixture::start().await;
     let mut source = publisher.source("/stall");
     source.list = "base".into();
@@ -338,6 +352,7 @@ async fn main() {
         client
             .put(format!("{base}/api/v1/config"))
             .bearer_auth(TOKEN)
+            .header("If-Match", configuration_tag(&client, &base).await)
             .json(&config.policy)
             .send()
             .await
@@ -366,7 +381,8 @@ async fn main() {
         .unwrap();
     assert!(!refresh_status["running"].is_null());
     assert_eq!(publisher.requests.load(Ordering::SeqCst), 1);
-    assert_eq!(exchanges.load(Ordering::Relaxed), 2);
+    // Publication did not empty the response cache: still one upstream exchange.
+    assert_eq!(exchanges.load(Ordering::Relaxed), 1);
     let report = json!({"hardware":std::fs::read_to_string("/proc/cpuinfo").unwrap().lines().find(|line|line.starts_with("model name")).unwrap_or("unknown"),"os":Command::new("uname").arg("-srmo").output().map(|result|String::from_utf8_lossy(&result.stdout).trim().to_owned()).unwrap_or_default(),"rustc":Command::new("rustc").arg("--version").output().map(|result|String::from_utf8_lossy(&result.stdout).trim().to_owned()).unwrap_or_default(),"binary":args.binary,"binary_sha256":Command::new("sha256sum").arg("--").arg(&args.binary).output().map(|result|String::from_utf8_lossy(&result.stdout).split_whitespace().next().unwrap_or("unknown").to_owned()).unwrap_or_default(),"clients":args.clients,"duration_ms":args.duration_ms,"candidate_rules":args.rules+1,"compiler_request_ms":compile_wall,"http_admission_status":admission,"publication_failure_status":rejection,"upstream_exchanges":exchanges.load(Ordering::Relaxed),"baseline":baseline,"stalled_http":stalled_http,"compilation":compilation,"persistence_failure":persistence_failure,"stalled_refresh":stalled_refresh,"refresh_status":refresh_status,"metrics_before_lock":before,"metrics_after_lock":after,"status_before_refresh":status});
     if let Some(output) = args.output {
         std::fs::write(
@@ -397,4 +413,18 @@ async fn main() {
     .unwrap();
     publisher.wait_closed().await;
     mock.abort();
+}
+
+/// Current configuration ETag; every mutation must send it in If-Match.
+async fn configuration_tag(client: &reqwest::Client, base: &str) -> String {
+    client
+        .get(format!("{base}/api/v1/config"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap()
+        .headers()["etag"]
+        .to_str()
+        .unwrap()
+        .to_owned()
 }

@@ -1,11 +1,17 @@
 //! Bound sockets before HTTP parsing; idle readers cannot retain slots forever.
-use axum::serve::Listener;
+use axum::{
+    extract::connect_info::Connected,
+    serve::{IncomingStream, Listener},
+};
 use std::{
     future::Future,
     io,
     net::SocketAddr,
     pin::Pin,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     task::{Context, Poll},
     time::Duration,
 };
@@ -15,6 +21,32 @@ use tokio::{
     sync::{OwnedSemaphorePermit, Semaphore},
     time::{Instant, Sleep},
 };
+/// Requests a connection is currently processing. While any are, the idle
+/// timeout is suspended: a long compile or commit is not an idle client.
+#[derive(Clone, Debug, Default)]
+pub struct Activity(Arc<AtomicUsize>);
+impl Activity {
+    /// Mark one request as processing until the guard drops.
+    pub fn enter(&self) -> Busy {
+        self.0.fetch_add(1, Ordering::AcqRel);
+        Busy(self.0.clone())
+    }
+    fn busy(&self) -> bool {
+        self.0.load(Ordering::Acquire) != 0
+    }
+}
+pub struct Busy(Arc<AtomicUsize>);
+impl Drop for Busy {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+/// Exposes each connection's activity marker to request middleware.
+impl Connected<IncomingStream<'_, ManagementListener>> for Activity {
+    fn connect_info(stream: IncomingStream<'_, ManagementListener>) -> Self {
+        stream.io().activity.clone()
+    }
+}
 pub struct ManagementListener {
     inner: TcpListener,
     slots: Arc<Semaphore>,
@@ -47,6 +79,7 @@ impl Listener for ManagementListener {
                             _permit: permit,
                             idle: self.idle,
                             timer: Box::pin(tokio::time::sleep(self.idle)),
+                            activity: Activity::default(),
                         },
                         address,
                     );
@@ -67,9 +100,15 @@ pub struct ManagedStream {
     _permit: OwnedSemaphorePermit,
     idle: Duration,
     timer: Pin<Box<Sleep>>,
+    activity: Activity,
 }
 impl ManagedStream {
     fn poll_idle(&mut self, cx: &mut Context<'_>) -> io::Result<()> {
+        if self.activity.busy() {
+            // The window restarts when processing ends.
+            self.progress();
+            return Ok(());
+        }
         if self.timer.as_mut().poll(cx).is_ready() {
             Err(io::Error::new(
                 io::ErrorKind::TimedOut,

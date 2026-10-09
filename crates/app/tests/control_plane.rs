@@ -17,7 +17,6 @@ use std::{
 };
 use tokio::{
     net::{TcpListener, UdpSocket},
-    sync::Semaphore,
     time::timeout,
 };
 use tokio_util::sync::CancellationToken;
@@ -190,11 +189,7 @@ impl Harness {
             rustwalld_dns_runtime::ControlService::new(engine, controller, store, listen, 2)
                 .unwrap(),
         );
-        let state = Arc::new(AppState {
-            control: control.clone(),
-            api_slots: Arc::new(Semaphore::new(32)),
-            token: TOKEN.into(),
-        });
+        let state = Arc::new(AppState::new(control.clone(), TOKEN));
         let refresh_task = tokio::spawn(rustwalld_dns::refreshes::run(control, stop.clone()));
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -234,6 +229,12 @@ impl Harness {
         } else {
             client.post(url)
         };
+        // Mutations require If-Match; validation-only requests do not.
+        let request = if path == "/api/v1/policy/test" {
+            request
+        } else {
+            request.header("If-Match", current_etag(self).await)
+        };
         request
             .bearer_auth(TOKEN)
             .json(config)
@@ -250,7 +251,7 @@ impl Harness {
         ));
         let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         socket
-            .send_to(&request.to_vec().unwrap(), self.state.control.listen)
+            .send_to(&request.to_vec().unwrap(), self.state.control.listen())
             .await
             .unwrap();
         let mut bytes = [0; 1232];
@@ -287,3 +288,6 @@ mod management;
 
 #[path = "control_plane_cases/revisions.rs"]
 mod revisions;
+
+#[path = "control_plane_cases/security.rs"]
+mod security;

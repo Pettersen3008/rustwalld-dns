@@ -98,10 +98,12 @@ async fn binary_restart_keeps_absolute_exception_expiry_and_permanent_assertions
                     expires_at,
                 },
             );
+            let tag = etag(&client, &base, token).await;
             assert!(
                 client
                     .put(format!("{base}/api/v1/config"))
                     .bearer_auth(token)
+                    .header("If-Match", tag)
                     .json(&candidate)
                     .send()
                     .await
@@ -244,9 +246,11 @@ async fn binary_restores_revision_and_handles_sigterm() {
                     action: rustwalld_dns_filter::Action::Block,
                     rules: "lifecycle.test".into(),
                 });
+            let tag = etag(&client, &base, token).await;
             let response = client
                 .put(format!("{base}/api/v1/config"))
                 .bearer_auth(token)
+                .header("If-Match", tag)
                 .json(&policy)
                 .send()
                 .await
@@ -299,4 +303,18 @@ async fn binary_restores_revision_and_handles_sigterm() {
         .unwrap();
         assert!(status.success());
     }
+}
+
+/// Current configuration ETag, required by every mutation.
+async fn etag(client: &reqwest::Client, base: &str, token: &str) -> String {
+    client
+        .get(format!("{base}/api/v1/config"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap()
+        .headers()["etag"]
+        .to_str()
+        .unwrap()
+        .to_owned()
 }

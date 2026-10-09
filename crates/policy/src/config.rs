@@ -4,7 +4,7 @@ use ipnet::IpNet;
 use rustwalld_dns_filter::{Action, ListInput};
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, SocketAddr};
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UpstreamProfile {
     pub name: String,
@@ -16,7 +16,7 @@ pub struct UpstreamProfile {
     )]
     pub transport: rustwalld_dns_resolver::UpstreamTransport,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyConfig {
     pub name: String,
@@ -28,7 +28,7 @@ pub struct PolicyConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub temporary_exceptions: Vec<TemporaryException>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Rewrite {
     pub domain: String,
@@ -39,7 +39,7 @@ pub struct Rewrite {
 fn rewrite_ttl() -> u32 {
     60
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Binding {
     pub network: IpNet,
@@ -48,14 +48,14 @@ pub struct Binding {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<BindingMetadata>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Assertion {
     pub client: IpAddr,
     pub domain: String,
     pub expected: Action,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyConfigSet {
     pub default_policy: String,

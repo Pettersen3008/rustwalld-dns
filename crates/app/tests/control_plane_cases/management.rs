@@ -46,7 +46,7 @@ async fn real_http_auth_assertions_explanations_history_and_metrics() {
         .await
         .unwrap();
     assert_eq!(dropped["permitted"], false);
-    let mut config = harness.state.control.engine.active().config().clone();
+    let mut config = harness.state.control.engine().active().config().clone();
     config.assertions.push(rustwalld_dns_policy::Assertion {
         client: "127.0.0.1".parse().unwrap(),
         domain: "ads.test".into(),
@@ -56,7 +56,7 @@ async fn real_http_auth_assertions_explanations_history_and_metrics() {
         harness.send("/api/v1/config", &config, true).await.status(),
         422
     );
-    assert_eq!(harness.state.control.engine.active().generation(), 1);
+    assert_eq!(harness.state.control.engine().active().generation(), 1);
     assert_eq!(
         harness
             .send("/api/v1/policy/test", &config, false)
@@ -91,7 +91,7 @@ async fn history_retention_is_bounded() {
         while harness
             .state
             .control
-            .store
+            .store()
             .metrics
             .persisted_events
             .load(Ordering::Relaxed)
@@ -155,7 +155,7 @@ async fn upstream_diagnostics_survive_failures_and_reset_with_generation() {
             }
         })
     };
-    let mut config = harness.state.control.engine.active().config().clone();
+    let mut config = harness.state.control.engine().active().config().clone();
     config.upstreams[0].addresses = vec![address];
     config.upstreams[0].timeout_ms = 200;
     assert!(
@@ -165,7 +165,7 @@ async fn upstream_diagnostics_survive_failures_and_reset_with_generation() {
             .status()
             .is_success()
     );
-    let old = harness.state.control.engine.snapshot();
+    let old = harness.state.control.engine().snapshot();
     assert_eq!(
         harness.dns("ads.test.").await.metadata.response_code,
         ResponseCode::NXDomain
@@ -212,7 +212,7 @@ async fn upstream_diagnostics_survive_failures_and_reset_with_generation() {
         3
     );
     assert_eq!(server["failures"].as_object().unwrap().len(), 12);
-    let engine = harness.state.control.engine.clone();
+    let engine = harness.state.control.engine().clone();
     let pending = tokio::spawn(async move {
         let mut request = Message::query();
         request.metadata.recursion_desired = true;

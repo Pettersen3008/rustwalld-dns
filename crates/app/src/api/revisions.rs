@@ -1,164 +1,216 @@
-use super::{ApiError, AppState, expected_version, invalid, unavailable};
-use crate::store::{Revision, RevisionSummary, Store};
+use super::{ApiError, ApiJson, ApiPath, AppState, invalid, json_body, required_version};
 use axum::{
-    Json,
-    extract::{Path, State},
-    http::{HeaderMap, StatusCode, header},
-    response::{IntoResponse, Response},
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    response::Response,
 };
-use rustwalld_dns_policy::PolicyConfigSet;
-use serde_json::json;
+use rustwalld_dns_core::{PolicyVersion, PublicationTarget};
+use rustwalld_dns_policy::{PolicyConfigSet, PolicySnapshot};
+use rustwalld_dns_runtime::{
+    Candidate,
+    store::{Revision, RevisionSummary},
+};
+use serde::Serialize;
 use std::sync::Arc;
 
-pub(super) fn revision_tag(active: u64, shadow: Option<u64>) -> String {
-    format!("\"g{active}-s{}\"", shadow.unwrap_or(0))
+pub(super) fn revision_tag(version: PolicyVersion) -> String {
+    format!("\"g{}-s{}\"", version.active, version.shadow.unwrap_or(0))
 }
+/// Parse a tag produced by [`revision_tag`]; any other spelling is rejected.
+pub(super) fn parse_tag(tag: &str) -> Option<PolicyVersion> {
+    let (active, shadow) = tag
+        .strip_prefix("\"g")?
+        .strip_suffix('"')?
+        .split_once("-s")?;
+    let version = PolicyVersion {
+        active: active.parse().ok()?,
+        shadow: Some(shadow.parse::<u64>().ok()?).filter(|shadow| *shadow != 0),
+    };
+    (revision_tag(version) == tag).then_some(version)
+}
+/// Tag of the current active/shadow pair, read under one consistent version.
 pub(super) fn current_tag(state: &AppState) -> String {
-    revision_tag(
-        state.control.engine.active().generation(),
-        state
-            .control
-            .engine
-            .shadow()
-            .as_ref()
-            .map(|s| s.generation()),
-    )
-}
-pub(super) fn check_revision(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
-    if let Some(expected) = headers.get(header::IF_MATCH)
-        && expected.to_str().ok() != Some(current_tag(state).as_str())
-    {
-        return Err(ApiError(
-            StatusCode::PRECONDITION_FAILED,
-            "configuration changed; inspect the current revision before retrying".into(),
-        ));
-    }
-    Ok(())
-}
-pub(super) async fn config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let active = state.control.engine.snapshot();
-    let tag = revision_tag(
-        active.generation(),
-        state
-            .control
-            .engine
-            .shadow()
-            .as_ref()
-            .map(|s| s.generation()),
-    );
-    ([(header::ETAG, tag)], Json(active.config().clone()))
-}
-pub(super) async fn shadow_config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let shadow = state.control.engine.shadow_snapshot();
-    let tag = revision_tag(
-        state.control.engine.active().generation(),
-        shadow.as_ref().map(|s| s.generation()),
-    );
-    (
-        [(header::ETAG, tag)],
-        Json(json!({
-            "generation":shadow.as_ref().map(|s|s.generation()),
-            "config":shadow.as_ref().map(|s| s.config())
-        })),
-    )
-}
-pub(super) async fn test(
-    State(state): State<Arc<AppState>>,
-    Json(config): Json<PolicyConfigSet>,
-) -> Result<Response, ApiError> {
-    let report = state.control.test(config).await.map_err(ApiError::from)?;
-    if report.valid {
-        Ok(Json(report).into_response())
-    } else {
-        Ok((StatusCode::UNPROCESSABLE_ENTITY,Json(json!({"error":format!("required policy assertions failed: {} of {}",report.failed,report.assertions),"report":report}))).into_response())
-    }
+    revision_tag(state.control.version())
 }
 
+/// Serializes a pinned snapshot's configuration without cloning it.
+struct SnapshotConfig(Arc<PolicySnapshot>);
+impl Serialize for SnapshotConfig {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.config().serialize(serializer)
+    }
+}
+#[derive(Serialize)]
+struct ShadowBody {
+    generation: Option<u64>,
+    config: Option<SnapshotConfig>,
+}
+/// The live active/shadow snapshots together with the version that names them.
+struct Pinned {
+    version: PolicyVersion,
+    active: Arc<PolicySnapshot>,
+    shadow: Option<Arc<PolicySnapshot>>,
+}
+/// Read a consistent pair; a publication between the reads is retried.
+fn pinned(state: &AppState) -> Result<Pinned, ApiError> {
+    for _ in 0..3 {
+        let version = state.control.version();
+        let active = state.control.engine().snapshot();
+        let shadow = state.control.engine().shadow_snapshot();
+        if active.generation() == version.active
+            && shadow.as_ref().map(|s| s.generation()) == version.shadow
+        {
+            return Ok(Pinned {
+                version,
+                active,
+                shadow,
+            });
+        }
+    }
+    Err(ApiError(
+        StatusCode::CONFLICT,
+        "configuration is changing; retry".into(),
+    ))
+}
+
+pub(super) async fn config(State(state): State<Arc<AppState>>) -> Result<Response, ApiError> {
+    let _heavy = state.heavy()?;
+    let pinned = pinned(&state)?;
+    json_body(
+        StatusCode::OK,
+        Some(revision_tag(pinned.version)),
+        SnapshotConfig(pinned.active),
+    )
+    .await
+}
+pub(super) async fn shadow_config(
+    State(state): State<Arc<AppState>>,
+) -> Result<Response, ApiError> {
+    let _heavy = state.heavy()?;
+    let pinned = pinned(&state)?;
+    json_body(
+        StatusCode::OK,
+        Some(revision_tag(pinned.version)),
+        ShadowBody {
+            generation: pinned.version.shadow,
+            config: pinned.shadow.map(SnapshotConfig),
+        },
+    )
+    .await
+}
+
+pub(super) async fn test(
+    State(state): State<Arc<AppState>>,
+    ApiJson(config): ApiJson<PolicyConfigSet>,
+) -> Result<Response, ApiError> {
+    let _heavy = state.heavy()?;
+    let report = state.control.test(config).await?;
+    if report.valid {
+        json_body(StatusCode::OK, None, report).await
+    } else {
+        #[derive(Serialize)]
+        struct Failed {
+            error: String,
+            report: rustwalld_dns_policy::CheckReport,
+        }
+        let error = format!(
+            "required policy assertions failed: {} of {}",
+            report.failed, report.assertions
+        );
+        json_body(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            None,
+            Failed { error, report },
+        )
+        .await
+    }
+}
 pub(super) async fn promote(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Json(config): Json<PolicyConfigSet>,
+    ApiJson(config): ApiJson<PolicyConfigSet>,
 ) -> Result<Response, ApiError> {
-    stage(state, Candidate::Config(config), headers, false, "api").await
+    stage(state, Candidate::Config(config), &headers, false, "api").await
 }
 pub(super) async fn shadow(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Json(config): Json<PolicyConfigSet>,
+    ApiJson(config): ApiJson<PolicyConfigSet>,
 ) -> Result<Response, ApiError> {
     stage(
         state,
         Candidate::Config(config),
-        headers,
+        &headers,
         true,
         "api-shadow",
     )
     .await
 }
-use rustwalld_dns_runtime::Candidate;
 pub(super) async fn stage(
     state: Arc<AppState>,
     candidate: Candidate,
-    headers: HeaderMap,
+    headers: &HeaderMap,
     shadow: bool,
     actor: &'static str,
 ) -> Result<Response, ApiError> {
+    let expected = required_version(headers)?;
+    let _heavy = state.heavy()?;
     let target = if shadow {
-        rustwalld_dns_core::PublicationTarget::Shadow
+        PublicationTarget::Shadow
     } else {
-        rustwalld_dns_core::PublicationTarget::Active
+        PublicationTarget::Active
     };
     let result = state
         .control
-        .stage(candidate, expected_version(&headers), target, actor)
-        .await
-        .map_err(ApiError::from)?;
-    Ok(([(header::ETAG, current_tag(&state))], Json(result)).into_response())
+        .stage(candidate, Some(expected), target, actor)
+        .await?;
+    json_body(StatusCode::OK, Some(current_tag(&state)), result).await
 }
 pub(super) async fn promote_shadow(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    stage(state, Candidate::Shadow, headers, false, "shadow-promote").await
+    stage(state, Candidate::Shadow, &headers, false, "shadow-promote").await
 }
 pub(super) async fn clear_shadow(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let result = state
-        .control
-        .clear_shadow(expected_version(&headers))
-        .await
-        .map_err(ApiError::from)?;
-    Ok(([(header::ETAG, current_tag(&state))], Json(result)).into_response())
+    let expected = required_version(&headers)?;
+    let result = state.control.clear_shadow(Some(expected)).await?;
+    json_body(StatusCode::OK, Some(current_tag(&state)), result).await
 }
-
 pub(super) async fn revisions(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<Vec<RevisionSummary>>, ApiError> {
-    Ok(Json(
-        state.control.store.revisions().await.map_err(unavailable)?,
-    ))
+) -> Result<axum::Json<Vec<RevisionSummary>>, ApiError> {
+    Ok(axum::Json(state.control.revisions().await?))
 }
 pub(super) async fn revision(
     State(state): State<Arc<AppState>>,
-    Path(id): Path<u64>,
-) -> Result<Json<Revision>, ApiError> {
-    Ok(Json(read_revision(&state.control.store, id).await?))
-}
-pub(super) async fn read_revision(store: &Store, id: u64) -> Result<Revision, ApiError> {
-    if id > i64::MAX as u64 {
-        return Err(ApiError(StatusCode::NOT_FOUND, "revision not found".into()));
-    }
-    let revision = store.revision(id).await.map_err(unavailable)?;
-    revision.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "revision not found".into()))
+    ApiPath(id): ApiPath<u64>,
+) -> Result<Response, ApiError> {
+    let _heavy = state.heavy()?;
+    let revision: Revision = state.control.revision(id).await?;
+    json_body(StatusCode::OK, None, revision).await
 }
 pub(super) async fn rollback(
     State(state): State<Arc<AppState>>,
-    Path(id): Path<u64>,
+    ApiPath(id): ApiPath<u64>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let revision = read_revision(&state.control.store, id).await?;
-    let config = serde_json::from_value(revision.config).map_err(invalid)?;
-    stage(state, Candidate::Config(config), headers, false, "rollback").await
+    required_version(&headers)?;
+    let revision = state.control.revision(id).await?;
+    let config = tokio::task::spawn_blocking(move || {
+        serde_json::from_value::<PolicyConfigSet>(revision.config).map_err(invalid)
+    })
+    .await
+    .map_err(super::unavailable)??;
+    stage(
+        state,
+        Candidate::Config(config),
+        &headers,
+        false,
+        "rollback",
+    )
+    .await
 }

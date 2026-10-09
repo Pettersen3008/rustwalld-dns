@@ -1,4 +1,3 @@
-use rustwalld_dns_core::ServerConfig;
 use rustwalld_dns_policy::PolicyConfigSet;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -17,6 +16,7 @@ pub struct Config {
     pub decision_cache_entries: usize,
     pub max_inflight: usize,
     pub max_udp_queries: usize,
+    pub max_udp_upstream_waits: usize,
     pub max_tcp_connections: usize,
     pub event_queue: usize,
     pub history_rows: usize,
@@ -42,6 +42,7 @@ impl Default for Config {
             decision_cache_entries: 16384,
             max_inflight: 256,
             max_udp_queries: 512,
+            max_udp_upstream_waits: 1024,
             max_tcp_connections: 128,
             event_queue: 4096,
             history_rows: 100000,
@@ -52,11 +53,14 @@ impl Default for Config {
 }
 impl Config {
     pub fn read(path: &Path) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let mut file = std::fs::File::open(path)?.take(16 * 1024 * 1024 + 1);
+        let read_error =
+            |file: &Path, error: std::io::Error| format!("{}: {error}", file.display());
         let mut text = String::new();
-        file.read_to_string(&mut text)?;
+        std::fs::File::open(path)
+            .and_then(|file| file.take(16 * 1024 * 1024 + 1).read_to_string(&mut text))
+            .map_err(|error| read_error(path, error))?;
         if text.len() > 16 * 1024 * 1024 {
-            return Err("config exceeds 16 MiB".into());
+            return Err(format!("{}: config exceeds 16 MiB", path.display()).into());
         }
         let mut config: Self = toml::from_str(&text)?;
         if let Some(root) = &mut config.web_root
@@ -71,11 +75,11 @@ impl Config {
                 path.parent().unwrap_or(Path::new(".")).join(&input.path)
             };
             let mut rules = String::new();
-            std::fs::File::open(file_path)?
-                .take(64 * 1024 * 1024 + 1)
-                .read_to_string(&mut rules)?;
+            std::fs::File::open(&file_path)
+                .and_then(|file| file.take(64 * 1024 * 1024 + 1).read_to_string(&mut rules))
+                .map_err(|error| read_error(&file_path, error))?;
             if rules.len() > 64 * 1024 * 1024 {
-                return Err("filter file exceeds 64 MiB".into());
+                return Err(format!("{}: filter file exceeds 64 MiB", file_path.display()).into());
             }
             let policy = config
                 .policy
@@ -122,6 +126,7 @@ impl Config {
             decision_cache_entries: self.decision_cache_entries,
             max_inflight: self.max_inflight,
             max_udp_queries: self.max_udp_queries,
+            max_udp_upstream_waits: self.max_udp_upstream_waits,
             max_tcp_connections: self.max_tcp_connections,
             event_queue: self.event_queue,
             history_rows: self.history_rows,
@@ -138,18 +143,11 @@ impl Config {
             decision_cache_entries: self.decision_cache_entries,
             max_inflight: self.max_inflight,
             max_udp_queries: self.max_udp_queries,
+            max_udp_upstream_waits: self.max_udp_upstream_waits,
             max_tcp_connections: self.max_tcp_connections,
             event_queue: self.event_queue,
             history_rows: self.history_rows,
             policy: self.policy,
-        }
-    }
-    pub fn server(&self) -> ServerConfig {
-        ServerConfig {
-            listen: self.dns_listen,
-            max_udp_queries: self.max_udp_queries,
-            max_tcp_connections: self.max_tcp_connections,
-            ..Default::default()
         }
     }
 }

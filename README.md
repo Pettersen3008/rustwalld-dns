@@ -73,8 +73,13 @@ queue within the shutdown budget. Query names are not logged to stdout by the DN
 
 The token protects all management endpoints except `/healthz`, `/metrics` and
 `/api/v1/status`; these expose aggregate health information on loopback. The API
-must remain on loopback. It bounds connections, idle time, request concurrency
-and body size. DNS listeners outside loopback require explicitly configured
+must remain on loopback, and it rejects any `Host` other than an IP literal or
+`localhost` with 421, so a DNS-rebinding page cannot read even the open
+endpoints. Tokens are compared as SHA-256 digests in constant time; failures
+return 401 with `WWW-Authenticate: Bearer`. The API bounds connections, idle time
+(suspended while a request is being processed, never while its body is being
+read), request concurrency (32, with `/healthz` exempt so supervisors never see
+429), configuration-sized work (2 at once) and body size. DNS listeners outside loopback require explicitly configured
 `allowed_clients` CIDRs. Client bindings select policies; they do not grant access.
 Clients are matched by canonical address, so IPv4-mapped IPv6 networks such as
 `::ffff:10.0.0.0/104` are compiled as their IPv4 network (`10.0.0.0/8`; stored
@@ -344,11 +349,16 @@ curl -H "Authorization: Bearer $RUSTWALLD_API_TOKEN" \
 curl -H "Authorization: Bearer $RUSTWALLD_API_TOKEN" \
   -H 'Content-Type: application/json' --data-binary @candidate.json \
   http://127.0.0.1:8080/api/v1/policy/test
+# Mutations require the current ETag in If-Match.
+TAG=$(curl -sI -H "Authorization: Bearer $RUSTWALLD_API_TOKEN" \
+  http://127.0.0.1:8080/api/v1/config | awk 'tolower($1)=="etag:" {print $2}' | tr -d '\r')
 # Observe differences on real traffic, then promote the shadow candidate.
-curl -H "Authorization: Bearer $RUSTWALLD_API_TOKEN" \
+curl -H "Authorization: Bearer $RUSTWALLD_API_TOKEN" -H "If-Match: $TAG" \
   -H 'Content-Type: application/json' --data-binary @candidate.json \
   http://127.0.0.1:8080/api/v1/shadow
-curl -X POST -H "Authorization: Bearer $RUSTWALLD_API_TOKEN" \
+TAG=$(curl -sI -H "Authorization: Bearer $RUSTWALLD_API_TOKEN" \
+  http://127.0.0.1:8080/api/v1/config | awk 'tolower($1)=="etag:" {print $2}' | tr -d '\r')
+curl -X POST -H "Authorization: Bearer $RUSTWALLD_API_TOKEN" -H "If-Match: $TAG" \
   http://127.0.0.1:8080/api/v1/shadow/promote
 ```
 
@@ -379,10 +389,10 @@ curl -X POST -H "Authorization: Bearer $RUSTWALLD_API_TOKEN" \
 | `GET /healthz`, `GET /metrics` | Health and Prometheus counters/latency histogram |
 
 Configuration and shadow reads provide an opaque ETag covering active and shadow
-generations. Send that exact value in `If-Match` on mutation requests to reject
-stale changes with 412 before compilation or persistence. The console always
-uses this safeguard. Existing clients without `If-Match` retain unconditional
-writes. Promotion captures the shadow under the same single-permit mutation
+generations. Every mutation (`PUT /config`, `POST`/`DELETE /shadow`, shadow
+promotion, rollback, list preview and scheduled checks) requires that exact value
+in `If-Match`: a missing tag returns 428 and a stale one 412, before compilation
+or persistence, so no client can overwrite a change it has not seen. Promotion captures the shadow under the same single-permit mutation
 admission used for its precondition check; no mutex spans compilation or SQLite
 I/O. Responses use `Cache-Control: no-store`; served assets receive a restrictive
 CSP, `nosniff` and a no-referrer policy.

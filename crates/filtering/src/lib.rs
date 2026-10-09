@@ -20,7 +20,7 @@ pub enum Matcher {
     Exact,
     Suffix,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ListInput {
     pub name: String,

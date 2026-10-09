@@ -7,7 +7,7 @@ use config::Config;
 use rustwalld_dns_runtime::Runtime;
 pub use rustwalld_dns_runtime::{downloads, maintenance, refreshes, store};
 use std::{error::Error, sync::Arc, time::Duration};
-use tokio::{net::TcpListener, sync::Semaphore};
+use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
 /// Run the standalone HTTP adapter and durable DNS runtime on caller-owned executors.
@@ -35,17 +35,14 @@ pub async fn run(
         Arc::new(rustwalld_dns_filter::ParallelCompiler::new(2)?),
     )
     .await?;
-    let state = Arc::new(api::AppState {
-        control: runtime.control().clone(),
-        api_slots: Arc::new(Semaphore::new(32)),
-        token,
-    });
+    let state = Arc::new(api::AppState::new(runtime.control().clone(), &token));
     let listener = TcpListener::bind(api_listen).await?;
     let api_stop = stop.clone();
     let mut api_task = tokio::spawn(async move {
         axum::serve(
             listener::ManagementListener::new(listener, 128, Duration::from_secs(30)),
-            api::router_with_ui(state, web_root),
+            api::router_with_ui(state, web_root)
+                .into_make_service_with_connect_info::<listener::Activity>(),
         )
         .with_graceful_shutdown(api_stop.cancelled_owned())
         .await

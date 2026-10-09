@@ -3,6 +3,7 @@ use crate::{Binding, PolicyError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
+/// Combined bytes of all binding annotation text in one configuration.
 pub const MAX_METADATA_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -22,7 +23,7 @@ pub struct BindingMetadata {
 
 pub(crate) fn validate(bindings: &[Binding]) -> Result<(), PolicyError> {
     let mut bytes = 0usize;
-    for binding in bindings {
+    for (index, binding) in bindings.iter().enumerate() {
         let Some(metadata) = &binding.metadata else {
             continue;
         };
@@ -54,10 +55,13 @@ pub(crate) fn validate(bindings: &[Binding]) -> Result<(), PolicyError> {
                     || !tags.insert(tag.as_str())
             })
         {
-            return Err(PolicyError::Invalid(format!(
-                "invalid metadata for binding {}",
-                binding.name
-            )));
+            return Err(PolicyError::field(
+                format!("bindings[{index}].metadata"),
+                format!(
+                    "invalid annotations for binding {}",
+                    crate::config::excerpt(&binding.name)
+                ),
+            ));
         }
         bytes = bytes.saturating_add(
             [&metadata.group, &metadata.owner, &metadata.note]
@@ -68,8 +72,9 @@ pub(crate) fn validate(bindings: &[Binding]) -> Result<(), PolicyError> {
                 + metadata.tags.iter().map(String::len).sum::<usize>(),
         );
         if bytes > MAX_METADATA_BYTES {
-            return Err(PolicyError::Invalid(
-                "combined binding metadata exceeds 8 MiB".into(),
+            return Err(PolicyError::field(
+                format!("bindings[{index}].metadata"),
+                "combined binding metadata exceeds 8 MiB",
             ));
         }
     }

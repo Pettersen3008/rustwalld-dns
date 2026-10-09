@@ -1,5 +1,9 @@
 //! Compiled exact-domain allows. Expiry never depends on a management task.
-use crate::{CompiledPolicy, PolicyError, validate_name};
+use crate::{
+    CompiledPolicy, PolicyError,
+    config::{excerpt, validate_name},
+    sources::MAX_UNIX_SECONDS,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -71,6 +75,7 @@ impl Entry {
 }
 impl Entries {
     pub(crate) fn compile(
+        policy: usize,
         inputs: &[TemporaryException],
         clock: &Clock,
     ) -> Result<Option<Self>, PolicyError> {
@@ -78,19 +83,35 @@ impl Entries {
         let mut domains = HashSet::new();
         let mut entries = HashMap::new();
         for (index, input) in inputs.iter().enumerate() {
-            validate_name(&input.name)?;
-            let domain = rustwalld_dns_filter::normalize(&input.domain)?;
-            if !names.insert(&input.name)
-                || !domains.insert(domain.clone())
-                || !(1..=253_402_300_799).contains(&input.expires_at)
-            {
-                return Err(PolicyError::Invalid(
-                    "invalid/duplicate temporary exception".into(),
+            let field =
+                |name: &str| format!("policies[{policy}].temporary_exceptions[{index}].{name}");
+            validate_name(&input.name, || field("name"))?;
+            let domain = rustwalld_dns_filter::normalize(&input.domain)
+                .map_err(|_| PolicyError::field(field("domain"), excerpt(&input.domain)))?;
+            if !names.insert(&input.name) {
+                return Err(PolicyError::field(
+                    field("name"),
+                    format!("duplicate exception name {}", excerpt(&input.name)),
+                ));
+            }
+            if !domains.insert(domain.clone()) {
+                return Err(PolicyError::field(
+                    field("domain"),
+                    format!("duplicate exception domain {domain}"),
+                ));
+            }
+            if !(1..=MAX_UNIX_SECONDS).contains(&input.expires_at) {
+                return Err(PolicyError::field(
+                    field("expires_at"),
+                    format!(
+                        "{} is outside 1 through {MAX_UNIX_SECONDS}",
+                        input.expires_at
+                    ),
                 ));
             }
             let wall = UNIX_EPOCH
                 .checked_add(Duration::from_secs(input.expires_at))
-                .ok_or_else(|| PolicyError::Invalid("invalid exception expiry".into()))?;
+                .ok_or_else(|| PolicyError::field(field("expires_at"), "unrepresentable time"))?;
             let Ok(remaining) = wall.duration_since(clock.wall) else {
                 continue;
             };
@@ -98,16 +119,20 @@ impl Entries {
                 continue;
             }
             if remaining > MAX_EXCEPTION_REMAINING {
-                return Err(PolicyError::Invalid(
-                    "temporary exception has more than seven days remaining".into(),
+                return Err(PolicyError::field(
+                    field("expires_at"),
+                    "more than seven days remaining",
                 ));
             }
-            let deadline = clock
-                .monotonic
-                .checked_add(remaining)
-                .ok_or_else(|| PolicyError::Invalid("invalid exception deadline".into()))?;
-            let index = u16::try_from(index)
-                .map_err(|_| PolicyError::Invalid("too many exceptions".into()))?;
+            let deadline = clock.monotonic.checked_add(remaining).ok_or_else(|| {
+                PolicyError::field(field("expires_at"), "unrepresentable deadline")
+            })?;
+            let index = u16::try_from(index).map_err(|_| PolicyError::Count {
+                field: format!("policies[{policy}].temporary_exceptions"),
+                actual: inputs.len(),
+                min: 0,
+                max: usize::from(u16::MAX),
+            })?;
             let mut exception = input.clone();
             exception.domain.clone_from(&domain);
             entries.insert(
@@ -165,7 +190,9 @@ mod tests {
     #[test]
     fn expiry_is_exact_ttl_is_floored_and_clock_jumps_never_revive_entries() {
         let clock = clock();
-        let entries = Entries::compile(&[input(1005)], &clock).unwrap().unwrap();
+        let entries = Entries::compile(0, &[input(1005)], &clock)
+            .unwrap()
+            .unwrap();
         let entry = entries.0.get("xn--bcher-kva.test").unwrap();
         assert_eq!(entry.remaining_at(clock.monotonic, clock.wall), Some(5));
         assert_eq!(
@@ -183,7 +210,9 @@ mod tests {
             None
         );
         assert_eq!(entry.remaining_at(clock.monotonic, clock.wall), None);
-        let entries = Entries::compile(&[input(1005)], &clock).unwrap().unwrap();
+        let entries = Entries::compile(0, &[input(1005)], &clock)
+            .unwrap()
+            .unwrap();
         let entry = entries.0.values().next().unwrap();
         assert_eq!(
             entry.remaining_at(clock.monotonic, clock.wall + Duration::from_secs(5)),
@@ -194,31 +223,49 @@ mod tests {
             wall: clock.wall + Duration::from_secs(6),
             ..clock
         };
-        assert!(Entries::compile(&[input(1005)], &later).unwrap().is_none());
+        assert!(
+            Entries::compile(0, &[input(1005)], &later)
+                .unwrap()
+                .is_none()
+        );
     }
     #[test]
     fn names_domains_limits_and_expired_entries_are_validated() {
         let clock = clock();
-        assert!(Entries::compile(&[], &clock).unwrap().is_none());
-        assert!(Entries::compile(&[input(999)], &clock).unwrap().is_none());
+        assert!(Entries::compile(0, &[], &clock).unwrap().is_none());
         assert!(
-            Entries::compile(&[input(1000 + MAX_EXCEPTION_REMAINING.as_secs())], &clock).is_ok()
+            Entries::compile(0, &[input(999)], &clock)
+                .unwrap()
+                .is_none()
         );
         assert!(
-            Entries::compile(&[input(1001 + MAX_EXCEPTION_REMAINING.as_secs())], &clock).is_err()
+            Entries::compile(
+                0,
+                &[input(1000 + MAX_EXCEPTION_REMAINING.as_secs())],
+                &clock
+            )
+            .is_ok()
         );
-        assert!(Entries::compile(&[input(u64::MAX)], &clock).is_err());
-        assert!(Entries::compile(&[input(0)], &clock).is_err());
+        assert!(
+            Entries::compile(
+                0,
+                &[input(1001 + MAX_EXCEPTION_REMAINING.as_secs())],
+                &clock
+            )
+            .is_err()
+        );
+        assert!(Entries::compile(0, &[input(u64::MAX)], &clock).is_err());
+        assert!(Entries::compile(0, &[input(0)], &clock).is_err());
         let mut other = input(1005);
         other.name = "other".into();
         other.domain = "xn--bcher-kva.test".into();
-        assert!(Entries::compile(&[input(1005), other.clone()], &clock).is_err());
+        assert!(Entries::compile(0, &[input(1005), other.clone()], &clock).is_err());
         other.domain = "different.test".into();
         other.name = "repair".into();
-        assert!(Entries::compile(&[input(1005), other], &clock).is_err());
+        assert!(Entries::compile(0, &[input(1005), other], &clock).is_err());
         let mut expired = input(999);
         expired.domain = "bad..test".into();
-        assert!(Entries::compile(&[expired], &clock).is_err());
+        assert!(Entries::compile(0, &[expired], &clock).is_err());
     }
     #[test]
     fn permanent_assertions_cannot_be_satisfied_by_an_exception_and_counts_are_bounded() {

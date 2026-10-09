@@ -23,6 +23,138 @@ pub struct PolicyListStats {
     pub lists: Vec<rustwalld_dns_filter::ListStats>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct AssertionResult {
+    pub assertion: Assertion,
+    pub permitted: bool,
+    pub trace: Option<AssertionTrace>,
+    pub failure: Option<AssertionFailure>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum AssertionFailure {
+    ClientNotPermitted,
+    InvalidDomain,
+    UnexpectedDecision,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AssertionTrace {
+    pub domain: String,
+    pub client_name: Option<String>,
+    pub network: Option<IpNet>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub binding_metadata: Option<crate::BindingMetadata>,
+    pub policy: String,
+    pub decision: Decision,
+    pub rewrite: bool,
+    pub upstream: String,
+    pub rule: Option<MatchedRule>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MatchedRule {
+    pub domain: String,
+    pub matcher: Matcher,
+    pub sources: Vec<Source>,
+    pub total_sources: usize,
+}
+
+impl PolicySnapshot {
+    /// Compile and check all assertions without returning a publishable snapshot.
+    /// No listeners, database, executor or upstream exchange are created here.
+    pub fn check(config: PolicyConfigSet) -> Result<CheckReport, PolicyError> {
+        let snapshot = Self::build(config, 1)?;
+        Ok(snapshot.check_report())
+    }
+    /// Diagnose all assertions using an owned pool without publishing a revision.
+    #[cfg(feature = "parallel")]
+    pub fn check_parallel(
+        config: PolicyConfigSet,
+        compiler: &rustwalld_dns_filter::ParallelCompiler,
+    ) -> Result<CheckReport, PolicyError> {
+        let snapshot = Self::build_parallel(config, 1, compiler)?;
+        Ok(snapshot.check_report())
+    }
+    fn check_report(&self) -> CheckReport {
+        let snapshot = self;
+        let results: Vec<_> = snapshot
+            .config
+            .assertions
+            .iter()
+            .map(|assertion| snapshot.check_assertion(assertion))
+            .collect();
+        let failed = results
+            .iter()
+            .filter(|result| result.failure.is_some())
+            .count();
+        CheckReport {
+            basis: "permanent_policy",
+            valid: failed == 0,
+            assertions: results.len(),
+            failed,
+            policies: snapshot.policies.len(),
+            results,
+            list_stats: snapshot
+                .policies
+                .iter()
+                .map(|policy| PolicyListStats {
+                    policy: policy.name.clone(),
+                    lists: policy.filters.stats.clone(),
+                })
+                .collect(),
+        }
+    }
+
+    fn check_assertion(&self, assertion: &Assertion) -> AssertionResult {
+        let permitted = self.permits(assertion.client);
+        let Ok(domain) = rustwalld_dns_filter::normalize(&assertion.domain) else {
+            return AssertionResult {
+                assertion: assertion.clone(),
+                permitted,
+                trace: None,
+                failure: Some(AssertionFailure::InvalidDomain),
+            };
+        };
+        let explanation = self.explain_normalized(assertion.client, &domain);
+        let failure = if !permitted {
+            Some(AssertionFailure::ClientNotPermitted)
+        } else if explanation.decision.action != assertion.expected {
+            Some(AssertionFailure::UnexpectedDecision)
+        } else {
+            None
+        };
+        AssertionResult {
+            assertion: assertion.clone(),
+            permitted,
+            trace: Some(AssertionTrace {
+                domain,
+                client_name: explanation.client_name.map(str::to_owned),
+                network: explanation.network,
+                binding_metadata: explanation.binding_metadata.cloned(),
+                policy: explanation.policy.to_owned(),
+                decision: explanation.decision,
+                rewrite: explanation.rewrite,
+                upstream: explanation.upstream.to_owned(),
+                rule: explanation.rule.map(|rule| MatchedRule {
+                    domain: rule.domain.to_string(),
+                    matcher: rule.matcher,
+                    sources: rule
+                        .sources
+                        .iter()
+                        .take(MAX_REPORTED_SOURCES)
+                        .cloned()
+                        .collect(),
+                    total_sources: rule.sources.len(),
+                }),
+            }),
+            failure,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -177,136 +309,5 @@ mod tests {
         assert!(report.valid);
         assert_eq!(report.assertions, 0);
         assert_eq!(report.failed, 0);
-    }
-}
-
-#[derive(Debug, Serialize)]
-pub struct AssertionResult {
-    pub assertion: Assertion,
-    pub permitted: bool,
-    pub trace: Option<AssertionTrace>,
-    pub failure: Option<AssertionFailure>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum AssertionFailure {
-    ClientNotPermitted,
-    InvalidDomain,
-    UnexpectedDecision,
-}
-
-#[derive(Debug, Serialize)]
-pub struct AssertionTrace {
-    pub domain: String,
-    pub client_name: Option<String>,
-    pub network: Option<IpNet>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub binding_metadata: Option<crate::BindingMetadata>,
-    pub policy: String,
-    pub decision: Decision,
-    pub rewrite: bool,
-    pub upstream: String,
-    pub rule: Option<MatchedRule>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct MatchedRule {
-    pub domain: String,
-    pub matcher: Matcher,
-    pub sources: Vec<Source>,
-    pub total_sources: usize,
-}
-
-impl PolicySnapshot {
-    /// Compile and check all assertions without returning a publishable snapshot.
-    /// No listeners, database, executor or upstream exchange are created here.
-    pub fn check(config: PolicyConfigSet) -> Result<CheckReport, PolicyError> {
-        let snapshot = Self::build(config, 1)?;
-        Ok(snapshot.check_report())
-    }
-    /// Diagnose all assertions using an owned pool without publishing a revision.
-    #[cfg(feature = "parallel")]
-    pub fn check_parallel(
-        config: PolicyConfigSet,
-        compiler: &rustwalld_dns_filter::ParallelCompiler,
-    ) -> Result<CheckReport, PolicyError> {
-        let snapshot = Self::build_parallel(config, 1, compiler)?;
-        Ok(snapshot.check_report())
-    }
-    fn check_report(&self) -> CheckReport {
-        let snapshot = self;
-        let results: Vec<_> = snapshot
-            .config
-            .assertions
-            .iter()
-            .map(|assertion| snapshot.check_assertion(assertion))
-            .collect();
-        let failed = results
-            .iter()
-            .filter(|result| result.failure.is_some())
-            .count();
-        CheckReport {
-            basis: "permanent_policy",
-            valid: failed == 0,
-            assertions: results.len(),
-            failed,
-            policies: snapshot.policies.len(),
-            results,
-            list_stats: snapshot
-                .policies
-                .iter()
-                .map(|policy| PolicyListStats {
-                    policy: policy.name.clone(),
-                    lists: policy.filters.stats.clone(),
-                })
-                .collect(),
-        }
-    }
-
-    fn check_assertion(&self, assertion: &Assertion) -> AssertionResult {
-        let permitted = self.permits(assertion.client);
-        let Ok(domain) = rustwalld_dns_filter::normalize(&assertion.domain) else {
-            return AssertionResult {
-                assertion: assertion.clone(),
-                permitted,
-                trace: None,
-                failure: Some(AssertionFailure::InvalidDomain),
-            };
-        };
-        let explanation = self.explain_normalized(assertion.client, &domain);
-        let failure = if !permitted {
-            Some(AssertionFailure::ClientNotPermitted)
-        } else if explanation.decision.action != assertion.expected {
-            Some(AssertionFailure::UnexpectedDecision)
-        } else {
-            None
-        };
-        AssertionResult {
-            assertion: assertion.clone(),
-            permitted,
-            trace: Some(AssertionTrace {
-                domain,
-                client_name: explanation.client_name.map(str::to_owned),
-                network: explanation.network,
-                binding_metadata: explanation.binding_metadata.cloned(),
-                policy: explanation.policy.to_owned(),
-                decision: explanation.decision,
-                rewrite: explanation.rewrite,
-                upstream: explanation.upstream.to_owned(),
-                rule: explanation.rule.map(|rule| MatchedRule {
-                    domain: rule.domain.to_string(),
-                    matcher: rule.matcher,
-                    sources: rule
-                        .sources
-                        .iter()
-                        .take(MAX_REPORTED_SOURCES)
-                        .cloned()
-                        .collect(),
-                    total_sources: rule.sources.len(),
-                }),
-            }),
-            failure,
-        }
     }
 }

@@ -220,12 +220,11 @@ fn transport(
         Host::Ipv4(ip) => ip.to_string(),
         Host::Ipv6(ip) => ip.to_string(),
     };
-    if source.bootstrap_ips.iter().any(|ip| {
-        let ip = ip.to_canonical();
-        ip.is_unspecified()
-            || ip.is_multicast()
-            || matches!(ip, std::net::IpAddr::V4(ip) if ip.is_broadcast())
-    }) {
+    if !source
+        .bootstrap_ips
+        .iter()
+        .all(|ip| rustwalld_dns_policy::is_unicast_destination(*ip))
+    {
         return Err("source bootstrap IP must be unicast".into());
     }
     if let Ok(ip) = host.parse::<std::net::IpAddr>()

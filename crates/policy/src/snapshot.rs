@@ -57,6 +57,29 @@ pub struct PolicySnapshot {
     pub(crate) metadata: HashMap<IpNet, usize>,
 }
 
+// Summaries only: configuration and rule sets can hold hundreds of MiB.
+impl std::fmt::Debug for PolicySnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PolicySnapshot")
+            .field("generation", &self.generation)
+            .field("policies", &self.policies)
+            .field("upstreams", &self.upstreams.len())
+            .field("default", &self.default)
+            .finish_non_exhaustive()
+    }
+}
+impl std::fmt::Debug for CompiledPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompiledPolicy")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("upstream", &self.upstream)
+            .field("rules", &self.filters.rules().len())
+            .field("rewrites", &self.rewrites.len())
+            .finish_non_exhaustive()
+    }
+}
+
 impl PolicySnapshot {
     /// Identifier included in every cache key and query event.
     #[inline]

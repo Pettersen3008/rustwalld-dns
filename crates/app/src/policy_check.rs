@@ -74,6 +74,7 @@ fn write_text(output: &mut impl Write, report: &CheckReport) -> std::io::Result<
                         "client is outside allowed networks; trace is hypothetical",
                     AssertionFailure::InvalidDomain => "invalid domain",
                     AssertionFailure::UnexpectedDecision => "decision differs from the assertion",
+                    _ => "assertion failed",
                 }
             )?;
         }

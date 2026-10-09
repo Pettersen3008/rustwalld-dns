@@ -2,6 +2,13 @@
 
 ## 0.1.0 — unreleased
 
+- Policy validation errors are structured (`PolicyError::{Field, Count,
+  Generation}`) and name the failing configuration path with a bounded, escaped
+  value. Names reject whitespace-only text and bidirectional formatting controls.
+  Upstream addresses are judged by their canonical IP. `PolicyError` and
+  `AssertionFailure` are `#[non_exhaustive]`; `PolicyListStats`,
+  `MAX_METADATA_BYTES` and `is_unicast_destination` are exported; compiled
+  snapshots implement summary `Debug`.
 - Optional bounded Rayon compilation for large filters/policies, with deterministic
   IDs/provenance and the original validation/assertion gates. Durable runtime can
   share one owned pool across startup, restoration, checks and staging; standalone

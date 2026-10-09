@@ -115,6 +115,67 @@ async fn wal_snapshot_and_restore_preserve_runtime_revisions_without_clobbering(
     cancel.cancel();
     done.await.unwrap();
 }
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn online_backup_completes_while_another_connection_keeps_writing() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    };
+    let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let source = dir.path().join("busy.sqlite");
+    let (_, cancel, done) = initialize(&source).await;
+    cancel.cancel();
+    done.await.unwrap();
+    // Several MiB of history: many more pages than one incremental step.
+    Connection::open(&source)
+        .unwrap()
+        .execute_batch(
+            "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<60000)
+             INSERT INTO queries(client,domain,qtype,generation,policy,action,rule,decision_cached,rcode,source,latency_us)
+             SELECT '192.0.2.1', printf('history-%08d.example.test', x), 1, 1, 0, 'allow', NULL, 0, 0, 'forwarded', 10 FROM n;",
+        )
+        .unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let writes = Arc::new(AtomicU64::new(0));
+    let writer = {
+        let (stop, writes, source) = (stop.clone(), writes.clone(), source.clone());
+        std::thread::spawn(move || {
+            let connection = Connection::open(&source).unwrap();
+            connection
+                .execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=OFF;")
+                .unwrap();
+            connection.busy_timeout(Duration::from_secs(1)).unwrap();
+            while !stop.load(Ordering::Relaxed) {
+                connection
+                    .execute(
+                        "INSERT INTO queries(client,domain,qtype,generation,policy,action,decision_cached,rcode,source,latency_us) VALUES('192.0.2.2','live.test',1,1,0,'allow',0,0,'forwarded',1)",
+                        [],
+                    )
+                    .unwrap();
+                writes.fetch_add(1, Ordering::Relaxed);
+            }
+        })
+    };
+    while writes.load(Ordering::Relaxed) < 100 {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    let output = dir.path().join("backup.sqlite");
+    let started = std::time::Instant::now();
+    let report = tokio::task::spawn_blocking({
+        let (source, output) = (source.clone(), output.clone());
+        move || maintenance::snapshot(&source, &output).map_err(|e| e.to_string())
+    })
+    .await
+    .unwrap();
+    let during = writes.load(Ordering::Relaxed);
+    stop.store(true, Ordering::Relaxed);
+    writer.join().unwrap();
+    let report = report.unwrap();
+    assert!(started.elapsed() < Duration::from_secs(20));
+    assert!(during > 100, "writer made no progress during the backup");
+    assert!(report.history_rows >= 60000);
+    assert_eq!(maintenance::verify(&output).unwrap().active_generation, 1);
+}
 #[tokio::test]
 async fn corrupt_future_or_assertion_failing_sources_never_publish_a_backup() {
     let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();

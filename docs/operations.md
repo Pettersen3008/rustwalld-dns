@@ -120,7 +120,8 @@ sudo -u rustwalld-dns /opt/rustwalld-dns/current/bin/rustwalld-dns verify-backup
 ```
 
 The output is a single 0600 SQLite file. The destination directory must not be
-group/world writable. Copy uses bounded incremental steps with
+group/world writable. Copy uses one online-backup step under a single WAL read
+transaction (writers are not blocked and cannot restart it), retried on busy until
 a 30-second deadline, validates integrity/schema and compiles active/shadow
 required assertions, fsyncs and publishes without replacing an existing target.
 Validation can take longer for large rule sets. Failures before publication do

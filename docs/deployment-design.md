@@ -20,7 +20,8 @@ normalize to rollback journal, validate schema/integrity plus active/shadow poli
 assertions, fsync and publish without overwriting a target. Restore requires an
 absent target and absent WAL/SHM/journal sidecars. Existing running stores are
 never replaced by this command. Reads do not bootstrap or migrate a backup.
-Backup steps have a 30-second deadline; validation may take longer for big lists.
+The backup copies all pages in one step (incremental steps restart on every
+concurrent write) with a 30-second busy deadline; validation may take longer.
 Reject future schema versions on daemon startup instead of resetting their marker.
 
 Packaging: locked Rust/npm builds, recorded toolchains/source hashes, manifest

@@ -155,16 +155,22 @@ pub fn snapshot(source: &Path, output: &Path) -> Result<Report> {
     {
         let backup = Backup::new(&source, &mut destination)?;
         let deadline = Instant::now() + Duration::from_secs(30);
+        // Copy every page in one step under a single WAL read transaction, which
+        // never blocks the daemon's writers. Incremental steps restart whenever
+        // another connection writes, so under traffic they may never finish.
         loop {
-            if Instant::now() >= deadline {
-                return Err(
-                    "backup copy exceeded 30-second deadline; retry during quieter traffic".into(),
-                );
-            }
-            match backup.step(256)? {
+            match backup.step(-1)? {
                 StepResult::Done => break,
+                StepResult::More | StepResult::Busy | StepResult::Locked
+                    if Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(10))
+                }
                 StepResult::More | StepResult::Busy | StepResult::Locked => {
-                    std::thread::sleep(Duration::from_millis(2))
+                    return Err(
+                        "backup copy exceeded 30-second deadline; retry during quieter traffic"
+                            .into(),
+                    );
                 }
                 _ => return Err("unrecognized SQLite backup state".into()),
             }

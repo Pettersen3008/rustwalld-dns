@@ -19,6 +19,8 @@ snapshot is returned; `PolicySnapshot::check` reports all assertion outcomes
 without publication. Generation identifiers are supplied by the host and must
 never be reused for changed content. Rollback recompiles under a fresh identifier.
 Snapshots contain bounded forwarding resources; compilation does not resolve DNS.
+Policies with identical list inputs share one compiled filter set. Combined list
+text is capped at 256 MiB and distinct compiled rules at 10,000,000 per snapshot.
 The library does not load files, start an HTTP server or open a database.
 Rust 1.95+, edition 2024; MIT OR Apache-2.0.
 

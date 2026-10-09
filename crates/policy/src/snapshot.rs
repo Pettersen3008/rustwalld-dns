@@ -10,7 +10,8 @@ pub struct CompiledPolicy {
     pub(crate) id: usize,
     pub(crate) name: String,
     pub(crate) upstream: usize,
-    pub(crate) filters: FilterSnapshot,
+    // Shared with other policies of this generation that use identical lists.
+    pub(crate) filters: Arc<FilterSnapshot>,
     pub(crate) rewrites: HashMap<String, Vec<Record>>,
     pub(crate) exceptions: Option<exceptions::Entries>,
 }

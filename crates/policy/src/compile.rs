@@ -11,16 +11,95 @@ use hickory_proto::rr::{
     rdata::{A, AAAA},
 };
 use ipnet::{IpNet, Ipv4Net};
-use rustwalld_dns_filter::FilterSnapshot;
+use rustwalld_dns_filter::{CompileError, FilterSnapshot, ListInput};
 use rustwalld_dns_resolver::Forwarder;
 use std::{
+    cell::OnceCell,
     collections::{BTreeMap, HashMap, HashSet},
+    hash::{BuildHasher, Hash, Hasher, RandomState},
     net::IpAddr,
     sync::Arc,
     time::Duration,
 };
 const MAX_FILTER_BYTES: usize = 256 * 1024 * 1024;
-const MAX_POLICY_RULES: usize = 10_000_000;
+/// Distinct compiled rules across one snapshot (roughly 2.4 GiB at the limit).
+/// Policies with identical list inputs share one compiled set, counted once.
+const MAX_SNAPSHOT_RULES: usize = 10_000_000;
+
+/// Compiled filter sets keyed by list input, so policies reusing the same lists
+/// share one immutable `FilterSnapshot` and one share of the rule budget.
+struct FilterSets<'a> {
+    hasher: RandomState,
+    // Cheap names/actions/lengths hash; full text is hashed only on collision.
+    by_shape: HashMap<u64, Vec<usize>>,
+    sets: Vec<FilterSet<'a>>,
+    rules: usize,
+    max_rules: usize,
+}
+struct FilterSet<'a> {
+    lists: &'a [ListInput],
+    content: OnceCell<u64>,
+    filters: Arc<FilterSnapshot>,
+}
+impl<'a> FilterSets<'a> {
+    fn new(max_rules: usize) -> Self {
+        Self {
+            hasher: RandomState::new(),
+            by_shape: HashMap::new(),
+            sets: Vec::new(),
+            rules: 0,
+            max_rules,
+        }
+    }
+    fn hash(&self, lists: &[ListInput], content: bool) -> u64 {
+        let mut hasher = self.hasher.build_hasher();
+        for list in lists {
+            list.name.hash(&mut hasher);
+            list.action.hash(&mut hasher);
+            if content {
+                list.rules.hash(&mut hasher);
+            } else {
+                list.rules.len().hash(&mut hasher);
+            }
+        }
+        hasher.finish()
+    }
+    fn get_or_compile(
+        &mut self,
+        lists: &'a [ListInput],
+        compile: impl Fn(&[ListInput], usize, usize) -> Result<FilterSnapshot, CompileError>,
+    ) -> Result<Arc<FilterSnapshot>, CompileError> {
+        let shape = self.hash(lists, false);
+        let content = OnceCell::new();
+        for &index in self.by_shape.get(&shape).into_iter().flatten() {
+            let set = &self.sets[index];
+            let same =
+                set.lists.len() == lists.len()
+                    && *set.content.get_or_init(|| self.hash(set.lists, true))
+                        == *content.get_or_init(|| self.hash(lists, true))
+                    && set.lists.iter().zip(lists).all(|(a, b)| {
+                        a.name == b.name && a.action == b.action && a.rules == b.rules
+                    });
+            if same {
+                return Ok(set.filters.clone());
+            }
+        }
+        // The remaining budget also bounds parsing of this set's raw lines.
+        let budget = self.max_rules.saturating_sub(self.rules);
+        let filters = Arc::new(compile(lists, budget, MAX_FILTER_BYTES)?);
+        self.rules = self.rules.saturating_add(filters.rules().len());
+        self.by_shape
+            .entry(shape)
+            .or_default()
+            .push(self.sets.len());
+        self.sets.push(FilterSet {
+            lists,
+            content,
+            filters: filters.clone(),
+        });
+        Ok(filters)
+    }
+}
 impl PolicySnapshot {
     pub fn compile(config: PolicyConfigSet, generation: u64) -> Result<Self, PolicyError> {
         let snapshot = Self::build(config, generation)?;
@@ -29,7 +108,12 @@ impl PolicySnapshot {
     }
     // Never expose a snapshot that has not passed required assertions.
     pub(crate) fn build(config: PolicyConfigSet, generation: u64) -> Result<Self, PolicyError> {
-        Self::build_using(config, generation, FilterSnapshot::compile)
+        Self::build_using(
+            config,
+            generation,
+            MAX_SNAPSHOT_RULES,
+            FilterSnapshot::compile,
+        )
     }
     /// Compile through an owned bounded pool, preserving the assertion gate.
     /// The caller must keep this synchronous work off the DNS executor.
@@ -49,18 +133,18 @@ impl PolicySnapshot {
         generation: u64,
         compiler: &rustwalld_dns_filter::ParallelCompiler,
     ) -> Result<Self, PolicyError> {
-        Self::build_using(config, generation, |lists, rules, bytes| {
-            compiler.compile(lists, rules, bytes)
-        })
+        Self::build_using(
+            config,
+            generation,
+            MAX_SNAPSHOT_RULES,
+            |lists, rules, bytes| compiler.compile(lists, rules, bytes),
+        )
     }
     fn build_using(
         config: PolicyConfigSet,
         generation: u64,
-        compile_filters: impl Fn(
-            &[rustwalld_dns_filter::ListInput],
-            usize,
-            usize,
-        ) -> Result<FilterSnapshot, rustwalld_dns_filter::CompileError>,
+        max_rules: usize,
+        compile_filters: impl Fn(&[ListInput], usize, usize) -> Result<FilterSnapshot, CompileError>,
     ) -> Result<Self, PolicyError> {
         let mut config = config;
         sources::validate(&config)?;
@@ -75,6 +159,7 @@ impl PolicySnapshot {
         let mut names = HashMap::new();
         let mut policies = Vec::new();
         let mut total_bytes = 0usize;
+        let mut filter_sets = FilterSets::new(max_rules);
         for (index, input) in config.policies.iter().enumerate() {
             let field = |name: &str| format!("policies[{index}].{name}");
             validate_name(&input.name, || field("name"))?;
@@ -106,7 +191,18 @@ impl PolicySnapshot {
                     "combined filter data exceeds 256 MiB",
                 ));
             }
-            let filters = compile_filters(&input.lists, MAX_POLICY_RULES, MAX_FILTER_BYTES)?;
+            let filters = filter_sets
+                .get_or_compile(&input.lists, &compile_filters)
+                .map_err(|error| match error {
+                    rustwalld_dns_filter::CompileError::Limit => PolicyError::field(
+                        field("lists"),
+                        format!(
+                            "distinct compiled rules across all policies exceed {}",
+                            filter_sets.max_rules
+                        ),
+                    ),
+                    error => error.into(),
+                })?;
             if let Some(list) = filters.stats.iter().find(|s| s.invalid > 0) {
                 return Err(PolicyError::field(
                     field("lists"),
@@ -431,6 +527,62 @@ mod tests {
         assert_eq!(
             error(source),
             "invalid configuration: filter_sources[0].bootstrap_ips: ::ffff:192.0.2.1 is listed more than once"
+        );
+    }
+
+    #[test]
+    fn identical_list_sets_compile_once_and_count_once_against_the_rule_budget() {
+        let list = |rules: &str| {
+            vec![ListInput {
+                name: "deny".into(),
+                action: rustwalld_dns_filter::Action::Block,
+                rules: rules.into(),
+            }]
+        };
+        let policy = |name: &str, lists| PolicyConfig {
+            name: name.into(),
+            upstream: "default".into(),
+            lists,
+            rewrites: vec![],
+            temporary_exceptions: vec![],
+        };
+        let shared = list("a.test\nb.test\nc.test\nd.test");
+        let mut config = PolicyConfigSet::default();
+        config.policies[0].lists = shared.clone();
+        config.policies.push(policy("kids", shared.clone()));
+        config.policies.push(policy("guests", shared));
+        // Same names/actions/lengths, different text: must not be shared.
+        config
+            .policies
+            .push(policy("other", list("a.test\nb.test\nc.test\ne.test")));
+        let compiled = std::cell::Cell::new(0);
+        let snapshot = PolicySnapshot::build_using(config.clone(), 1, 8, |lists, rules, bytes| {
+            compiled.set(compiled.get() + 1);
+            FilterSnapshot::compile(lists, rules, bytes)
+        })
+        .unwrap();
+        assert_eq!(compiled.get(), 2);
+        let filters = |index: usize| &snapshot.policies[index].filters;
+        assert!(Arc::ptr_eq(filters(0), filters(1)));
+        assert!(Arc::ptr_eq(filters(0), filters(2)));
+        assert!(!Arc::ptr_eq(filters(0), filters(3)));
+        assert_eq!(
+            snapshot.policies[3].filters().evaluate("e.test").action,
+            rustwalld_dns_filter::Action::Block
+        );
+        assert_eq!(
+            snapshot.policies[1].filters().evaluate("e.test").action,
+            rustwalld_dns_filter::Action::Allow
+        );
+        // Shared sets count once; a third distinct set exceeds the budget.
+        config.policies.push(policy("third", list("x.test")));
+        let message = PolicySnapshot::build_using(config, 1, 8, FilterSnapshot::compile)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            message,
+            "invalid configuration: policies[4].lists: \
+             distinct compiled rules across all policies exceed 8"
         );
     }
 

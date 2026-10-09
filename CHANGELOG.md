@@ -2,6 +2,9 @@
 
 ## 0.1.0 — unreleased
 
+- Policies with identical list inputs share one compiled `FilterSnapshot`, and
+  distinct compiled rules are capped at 10,000,000 per snapshot (previously per
+  policy, so reused lists multiplied memory).
 - IPv4-mapped IPv6 client bindings and allowed networks now match their IPv4
   clients (compiled as the IPv4 network); mapped prefixes below /96 are rejected.
 - Startup no longer fails when a stored temporary exception has more than seven

@@ -2,7 +2,7 @@ use crate::Engine;
 use std::{
     io,
     net::{IpAddr, SocketAddr},
-    sync::Arc,
+    sync::{Arc, atomic::Ordering},
     time::Duration,
 };
 use tokio::{
@@ -10,7 +10,7 @@ use tokio::{
     net::{TcpListener, TcpStream, UdpSocket},
     sync::Semaphore,
     task::JoinSet,
-    time::timeout,
+    time::{Instant, sleep_until, timeout},
 };
 use tokio_util::sync::CancellationToken;
 #[derive(Clone, Debug)]
@@ -61,24 +61,55 @@ impl Server {
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
         self.tcp.local_addr()
     }
+    /// Serve until `cancel` fires, then drain workers within `shutdown_timeout`.
+    ///
+    /// Listener errors never end service: per-connection errors are skipped and
+    /// resource exhaustion (for example `EMFILE`) pauses only the failing
+    /// listener briefly, so one transport cannot take the other down.
     pub async fn run(self, cancel: CancellationToken) -> io::Result<()> {
         let udp_limit = Arc::new(Semaphore::new(self.config.max_udp_queries));
         let tcp_limit = Arc::new(Semaphore::new(self.config.max_tcp_connections));
+        let metrics = self.engine.telemetry().metrics.clone();
         let mut tasks = JoinSet::new();
-        let mut buffer = vec![0; 4097];
-        let result = loop {
+        let mut buffer = vec![0; MAX_QUERY_BYTES + 1];
+        // A paused listener resumes at its deadline; `placeholder` only fills
+        // the disabled timer branches and is never awaited.
+        let placeholder = Instant::now();
+        let mut udp_pause: Option<Instant> = None;
+        let mut tcp_pause: Option<Instant> = None;
+        loop {
             tokio::select! {
                 biased;
-                _ = cancel.cancelled() => break Ok(()),
+                _ = cancel.cancelled() => break,
                 Some(result) = tasks.join_next(), if !tasks.is_empty() => {
-                    if let Err(error) = result { tracing::error!(%error, "DNS worker failed"); }
+                    if let Err(error) = result {
+                        tracing::error!(%error, "DNS worker failed");
+                    }
                 }
-                packet = self.udp.recv_from(&mut buffer) => {
-                    let (len, client) = match packet { Ok(packet) => packet, Err(error) => break Err(error) };
-                    if len > 4096 { continue; }
-                    let Ok(permit) = udp_limit.clone().try_acquire_owned() else { continue; };
+                () = sleep_until(udp_pause.unwrap_or(placeholder)), if udp_pause.is_some() => udp_pause = None,
+                () = sleep_until(tcp_pause.unwrap_or(placeholder)), if tcp_pause.is_some() => tcp_pause = None,
+                packet = self.udp.recv_from(&mut buffer), if udp_pause.is_none() => {
+                    let (len, client) = match packet {
+                        Ok(packet) => packet,
+                        Err(error) => {
+                            metrics.listener_errors.fetch_add(1, Ordering::Relaxed);
+                            if let Some(pause) = listener_backoff(&error) {
+                                tracing::warn!(%error, "DNS UDP receive failed");
+                                udp_pause = Some(Instant::now() + pause);
+                            }
+                            continue;
+                        }
+                    };
+                    if len > MAX_QUERY_BYTES {
+                        continue;
+                    }
+                    let Ok(permit) = udp_limit.clone().try_acquire_owned() else {
+                        metrics.udp_overloads.fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    };
                     let bytes = buffer[..len].to_vec();
-                    let engine = self.engine.clone(); let socket = self.udp.clone();
+                    let engine = self.engine.clone();
+                    let socket = self.udp.clone();
                     tasks.spawn(async move {
                         let _permit = permit;
                         if let Some(response) = engine.answer(&bytes, client.ip(), false).await {
@@ -86,17 +117,32 @@ impl Server {
                         }
                     });
                 }
-                connection = self.tcp.accept() => {
-                    let (stream, client) = match connection { Ok(connection) => connection, Err(error) => break Err(error) };
-                    let Ok(permit) = tcp_limit.clone().try_acquire_owned() else { continue; };
-                    let engine = self.engine.clone(); let cancel = cancel.clone(); let idle = self.config.tcp_idle_timeout;
+                connection = self.tcp.accept(), if tcp_pause.is_none() => {
+                    let (stream, client) = match connection {
+                        Ok(connection) => connection,
+                        Err(error) => {
+                            metrics.listener_errors.fetch_add(1, Ordering::Relaxed);
+                            if let Some(pause) = listener_backoff(&error) {
+                                tracing::warn!(%error, "DNS TCP accept failed");
+                                tcp_pause = Some(Instant::now() + pause);
+                            }
+                            continue;
+                        }
+                    };
+                    let Ok(permit) = tcp_limit.clone().try_acquire_owned() else {
+                        metrics.tcp_overloads.fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    };
+                    let engine = self.engine.clone();
+                    let cancel = cancel.clone();
+                    let idle = self.config.tcp_idle_timeout;
                     tasks.spawn(async move {
                         let _permit = permit;
                         let _ = serve_tcp(stream, client.ip(), engine, cancel, idle).await;
                     });
                 }
             }
-        };
+        }
         cancel.cancel();
         if timeout(self.config.shutdown_timeout, async {
             while tasks.join_next().await.is_some() {}
@@ -108,7 +154,25 @@ impl Server {
             while tasks.join_next().await.is_some() {}
         }
         self.engine.resolver.shutdown();
-        result
+        Ok(())
+    }
+}
+
+/// Largest accepted query message on either transport.
+const MAX_QUERY_BYTES: usize = 4096;
+/// Pause after a listener error that a retry cannot fix immediately.
+const LISTENER_BACKOFF: Duration = Duration::from_millis(100);
+
+/// `None` for errors tied to one peer (retry at once); otherwise a pause that
+/// keeps a persistent failure such as descriptor exhaustion from spinning.
+fn listener_backoff(error: &io::Error) -> Option<Duration> {
+    match error.kind() {
+        io::ErrorKind::ConnectionAborted
+        | io::ErrorKind::ConnectionReset
+        | io::ErrorKind::ConnectionRefused
+        | io::ErrorKind::Interrupted
+        | io::ErrorKind::WouldBlock => None,
+        _ => Some(LISTENER_BACKOFF),
     }
 }
 async fn serve_tcp(
@@ -126,7 +190,7 @@ async fn serve_tcp(
             _ = cancel.cancelled() => return Ok(()),
             result = timeout(idle, async {
                 let len = stream.read_u16().await? as usize;
-                if !(12..=4096).contains(&len) { return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid DNS frame")); }
+                if !(12..=MAX_QUERY_BYTES).contains(&len) { return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid DNS frame")); }
                 let mut bytes = vec![0; len];
                 stream.read_exact(&mut bytes).await?;
                 Ok::<_, io::Error>(bytes)

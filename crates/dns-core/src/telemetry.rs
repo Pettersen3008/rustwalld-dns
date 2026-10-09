@@ -42,6 +42,12 @@ pub struct Metrics {
     pub dropped_events: AtomicU64,
     pub shadow_differences: AtomicU64,
     pub temporary_allows: AtomicU64,
+    /// UDP queries dropped because `max_udp_queries` workers were busy.
+    pub udp_overloads: AtomicU64,
+    /// TCP connections closed because `max_tcp_connections` were open.
+    pub tcp_overloads: AtomicU64,
+    /// Failed UDP receives or TCP accepts; the listener keeps serving.
+    pub listener_errors: AtomicU64,
     pub latency_sum_us: AtomicU64,
     pub latency_buckets: [AtomicU64; 8],
 }

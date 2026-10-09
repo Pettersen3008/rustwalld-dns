@@ -37,6 +37,9 @@ bytes = "1"
 rcgen = "0.14"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
 
+[target.'cfg(unix)'.dev-dependencies]
+rustix = { version = "1", features = ["process"] }
+
 [[bench]]
 name = "engine"
 harness = false

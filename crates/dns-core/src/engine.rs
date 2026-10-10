@@ -265,7 +265,8 @@ impl Engine {
         let question = match accepted_question(&request) {
             Ok(question) => question,
             Err(code) => {
-                let response = finalize(&request, reply(&request, code));
+                let mut response = reply(&request, code);
+                finalize(&request, &mut response);
                 let output = encode(&request, &response, transport);
                 if output.is_some() {
                     self.telemetry.metrics.observe(start);
@@ -296,7 +297,7 @@ impl Engine {
         match step {
             Step::Local(response, source) => {
                 let excepted = exception.is_some();
-                self.finish(Outcome {
+                self.finish(&mut Outcome {
                     start,
                     client,
                     transport,
@@ -341,14 +342,14 @@ impl Engine {
         request: &Message,
         snapshot: &PolicySnapshot,
         policy: &CompiledPolicy,
-        rewrite: Option<Vec<hickory_proto::rr::Record>>,
+        rewrite: Option<&[hickory_proto::rr::Record]>,
         decision: Decision,
     ) -> Step {
         let metrics = &self.telemetry.metrics;
         if let Some(records) = rewrite {
             metrics.rewrites.fetch_add(1, Ordering::Relaxed);
             let mut response = reply(request, ResponseCode::NoError);
-            response.answers = records;
+            response.answers = records.to_vec();
             return Step::Local(response, QuerySource::Rewrite);
         }
         if decision.action == Action::Block {
@@ -431,7 +432,7 @@ impl Engine {
         } else {
             None
         };
-        self.finish(Outcome {
+        self.finish(&mut Outcome {
             start,
             client,
             transport,
@@ -477,7 +478,7 @@ impl Engine {
 
     /// Apply exception expiry and TTL limits, evaluate shadow policy, encode the
     /// reply and emit telemetry. Shared by local answers and forwarded misses.
-    fn finish(&self, mut outcome: Outcome<'_>) -> Option<Vec<u8>> {
+    fn finish(&self, outcome: &mut Outcome<'_>) -> Option<Vec<u8>> {
         let metrics = &self.telemetry.metrics;
         let live = outcome.exception.as_ref().and_then(|found| {
             found
@@ -512,20 +513,20 @@ impl Engine {
         if outcome.source == QuerySource::Failure {
             metrics.failures.fetch_add(1, Ordering::Relaxed);
         }
-        let shadow = self.shadow_decision(&outcome);
-        let response = finalize(outcome.request, outcome.response);
-        let output = encode(outcome.request, &response, outcome.transport)?;
+        let shadow = self.shadow_decision(outcome);
+        finalize(outcome.request, &mut outcome.response);
+        let output = encode(outcome.request, &outcome.response, outcome.transport)?;
         let latency_us = metrics.observe(outcome.start);
         self.telemetry.emit(QueryEvent {
             client: outcome.client,
             // Matching is finished: move the normalized name into telemetry.
-            domain: outcome.domain,
+            domain: std::mem::take(&mut outcome.domain),
             qtype: outcome.qtype,
             generation: outcome.generation,
             policy: outcome.policy.id(),
             decision: outcome.decision,
             decision_cached: outcome.decision_cached,
-            response_code: u16::from(response.metadata.response_code),
+            response_code: u16::from(outcome.response.metadata.response_code),
             source: outcome.source,
             latency_us,
             shadow,
@@ -601,7 +602,7 @@ fn accepted_question(request: &Message) -> Result<&Query, ResponseCode> {
 
 /// Restore the client's ID, flags, question and EDNS envelope on a reply that
 /// may come from a shared cache entry or coalesced flight.
-fn finalize(request: &Message, mut response: Message) -> Message {
+fn finalize(request: &Message, response: &mut Message) {
     response.metadata.id = request.metadata.id;
     response.metadata.recursion_desired = request.metadata.recursion_desired;
     response.metadata.checking_disabled = request.metadata.checking_disabled;
@@ -615,7 +616,6 @@ fn finalize(request: &Message, mut response: Message) -> Message {
         out.set_dnssec_ok(edns.flags().dnssec_ok);
         out
     });
-    response
 }
 
 /// Wire-encode a reply within the transport's size limit; UDP replies that do

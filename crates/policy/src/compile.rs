@@ -403,7 +403,7 @@ fn compile_upstreams(config: &PolicyConfigSet) -> Result<Upstreams, PolicyError>
 fn compile_rewrites(
     policy: usize,
     input: &crate::PolicyConfig,
-) -> Result<HashMap<String, Vec<Record>>, PolicyError> {
+) -> Result<HashMap<String, crate::rewrite::LocalAnswers>, PolicyError> {
     let mut rewrites = HashMap::new();
     for (index, rewrite) in input.rewrites.iter().enumerate() {
         let field = |name: &str| format!("policies[{policy}].rewrites[{index}].{name}");
@@ -424,21 +424,22 @@ fn compile_rewrites(
         }
         let name = Name::from_ascii(format!("{domain}."))
             .map_err(|_| PolicyError::field(field("domain"), excerpt(&domain)))?;
-        let records = rewrite
-            .addresses
-            .iter()
-            .map(|ip| {
-                Record::from_rdata(
+        let mut answers = crate::rewrite::LocalAnswers::default();
+        for ip in &rewrite.addresses {
+            match ip {
+                IpAddr::V4(ip) => answers.a.push(Record::from_rdata(
                     name.clone(),
                     rewrite.ttl,
-                    match ip {
-                        IpAddr::V4(ip) => RData::A(A(*ip)),
-                        IpAddr::V6(ip) => RData::AAAA(AAAA(*ip)),
-                    },
-                )
-            })
-            .collect();
-        rewrites.insert(domain, records);
+                    RData::A(A(*ip)),
+                )),
+                IpAddr::V6(ip) => answers.aaaa.push(Record::from_rdata(
+                    name.clone(),
+                    rewrite.ttl,
+                    RData::AAAA(AAAA(*ip)),
+                )),
+            }
+        }
+        rewrites.insert(domain, answers);
     }
     Ok(rewrites)
 }

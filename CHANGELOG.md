@@ -2,6 +2,16 @@
 
 ## 0.1.0 — unreleased
 
+- Query path is 2–16% faster than before this review on every warm wire
+  scenario with unchanged allocation counts ([evidence](docs/engine-split.md)):
+  replies finalize in place, and rewrite answers are grouped by record type at
+  compile time (`CompiledPolicy::rewrite` returns a borrowed slice).
+- Every public item of the library crates is documented and
+  `#![warn(missing_docs)]` keeps it so; `cargo doc` is clean with
+  `-D warnings`. Truncating casts use checked conversions, functions over 100
+  lines were split, `ResolveError` no longer exposes `h2::Error`,
+  `Forwarder::health()` is an accessor and public enums that may grow are
+  `#[non_exhaustive]`.
 - Management API: every mutation requires `If-Match` (428 when missing); `Host`
   must be an IP literal or `localhost` (421 otherwise, against DNS rebinding);
   tokens compare as SHA-256 digests in constant time and 401s carry

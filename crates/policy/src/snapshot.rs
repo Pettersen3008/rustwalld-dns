@@ -1,6 +1,5 @@
 //! Immutable compiled state. Only assertion-gated compilation constructs it.
 use crate::{BindingMetadata, PolicyConfigSet, TemporaryException, exceptions};
-use hickory_proto::rr::Record;
 use ipnet::IpNet;
 use rustwalld_dns_filter::{Decision, FilterSnapshot};
 use rustwalld_dns_resolver::Forwarder;
@@ -13,7 +12,7 @@ pub struct CompiledPolicy {
     pub(crate) upstream: usize,
     // Shared with other policies of this generation that use identical lists.
     pub(crate) filters: Arc<FilterSnapshot>,
-    pub(crate) rewrites: HashMap<String, Vec<Record>>,
+    pub(crate) rewrites: HashMap<String, crate::rewrite::LocalAnswers>,
     pub(crate) exceptions: Option<exceptions::Entries>,
 }
 pub(crate) struct ClientBinding {

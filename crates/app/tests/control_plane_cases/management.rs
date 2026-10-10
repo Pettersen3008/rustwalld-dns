@@ -78,6 +78,43 @@ async fn real_http_auth_assertions_explanations_history_and_metrics() {
     assert_eq!(histories[0]["domain"], "x.ads.test");
     let metrics = harness.get("/metrics").await.text().await.unwrap();
     assert!(metrics.contains("rustwalld_blocked_total 1"));
+    assert!(metrics.contains("rustwalld_requests_total 1"));
+    assert!(metrics.contains("rustwalld_history_events_total 1"));
+    for name in [
+        "requests",
+        "blocked",
+        "temporary_allows",
+        "rewrites",
+        "failures",
+        "stale_answers",
+        "decision_cache_hits",
+        "events_dropped",
+        "shadow_differences",
+        "udp_overloads",
+        "upstream_wait_overloads",
+        "tcp_overloads",
+        "listener_errors",
+        "dns_cache_hits",
+        "coalesced",
+        "upstream_lookups",
+        "inflight_overloads",
+        "history_write_failures",
+        "history_events",
+    ] {
+        let counter = format!("rustwalld_{name}_total");
+        assert!(
+            metrics
+                .lines()
+                .any(|line| line == format!("# TYPE {counter} counter"))
+        );
+        let value = metrics
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("{counter} ")))
+            .unwrap();
+        assert!(value.parse::<u64>().is_ok(), "{counter}: {value}");
+    }
+    assert!(metrics.contains("rustwalld_query_latency_microseconds_bucket{le=\"+Inf\"} 1"));
+    assert!(metrics.contains("rustwalld_query_latency_microseconds_count 1"));
     harness.shutdown().await;
 }
 
@@ -93,8 +130,8 @@ async fn history_retention_is_bounded() {
             .control
             .store()
             .metrics
+            .snapshot()
             .persisted_events
-            .load(Ordering::Relaxed)
             < 30
         {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -170,20 +207,10 @@ async fn upstream_diagnostics_survive_failures_and_reset_with_generation() {
         harness.dns("ads.test.").await.metadata.response_code,
         ResponseCode::NXDomain
     );
-    assert_eq!(
-        old.upstreams()[0].health()[0]
-            .attempts
-            .load(Ordering::SeqCst),
-        0
-    );
+    assert_eq!(old.upstreams()[0].health()[0].snapshot().attempts, 0);
     assert_eq!(harness.dns("cached.test.").await.answers.len(), 1);
     assert_eq!(harness.dns("cached.test.").await.answers.len(), 1);
-    assert_eq!(
-        old.upstreams()[0].health()[0]
-            .attempts
-            .load(Ordering::SeqCst),
-        1
-    );
+    assert_eq!(old.upstreams()[0].health()[0].snapshot().attempts, 1);
     for (value, domain) in [
         (1, "servfail.test."),
         (2, "refused.test."),
@@ -200,6 +227,28 @@ async fn upstream_diagnostics_survive_failures_and_reset_with_generation() {
     let health: Value = harness.get("/api/v1/upstreams").await.json().await.unwrap();
     assert_eq!(health[0]["generation"], old.generation());
     let server = &health[0]["servers"][0];
+    let keys: std::collections::BTreeSet<_> = server
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        keys,
+        std::collections::BTreeSet::from([
+            "address",
+            "attempts",
+            "successes",
+            "inflight",
+            "ewma_us",
+            "failures",
+            "backoff_skips",
+            "recovery_probes",
+            "admission",
+        ])
+    );
+    assert_eq!(server["admission"]["state"], "ready");
+    assert_eq!(server["admission"]["retry_after_ms"], 0);
     assert_eq!(server["attempts"], 5);
     assert_eq!(server["successes"], 2);
     assert_eq!(server["inflight"], 0);
@@ -236,12 +285,8 @@ async fn upstream_diagnostics_survive_failures_and_reset_with_generation() {
     timeout(Duration::from_secs(1), pinned_seen.notified())
         .await
         .unwrap();
-    assert_eq!(
-        old.upstreams()[0].health()[0]
-            .inflight
-            .load(Ordering::SeqCst),
-        1
-    );
+    let pinned_counters = old.upstreams()[0].health()[0].snapshot();
+    assert_eq!(pinned_counters.inflight, 1);
     assert!(
         harness
             .send("/api/v1/config", &config, true)
@@ -258,18 +303,11 @@ async fn upstream_diagnostics_survive_failures_and_reset_with_generation() {
             .len(),
         1
     );
-    assert_eq!(
-        old.upstreams()[0].health()[0]
-            .successes
-            .load(Ordering::SeqCst),
-        3
-    );
-    assert_eq!(
-        old.upstreams()[0].health()[0]
-            .inflight
-            .load(Ordering::SeqCst),
-        0
-    );
+    // The sample remains ordinary detached data after the live attempt completes.
+    assert_eq!(pinned_counters.inflight, 1);
+    assert_eq!(pinned_counters.successes, 2);
+    assert_eq!(old.upstreams()[0].health()[0].snapshot().successes, 3);
+    assert_eq!(old.upstreams()[0].health()[0].snapshot().inflight, 0);
     let fresh: Value = harness.get("/api/v1/upstreams").await.json().await.unwrap();
     assert!(fresh[0]["generation"].as_u64().unwrap() > old.generation());
     assert_eq!(fresh[0]["servers"][0]["attempts"], 0);

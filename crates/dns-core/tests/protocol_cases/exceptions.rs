@@ -87,14 +87,7 @@ async fn temporary_exact_allow_caps_udp_tcp_cache_ttls_and_expires_without_telem
     }
     assert_eq!(mock.hits.load(Ordering::Relaxed), 1);
     assert!(!engine.resolver().cache.is_empty());
-    assert!(
-        engine
-            .telemetry()
-            .metrics
-            .dropped_events
-            .load(Ordering::Relaxed)
-            > 0
-    );
+    assert!(engine.telemetry().metrics.snapshot().dropped_events > 0);
     cancel.cancel();
     task.await.unwrap().unwrap();
 }
@@ -130,7 +123,7 @@ async fn temporary_coalesced_waiters_and_pinned_generation_cannot_answer_after_e
         }));
     }
     timeout(Duration::from_secs(1), async {
-        while engine.resolver().metrics.coalesced.load(Ordering::Relaxed) < 15 {
+        while engine.resolver().metrics.snapshot().coalesced < 15 {
             tokio::task::yield_now().await;
         }
     })
@@ -148,18 +141,8 @@ async fn temporary_coalesced_waiters_and_pinned_generation_cannot_answer_after_e
         );
     }
     assert_eq!(mock.hits.load(Ordering::Relaxed), 1);
-    assert_eq!(
-        engine
-            .resolver()
-            .metrics
-            .upstream_lookups
-            .load(Ordering::Relaxed),
-        1
-    );
-    assert_eq!(
-        engine.telemetry().metrics.failures.load(Ordering::Relaxed),
-        0
-    );
+    assert_eq!(engine.resolver().metrics.snapshot().upstream_lookups, 1);
+    assert_eq!(engine.telemetry().metrics.snapshot().failures, 0);
     for _ in 0..16 {
         let event = receiver.recv().await.unwrap();
         assert_eq!(event.generation, 1);

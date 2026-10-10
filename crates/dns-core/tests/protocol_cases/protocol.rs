@@ -324,9 +324,9 @@ async fn full_upstream_wait_limit_sheds_misses_with_servfail() {
             ResponseCode::ServFail
         );
     }
-    let metrics = &engine.telemetry().metrics;
-    assert_eq!(metrics.forward_overloads.load(Ordering::Relaxed), 2);
-    assert_eq!(metrics.failures.load(Ordering::Relaxed), 2);
+    let metrics = engine.telemetry().metrics.snapshot();
+    assert_eq!(metrics.forward_overloads, 2);
+    assert_eq!(metrics.failures, 2);
     assert_eq!(
         quick_udp(addr, &named("x.blocked.example.", RecordType::A))
             .await

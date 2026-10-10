@@ -48,14 +48,7 @@ fn bench(c: &mut Criterion) {
             })
         });
     }
-    assert_eq!(
-        engine
-            .resolver()
-            .metrics
-            .upstream_lookups
-            .load(std::sync::atomic::Ordering::Relaxed),
-        0
-    );
+    assert_eq!(engine.resolver().metrics.snapshot().upstream_lookups, 0);
     for (name, long_name) in [
         ("dns_cache_long_name_wire", true),
         ("dns_cache_dnssec_wire", false),
@@ -85,14 +78,7 @@ fn bench(c: &mut Criterion) {
                 )))
             })
         });
-        assert_eq!(
-            engine
-                .resolver()
-                .metrics
-                .upstream_lookups
-                .load(std::sync::atomic::Ordering::Relaxed),
-            0
-        );
+        assert_eq!(engine.resolver().metrics.snapshot().upstream_lookups, 0);
     }
     for (name, domain, cached_path, expired) in [
         ("temporary_allow_dns_cache_wire", "cached.test", true, false),
@@ -138,14 +124,7 @@ fn bench(c: &mut Criterion) {
                 )))
             })
         });
-        assert_eq!(
-            engine
-                .resolver()
-                .metrics
-                .upstream_lookups
-                .load(std::sync::atomic::Ordering::Relaxed),
-            0
-        );
+        assert_eq!(engine.resolver().metrics.snapshot().upstream_lookups, 0);
     }
     let (engine, blocked) = fixtures::rewrite();
     let response = runtime
@@ -165,14 +144,7 @@ fn bench(c: &mut Criterion) {
             std::hint::black_box(runtime.block_on(engine.answer(&blocked, client, Transport::Udp)))
         })
     });
-    assert_eq!(
-        engine
-            .resolver()
-            .metrics
-            .upstream_lookups
-            .load(std::sync::atomic::Ordering::Relaxed),
-        0
-    );
+    assert_eq!(engine.resolver().metrics.snapshot().upstream_lookups, 0);
 
     for (name, cached_path, full) in [
         ("telemetry_empty_blocked_wire", false, false),
@@ -222,14 +194,7 @@ fn bench(c: &mut Criterion) {
                 );
             }
         });
-        assert_eq!(
-            engine
-                .resolver()
-                .metrics
-                .upstream_lookups
-                .load(std::sync::atomic::Ordering::Relaxed),
-            0
-        );
+        assert_eq!(engine.resolver().metrics.snapshot().upstream_lookups, 0);
     }
 }
 criterion_group!(benches, bench);

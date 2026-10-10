@@ -362,12 +362,14 @@ pub mod cache;
 mod inflight;
 /// TTL-aware response cache keyed by question, upstream identity and DO/CD.
 pub mod response_cache;
-pub use inflight::{Lookup, Resolution, ResolutionSource, Resolver, ResolverMetrics};
+pub use inflight::{
+    Lookup, Resolution, ResolutionSource, Resolver, ResolverMetrics, ResolverMetricsSnapshot,
+};
 
 mod admission;
 mod health;
 pub use admission::AdmissionStatus;
-pub use health::{FailureKind, UpstreamHealth};
+pub use health::{FailureKind, UpstreamHealth, UpstreamHealthSnapshot};
 
 #[cfg(test)]
 mod tests {

@@ -2,6 +2,12 @@
 
 ## 0.1.0 — unreleased
 
+- Split SQLite persistence and scheduled refreshes into focused internal modules,
+  preserving SQL, durability and scheduling behavior. Encapsulate upstream,
+  telemetry, resolver and history atomics behind plain `snapshot()` values;
+  diagnostics and Prometheus names retain their existing contracts. See
+  [module and snapshot boundaries](docs/runtime-modules.md).
+
 - Dev-only proptest models compare CLOCK eviction with a rotating queue and
   cache removal/regrowth with a map, and stress DoT/DoH cancellation across
   admission, connection setup and active requests. They check reply identity,

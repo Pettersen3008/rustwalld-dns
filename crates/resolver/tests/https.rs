@@ -148,7 +148,7 @@ async fn concurrent_queries_obey_pool_limit_and_cancelled_sockets_are_disposed()
     }
     assert_eq!(mock.accepted.load(Ordering::SeqCst), 2);
     reconciled(&f.health()[0]);
-    assert_eq!(f.health()[0].successes.load(Ordering::SeqCst), 32);
+    assert_eq!(f.health()[0].snapshot().successes, 32);
     drop(f);
     mock.wait_closed().await;
     for mode in [9, 10] {
@@ -174,7 +174,7 @@ async fn concurrent_queries_obey_pool_limit_and_cancelled_sockets_are_disposed()
         mock.mode.store(0, Ordering::SeqCst);
         assert!(f.resolve(&query()).await.is_ok());
         failure(&f.health()[0], FailureKind::Cancelled, 1);
-        assert_eq!(f.health()[0].successes.load(Ordering::SeqCst), 1);
+        assert_eq!(f.health()[0].snapshot().successes, 1);
         // Pool owns only the new valid socket; cancelled driver disposes old TLS.
         drop(f);
         mock.wait_closed().await;
@@ -190,7 +190,7 @@ async fn stalled_headers_and_body_expire_and_can_reconnect() {
         mock.mode.store(0, Ordering::SeqCst);
         assert!(f.resolve(&query()).await.is_ok());
         failure(&f.health()[0], FailureKind::Deadline, 1);
-        assert_eq!(f.health()[0].successes.load(Ordering::SeqCst), 1);
+        assert_eq!(f.health()[0].snapshot().successes, 1);
         assert_eq!(mock.accepted.load(Ordering::SeqCst), 2);
     }
 }
@@ -384,7 +384,7 @@ async fn failed_endpoint_cools_down_single_probe_cancels_and_recovers() {
         assert!(f.resolve(&query()).await.is_ok());
     }
     assert_eq!(bad.queries.load(Ordering::SeqCst), 3);
-    assert_eq!(f.health()[0].backoff_skips.load(Ordering::SeqCst), 20);
+    assert_eq!(f.health()[0].snapshot().backoff_skips, 20);
     // A compiled generation owns fresh endpoint admission, independent of old work.
     let fresh = Forwarder::with_transport(
         vec![bad.address, good.address],
@@ -412,20 +412,17 @@ async fn failed_endpoint_cools_down_single_probe_cancels_and_recovers() {
         assert!(other.await.unwrap().is_ok());
     }
     assert_eq!(bad.queries.load(Ordering::SeqCst), 5);
-    assert_eq!(f.health()[0].recovery_probes.load(Ordering::SeqCst), 1);
+    assert_eq!(f.health()[0].snapshot().recovery_probes, 1);
     probe.abort();
     let _ = probe.await;
     failure(&f.health()[0], FailureKind::Cancelled, 1);
     bad.mode.store(0, Ordering::SeqCst);
     assert!(f.resolve(&query()).await.is_ok());
     assert_eq!(f.health()[0].admission_status().state, "ready");
-    assert_eq!(f.health()[0].recovery_probes.load(Ordering::SeqCst), 2);
-    let fallback_attempts = f.health()[1].attempts.load(Ordering::SeqCst);
+    assert_eq!(f.health()[0].snapshot().recovery_probes, 2);
+    let fallback_attempts = f.health()[1].snapshot().attempts;
     assert!(f.resolve(&query()).await.is_ok());
-    assert_eq!(
-        f.health()[1].attempts.load(Ordering::SeqCst),
-        fallback_attempts
-    );
+    assert_eq!(f.health()[1].snapshot().attempts, fallback_attempts);
     reconciled(&f.health()[0]);
     reconciled(&f.health()[1]);
 }
@@ -450,7 +447,7 @@ async fn concurrent_queries_share_connections_up_to_the_stream_limit() {
         mock.peak.load(Ordering::SeqCst) > 2,
         "requests were not multiplexed"
     );
-    assert_eq!(f.health()[0].successes.load(Ordering::SeqCst), 16);
+    assert_eq!(f.health()[0].snapshot().successes, 16);
     reconciled(&f.health()[0]);
 }
 
@@ -461,7 +458,7 @@ async fn refused_streams_are_retried_once() {
     assert!(f.resolve(&query()).await.is_ok());
     // The refused request reached the server once and the retry succeeded.
     assert_eq!(mock.queries.load(Ordering::SeqCst), 2);
-    assert_eq!(f.health()[0].successes.load(Ordering::SeqCst), 1);
+    assert_eq!(f.health()[0].snapshot().successes, 1);
     failure(&f.health()[0], FailureKind::HttpProtocol, 0);
 }
 

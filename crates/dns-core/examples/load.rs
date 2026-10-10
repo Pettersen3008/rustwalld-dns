@@ -204,11 +204,7 @@ async fn main() {
     assert_eq!(engine.resolver().inflight(), 0);
     println!(
         "telemetry_dropped={}",
-        engine
-            .telemetry()
-            .metrics
-            .dropped_events
-            .load(Ordering::Relaxed)
+        engine.telemetry().metrics.snapshot().dropped_events
     );
     stop.cancel();
     service.await.unwrap().unwrap();

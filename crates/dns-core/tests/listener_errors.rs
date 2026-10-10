@@ -86,11 +86,7 @@ async fn descriptor_exhaustion_pauses_accept_without_ending_service() {
     filler.pop();
     let mut stream = TcpStream::connect(address).await.unwrap();
     sleep(Duration::from_millis(300)).await;
-    let failures = engine
-        .telemetry()
-        .metrics
-        .listener_errors
-        .load(std::sync::atomic::Ordering::Relaxed);
+    let failures = engine.telemetry().metrics.snapshot().listener_errors;
     drop(filler);
     setrlimit(Resource::Nofile, original).unwrap();
     assert!(!task.is_finished(), "server stopped after an accept error");

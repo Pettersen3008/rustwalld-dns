@@ -57,27 +57,71 @@ impl FailureKind {
 }
 
 /// Counters and circuit-breaker state for one upstream address. Counters only
-/// increase (except `inflight` and `ewma_us`); read them with relaxed loads.
+/// increase (except `inflight` and `ewma_us`); inspect them with [`Self::snapshot`].
 #[derive(Debug)]
 pub struct UpstreamHealth {
     /// The upstream address these counters describe.
     pub address: SocketAddr,
     /// Admitted attempts.
-    pub attempts: AtomicU64,
+    attempts: AtomicU64,
     /// Attempts that produced a validated, non-SERVFAIL/REFUSED reply.
-    pub successes: AtomicU64,
+    successes: AtomicU64,
     /// Attempts currently in progress.
-    pub inflight: AtomicU64,
+    inflight: AtomicU64,
     /// Exponentially weighted mean latency of successes, in microseconds.
-    pub ewma_us: AtomicU64,
+    ewma_us: AtomicU64,
     /// Attempts skipped because the address was cooling down.
-    pub backoff_skips: AtomicU64,
+    backoff_skips: AtomicU64,
     /// Single attempts admitted to test recovery after a cooldown.
-    pub recovery_probes: AtomicU64,
+    recovery_probes: AtomicU64,
     admission: Admission,
     failures: [AtomicU64; FailureKind::ALL.len()],
 }
+/// Plain counters and admission state for one upstream address.
+#[derive(Debug)]
+pub struct UpstreamHealthSnapshot {
+    /// The upstream address these counters describe.
+    pub address: SocketAddr,
+    /// Admitted attempts.
+    pub attempts: u64,
+    /// Attempts that produced a validated, non-SERVFAIL/REFUSED reply.
+    pub successes: u64,
+    /// Attempts currently in progress.
+    pub inflight: u64,
+    /// Exponentially weighted mean latency of successes, in microseconds.
+    pub ewma_us: u64,
+    /// Attempts skipped because the address was cooling down.
+    pub backoff_skips: u64,
+    /// Single attempts admitted to test recovery after a cooldown.
+    pub recovery_probes: u64,
+    /// Failures indexed by [`FailureKind::ALL`].
+    pub failures: [u64; FailureKind::ALL.len()],
+    /// Circuit-breaker state sampled after the counters.
+    pub admission: AdmissionStatus,
+}
+impl UpstreamHealthSnapshot {
+    /// Failures recorded as `kind` in this sample.
+    pub fn failure_count(&self, kind: FailureKind) -> u64 {
+        self.failures[kind as usize]
+    }
+}
+
 impl UpstreamHealth {
+    /// Sample counters with relaxed loads and then read admission state.
+    /// Values are independent observations of concurrent state, not a transaction.
+    pub fn snapshot(&self) -> UpstreamHealthSnapshot {
+        UpstreamHealthSnapshot {
+            address: self.address,
+            attempts: self.attempts.load(Ordering::Relaxed),
+            successes: self.successes.load(Ordering::Relaxed),
+            inflight: self.inflight.load(Ordering::Relaxed),
+            ewma_us: self.ewma_us.load(Ordering::Relaxed),
+            backoff_skips: self.backoff_skips.load(Ordering::Relaxed),
+            recovery_probes: self.recovery_probes.load(Ordering::Relaxed),
+            failures: std::array::from_fn(|index| self.failures[index].load(Ordering::Relaxed)),
+            admission: self.admission_status(),
+        }
+    }
     pub(crate) fn new(address: SocketAddr) -> Self {
         Self {
             address,

@@ -630,7 +630,7 @@ initiator cancellation, overload, reload, shadow/rollback, idle connections and
 SQLite locking. Run fuzzing separately from other local checks and retain Criterion
 artifacts under target/. There is no CI/CD or .github/ directory.
 
-See [architecture](docs/architecture.md), [benchmark method](docs/benchmarks.md),
+See [architecture](docs/architecture.md), [runtime module boundaries](docs/runtime-modules.md), [benchmark method](docs/benchmarks.md),
 [measured baseline](docs/baseline.md), [console decisions](docs/management-ui.md),
 [upstream diagnostics](docs/upstream-diagnostics.md),
 and [delivery checklist](docs/roadmap.md).

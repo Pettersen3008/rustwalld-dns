@@ -12,10 +12,7 @@ use hickory_proto::{
     rr::{Name, RData, RecordType, rdata::A},
 };
 use proptest::{prelude::*, test_runner::FileFailurePersistence};
-use std::{
-    sync::{Arc, atomic::Ordering},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 use tokio::sync::Semaphore;
 
 enum Fixture {
@@ -149,7 +146,7 @@ async fn run_model(https: bool, connections: usize, rounds: Vec<(u8, u64, u8)>) 
         forwarder.resolve(&query(round, 255)).await.unwrap();
         assert_eq!(requests.available_permits(), request_limit);
         assert!(pool.loads().into_iter().all(|load| load == 0));
-        assert_eq!(forwarder.health()[0].inflight.load(Ordering::Relaxed), 0);
+        assert_eq!(forwarder.health()[0].snapshot().inflight, 0);
     }
     assert_eq!(Arc::strong_count(&forwarder), 1);
     drop(forwarder);

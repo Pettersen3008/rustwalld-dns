@@ -5,7 +5,7 @@ use hickory_proto::{
     rr::{RData, rdata::A},
 };
 use rustwalld_dns_core::Transport;
-use std::{error::Error, io, sync::atomic::Ordering, time::Instant};
+use std::{error::Error, io, time::Instant};
 
 #[path = "../benches/support/fixtures.rs"]
 mod fixtures;
@@ -63,9 +63,9 @@ impl Scenario {
     }
     fn counter(self, engine: &Engine) -> u64 {
         match self {
-            Self::Blocked => engine.telemetry().metrics.blocked.load(Ordering::Relaxed),
-            Self::Rewrite => engine.telemetry().metrics.rewrites.load(Ordering::Relaxed),
-            _ => engine.resolver().metrics.cache_hits.load(Ordering::Relaxed),
+            Self::Blocked => engine.telemetry().metrics.snapshot().blocked,
+            Self::Rewrite => engine.telemetry().metrics.snapshot().rewrites,
+            _ => engine.resolver().metrics.snapshot().cache_hits,
         }
     }
 }
@@ -225,12 +225,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         for _ in 0..10_000 {
             if std::hint::black_box(runtime.block_on(engine.answer(&bytes, client, Transport::Udp)))
                 .is_none()
-                || engine
-                    .resolver()
-                    .metrics
-                    .upstream_lookups
-                    .load(Ordering::Relaxed)
-                    != 0
+                || engine.resolver().metrics.snapshot().upstream_lookups != 0
             {
                 return Err(invalid("warm-up failed or attempted upstream work").into());
             }
@@ -242,12 +237,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         for batch in 1..=options.batches {
             let count = scenario.counter(&engine);
-            let requests = engine.telemetry().metrics.requests.load(Ordering::Relaxed);
-            let temporary = engine
-                .telemetry()
-                .metrics
-                .temporary_allows
-                .load(Ordering::Relaxed);
+            let requests = engine.telemetry().metrics.snapshot().requests;
+            let temporary = engine.telemetry().metrics.snapshot().temporary_allows;
             let before = CpuTicks::read()?;
             let start = Instant::now();
             for _ in 0..options.iterations {
@@ -260,12 +251,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     Transport::Udp,
                 )))
                 .is_none()
-                    || engine
-                        .resolver()
-                        .metrics
-                        .upstream_lookups
-                        .load(Ordering::Relaxed)
-                        != 0
+                    || engine.resolver().metrics.snapshot().upstream_lookups != 0
                 {
                     return Err(invalid("probe failed or attempted upstream work").into());
                 }
@@ -273,15 +259,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             let wall = start.elapsed().as_nanos();
             let cpu = CpuTicks::read()?.since(before)?;
             if scenario.counter(&engine) - count != options.iterations
-                || engine.telemetry().metrics.requests.load(Ordering::Relaxed) - requests
-                    != options.iterations
+                || engine.telemetry().metrics.snapshot().requests - requests != options.iterations
                 || (scenario == Scenario::Temporary
-                    && engine
-                        .telemetry()
-                        .metrics
-                        .temporary_allows
-                        .load(Ordering::Relaxed)
-                        - temporary
+                    && engine.telemetry().metrics.snapshot().temporary_allows - temporary
                         != options.iterations)
             {
                 return Err(invalid("query/source counters failed to reconcile").into());

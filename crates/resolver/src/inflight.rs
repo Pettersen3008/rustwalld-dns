@@ -26,14 +26,39 @@ const FLIGHT_SHARDS: usize = 32;
 #[derive(Default)]
 pub struct ResolverMetrics {
     /// Answers served from the response cache.
-    pub cache_hits: AtomicU64,
+    cache_hits: AtomicU64,
     /// Misses that joined an identical in-flight lookup.
-    pub coalesced: AtomicU64,
+    coalesced: AtomicU64,
     /// Upstream lookups started.
-    pub upstream_lookups: AtomicU64,
+    upstream_lookups: AtomicU64,
     /// Misses refused because `max_inflight` lookups were running.
-    pub overloads: AtomicU64,
+    overloads: AtomicU64,
 }
+/// Plain counter values sampled by [`ResolverMetrics::snapshot`].
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ResolverMetricsSnapshot {
+    /// Answers served from the response cache.
+    pub cache_hits: u64,
+    /// Misses that joined an identical in-flight lookup.
+    pub coalesced: u64,
+    /// Upstream lookups started.
+    pub upstream_lookups: u64,
+    /// Misses refused because `max_inflight` lookups were running.
+    pub overloads: u64,
+}
+impl ResolverMetrics {
+    /// Sample counters with relaxed loads. Values are independent observations,
+    /// so concurrent updates can occur between fields; this is not a transaction.
+    pub fn snapshot(&self) -> ResolverMetricsSnapshot {
+        ResolverMetricsSnapshot {
+            cache_hits: self.cache_hits.load(Ordering::Relaxed),
+            coalesced: self.coalesced.load(Ordering::Relaxed),
+            upstream_lookups: self.upstream_lookups.load(Ordering::Relaxed),
+            overloads: self.overloads.load(Ordering::Relaxed),
+        }
+    }
+}
+
 /// Bounded response cache plus single-flight forwarding shared by all policies.
 pub struct Resolver {
     /// Shared response cache (inspection and diagnostics).
@@ -331,7 +356,7 @@ mod tests {
             Err(ResolveError::Encoding)
         ));
         assert_eq!(resolver.inflight(), 0);
-        assert_eq!(resolver.metrics.upstream_lookups.load(Ordering::Relaxed), 0);
+        assert_eq!(resolver.metrics.snapshot().upstream_lookups, 0);
     }
     #[tokio::test]
     async fn delayed_coalesced_waiter_receives_aged_ttls() {
@@ -379,6 +404,6 @@ mod tests {
         assert_eq!(result.source, ResolutionSource::Coalesced);
         assert_eq!(result.response.answers[0].ttl, 23);
         assert_eq!(result.response.additionals[0].ttl, 0);
-        assert_eq!(resolver.metrics.upstream_lookups.load(Ordering::Relaxed), 0);
+        assert_eq!(resolver.metrics.snapshot().upstream_lookups, 0);
     }
 }

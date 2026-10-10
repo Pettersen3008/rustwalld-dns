@@ -79,14 +79,14 @@ async fn udp_failures_fallback_recovery_and_untrusted_packet_deadline() {
     failure(&f.health()[0], FailureKind::Refused, 1);
     failure(&f.health()[0], FailureKind::Deadline, 2);
     failure(&f.health()[0], FailureKind::DnsResponse, 0);
-    assert_eq!(f.health()[1].successes.load(Ordering::SeqCst), 4);
+    assert_eq!(f.health()[1].snapshot().successes, 4);
     mode.store(0, Ordering::SeqCst);
     assert!(f.resolve(&request).await.is_ok());
     reconciled(&f.health()[0]);
     reconciled(&f.health()[1]);
-    assert_eq!(f.health()[0].attempts.load(Ordering::SeqCst), 5);
-    assert_eq!(f.health()[0].successes.load(Ordering::SeqCst), 1);
-    assert_eq!(f.health()[1].attempts.load(Ordering::SeqCst), 4);
+    assert_eq!(f.health()[0].snapshot().attempts, 5);
+    assert_eq!(f.health()[0].snapshot().successes, 1);
+    assert_eq!(f.health()[1].snapshot().attempts, 4);
     primary_task.abort();
     secondary_task.abort();
     let _ = primary_task.await;
@@ -117,8 +117,8 @@ async fn closed_tcp_endpoint_is_connection_failure() {
         assert!(f.resolve(&Message::query()).await.is_err());
     }
     failure(&f.health()[0], FailureKind::Connection, 3);
-    assert_eq!(f.health()[0].backoff_skips.load(Ordering::SeqCst), 50);
-    assert_eq!(f.health()[0].attempts.load(Ordering::SeqCst), 3);
+    assert_eq!(f.health()[0].snapshot().backoff_skips, 50);
+    assert_eq!(f.health()[0].snapshot().attempts, 3);
     reconciled(&f.health()[0]);
 }
 

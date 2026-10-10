@@ -148,25 +148,11 @@ async fn outage_uses_stale_only_when_enabled_and_recovers_to_fresh() {
                 RData::A(A("192.0.2.1".parse().unwrap()))
             );
             assert_eq!(events.try_recv().unwrap().source, QuerySource::Stale);
-            assert_eq!(
-                engine
-                    .telemetry()
-                    .metrics
-                    .stale_answers
-                    .load(Ordering::Relaxed),
-                1
-            );
+            assert_eq!(engine.telemetry().metrics.snapshot().stale_answers, 1);
         } else {
             assert_eq!(response.metadata.response_code, ResponseCode::ServFail);
             assert_eq!(events.try_recv().unwrap().source, QuerySource::Failure);
-            assert_eq!(
-                engine
-                    .telemetry()
-                    .metrics
-                    .stale_answers
-                    .load(Ordering::Relaxed),
-                0
-            );
+            assert_eq!(engine.telemetry().metrics.snapshot().stale_answers, 0);
         }
         assert_eq!(first.hits.load(Ordering::Relaxed), 2);
         assert_eq!(second.hits.load(Ordering::Relaxed), 1);
@@ -204,14 +190,7 @@ async fn fresh_fallback_wins_and_a_zero_ttl_refresh_invalidates_stale_data() {
         answer(&engine).await.metadata.response_code,
         ResponseCode::ServFail
     );
-    assert_eq!(
-        engine
-            .telemetry()
-            .metrics
-            .stale_answers
-            .load(Ordering::Relaxed),
-        0
-    );
+    assert_eq!(engine.telemetry().metrics.snapshot().stale_answers, 0);
 }
 #[tokio::test]
 async fn coalesced_outage_waiters_receive_private_stale_answers() {
@@ -249,14 +228,7 @@ async fn coalesced_outage_waiters_receive_private_stale_answers() {
         task.await.unwrap();
     }
     assert_eq!(mock.hits.load(Ordering::Relaxed), 1);
-    assert_eq!(
-        engine
-            .telemetry()
-            .metrics
-            .stale_answers
-            .load(Ordering::Relaxed),
-        10
-    );
+    assert_eq!(engine.telemetry().metrics.snapshot().stale_answers, 10);
     for _ in 0..10 {
         assert_eq!(events.try_recv().unwrap().source, QuerySource::Stale);
     }
@@ -388,14 +360,7 @@ async fn stale_ttl_is_capped_by_exception_and_pending_answer_cannot_cross_expiry
     assert_eq!(response.metadata.response_code, ResponseCode::NXDomain);
     assert!(response.answers.is_empty());
     assert_eq!(events.try_recv().unwrap().source, QuerySource::Blocked);
-    assert_eq!(
-        engine
-            .telemetry()
-            .metrics
-            .stale_answers
-            .load(Ordering::Relaxed),
-        1
-    );
+    assert_eq!(engine.telemetry().metrics.snapshot().stale_answers, 1);
     assert_eq!(
         answer(&engine).await.metadata.response_code,
         ResponseCode::NXDomain
@@ -427,14 +392,7 @@ async fn overload_shedding_and_shutdown_never_trigger_stale_fallback() {
         ResponseCode::ServFail
     );
     assert_eq!(mock.hits.load(Ordering::Relaxed), 0);
-    assert_eq!(
-        engine
-            .telemetry()
-            .metrics
-            .stale_answers
-            .load(Ordering::Relaxed),
-        0
-    );
+    assert_eq!(engine.telemetry().metrics.snapshot().stale_answers, 0);
 }
 
 #[tokio::test]
@@ -464,14 +422,7 @@ async fn cancellation_of_an_upstream_flight_is_not_an_outage() {
         caller.await.unwrap().metadata.response_code,
         ResponseCode::ServFail
     );
-    assert_eq!(
-        engine
-            .telemetry()
-            .metrics
-            .stale_answers
-            .load(Ordering::Relaxed),
-        0
-    );
+    assert_eq!(engine.telemetry().metrics.snapshot().stale_answers, 0);
     tokio::time::timeout(Duration::from_secs(1), async {
         while engine.resolver().inflight() != 0 {
             tokio::task::yield_now().await;
@@ -497,18 +448,8 @@ async fn resolver_admission_overload_does_not_use_stale() {
         ResponseCode::ServFail
     );
     assert_eq!(mock.hits.load(Ordering::Relaxed), 0);
-    assert_eq!(
-        engine.resolver().metrics.overloads.load(Ordering::Relaxed),
-        1
-    );
-    assert_eq!(
-        engine
-            .telemetry()
-            .metrics
-            .stale_answers
-            .load(Ordering::Relaxed),
-        0
-    );
+    assert_eq!(engine.resolver().metrics.snapshot().overloads, 1);
+    assert_eq!(engine.telemetry().metrics.snapshot().stale_answers, 0);
 }
 
 #[tokio::test]
@@ -549,12 +490,5 @@ async fn stale_age_is_checked_after_the_outage_wait() {
         answer(&engine).await.metadata.response_code,
         ResponseCode::ServFail
     );
-    assert_eq!(
-        engine
-            .telemetry()
-            .metrics
-            .stale_answers
-            .load(Ordering::Relaxed),
-        0
-    );
+    assert_eq!(engine.telemetry().metrics.snapshot().stale_answers, 0);
 }

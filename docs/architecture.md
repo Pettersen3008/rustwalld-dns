@@ -171,3 +171,7 @@ live text or a dismissed shadow's bytes. Generation/content validation and chang
 candidate clones run off executor. HTTP 304 changes only runtime status; no
 compilation, durable write or snapshot swap. Restart uses a full GET. See
 [conditional retrieval](conditional-retrieval.md).
+
+Persistence and scheduled-refresh internals are divided by ownership and lifecycle;
+external counter inspection uses plain read-only samples. See
+[runtime modules and metric snapshots](runtime-modules.md).

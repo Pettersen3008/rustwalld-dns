@@ -57,37 +57,98 @@ pub struct ShadowDecision {
 #[derive(Default)]
 pub struct Metrics {
     /// Parsed queries (responses and malformed packets excluded).
-    pub requests: AtomicU64,
+    pub(crate) requests: AtomicU64,
     /// Queries answered NXDOMAIN by a block rule.
-    pub blocked: AtomicU64,
+    pub(crate) blocked: AtomicU64,
     /// Queries answered by a local rewrite.
-    pub rewrites: AtomicU64,
+    pub(crate) rewrites: AtomicU64,
     /// Queries answered SERVFAIL.
-    pub failures: AtomicU64,
+    pub(crate) failures: AtomicU64,
     /// Expired-cache answers sent after upstream failure and final policy checks.
-    pub stale_answers: AtomicU64,
+    pub(crate) stale_answers: AtomicU64,
     /// Decisions served from the decision cache.
-    pub decision_hits: AtomicU64,
+    pub(crate) decision_hits: AtomicU64,
     /// Events dropped because the telemetry queue was full or closed.
-    pub dropped_events: AtomicU64,
+    pub(crate) dropped_events: AtomicU64,
     /// Queries whose shadow outcome differed from the active one.
-    pub shadow_differences: AtomicU64,
+    pub(crate) shadow_differences: AtomicU64,
     /// Queries allowed by a temporary exception.
-    pub temporary_allows: AtomicU64,
+    pub(crate) temporary_allows: AtomicU64,
     /// UDP queries dropped because `max_udp_queries` workers were busy.
-    pub udp_overloads: AtomicU64,
+    pub(crate) udp_overloads: AtomicU64,
     /// UDP cache misses answered SERVFAIL because `max_udp_upstream_waits`
     /// queries were already waiting on upstreams.
-    pub forward_overloads: AtomicU64,
+    pub(crate) forward_overloads: AtomicU64,
     /// TCP connections closed because `max_tcp_connections` were open.
-    pub tcp_overloads: AtomicU64,
+    pub(crate) tcp_overloads: AtomicU64,
     /// Failed UDP receives or TCP accepts; the listener keeps serving.
-    pub listener_errors: AtomicU64,
+    pub(crate) listener_errors: AtomicU64,
     /// Sum of observed latencies in microseconds.
-    pub latency_sum_us: AtomicU64,
+    pub(crate) latency_sum_us: AtomicU64,
     /// Counts per [`LATENCY_US`] bucket (not cumulative).
-    pub latency_buckets: [AtomicU64; 8],
+    pub(crate) latency_buckets: [AtomicU64; 8],
 }
+/// Plain counter values sampled by [`Metrics::snapshot`].
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MetricsSnapshot {
+    /// Parsed queries (responses and malformed packets excluded).
+    pub requests: u64,
+    /// Queries answered NXDOMAIN by a block rule.
+    pub blocked: u64,
+    /// Queries answered by a local rewrite.
+    pub rewrites: u64,
+    /// Queries answered SERVFAIL.
+    pub failures: u64,
+    /// Expired-cache answers sent after upstream failure and final policy checks.
+    pub stale_answers: u64,
+    /// Decisions served from the decision cache.
+    pub decision_hits: u64,
+    /// Events dropped because the telemetry queue was full or closed.
+    pub dropped_events: u64,
+    /// Queries whose shadow outcome differed from the active one.
+    pub shadow_differences: u64,
+    /// Queries allowed by a temporary exception.
+    pub temporary_allows: u64,
+    /// UDP queries dropped because `max_udp_queries` workers were busy.
+    pub udp_overloads: u64,
+    /// UDP cache misses answered SERVFAIL because `max_udp_upstream_waits`
+    /// queries were already waiting on upstreams.
+    pub forward_overloads: u64,
+    /// TCP connections closed because `max_tcp_connections` were open.
+    pub tcp_overloads: u64,
+    /// Failed UDP receives or TCP accepts; the listener keeps serving.
+    pub listener_errors: u64,
+    /// Sum of observed latencies in microseconds.
+    pub latency_sum_us: u64,
+    /// Counts per [`LATENCY_US`] bucket (not cumulative).
+    pub latency_buckets: [u64; 8],
+}
+impl Metrics {
+    /// Sample counters with relaxed loads. Values are independent observations,
+    /// so concurrent updates can occur between fields; this is not a transaction.
+    pub fn snapshot(&self) -> MetricsSnapshot {
+        MetricsSnapshot {
+            requests: self.requests.load(Ordering::Relaxed),
+            blocked: self.blocked.load(Ordering::Relaxed),
+            rewrites: self.rewrites.load(Ordering::Relaxed),
+            failures: self.failures.load(Ordering::Relaxed),
+            stale_answers: self.stale_answers.load(Ordering::Relaxed),
+            decision_hits: self.decision_hits.load(Ordering::Relaxed),
+            dropped_events: self.dropped_events.load(Ordering::Relaxed),
+            shadow_differences: self.shadow_differences.load(Ordering::Relaxed),
+            temporary_allows: self.temporary_allows.load(Ordering::Relaxed),
+            udp_overloads: self.udp_overloads.load(Ordering::Relaxed),
+            forward_overloads: self.forward_overloads.load(Ordering::Relaxed),
+            tcp_overloads: self.tcp_overloads.load(Ordering::Relaxed),
+            listener_errors: self.listener_errors.load(Ordering::Relaxed),
+            latency_sum_us: self.latency_sum_us.load(Ordering::Relaxed),
+            latency_buckets: std::array::from_fn(|index| {
+                self.latency_buckets[index].load(Ordering::Relaxed)
+            }),
+        }
+    }
+}
+
 /// Inclusive upper bounds of the latency buckets, in microseconds.
 pub const LATENCY_US: [u64; 8] = [20, 50, 100, 150, 500, 1000, 10000, u64::MAX];
 impl Metrics {

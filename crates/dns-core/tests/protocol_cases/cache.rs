@@ -132,7 +132,7 @@ async fn normalized_upstream_flight_preserves_each_clients_question_and_size() {
         }));
     }
     timeout(Duration::from_secs(1), async {
-        while engine.resolver().metrics.coalesced.load(Ordering::Relaxed) != 3 {
+        while engine.resolver().metrics.snapshot().coalesced != 3 {
             tokio::task::yield_now().await;
         }
     })
@@ -165,18 +165,8 @@ async fn normalized_upstream_flight_preserves_each_clients_question_and_size() {
         cached.queries[0].name().to_ascii(),
         request.queries[0].name().to_ascii()
     );
-    assert_eq!(
-        engine
-            .resolver()
-            .metrics
-            .upstream_lookups
-            .load(Ordering::Relaxed),
-        1
-    );
-    assert_eq!(
-        engine.resolver().metrics.cache_hits.load(Ordering::Relaxed),
-        1
-    );
+    assert_eq!(engine.resolver().metrics.snapshot().upstream_lookups, 1);
+    assert_eq!(engine.resolver().metrics.snapshot().cache_hits, 1);
     let mut sources = [0; 3];
     for _ in 0..5 {
         let event = events.try_recv().unwrap();
@@ -517,14 +507,7 @@ async fn normalized_event_names_preserve_wire_questions_and_all_decision_paths()
     assert_eq!(event.domain, long_normalized);
     assert_eq!(event.source, QuerySource::Cache);
     assert_eq!(mock.hits.load(Ordering::Relaxed), 7);
-    assert_eq!(
-        engine
-            .telemetry()
-            .metrics
-            .dropped_events
-            .load(Ordering::Relaxed),
-        0
-    );
+    assert_eq!(engine.telemetry().metrics.snapshot().dropped_events, 0);
     let invalid = Message::query().to_vec().unwrap();
     assert_eq!(
         Message::from_vec(
@@ -568,14 +551,7 @@ async fn full_and_closed_event_queues_preserve_replies_and_drop_accounting() {
         .unwrap();
         assert_eq!(response.metadata.response_code, ResponseCode::NXDomain);
     }
-    assert_eq!(
-        engine
-            .telemetry()
-            .metrics
-            .dropped_events
-            .load(Ordering::Relaxed),
-        1
-    );
+    assert_eq!(engine.telemetry().metrics.snapshot().dropped_events, 1);
     assert_eq!(receiver.try_recv().unwrap().domain, "test.example");
     drop(receiver);
     let response = Message::from_vec(
@@ -586,14 +562,7 @@ async fn full_and_closed_event_queues_preserve_replies_and_drop_accounting() {
     )
     .unwrap();
     assert_eq!(response.metadata.response_code, ResponseCode::NXDomain);
-    assert_eq!(
-        engine
-            .telemetry()
-            .metrics
-            .dropped_events
-            .load(Ordering::Relaxed),
-        2
-    );
+    assert_eq!(engine.telemetry().metrics.snapshot().dropped_events, 2);
     assert_eq!(mock.hits.load(Ordering::Relaxed), 0);
 }
 
@@ -629,7 +598,7 @@ async fn simultaneous_misses_coalesce_and_initiator_cancellation_is_safe() {
         );
     }
     assert_eq!(mock.hits.load(Ordering::Relaxed), 1);
-    assert!(engine.resolver().metrics.coalesced.load(Ordering::Relaxed) > 0);
+    assert!(engine.resolver().metrics.snapshot().coalesced > 0);
     timeout(Duration::from_secs(1), async {
         while engine.resolver().inflight() != 0 {
             tokio::task::yield_now().await;
@@ -673,14 +642,7 @@ async fn inflight_limit_and_telemetry_overload_do_not_stall_dns() {
                 .is_some()
         );
     }
-    assert!(
-        engine
-            .telemetry()
-            .metrics
-            .dropped_events
-            .load(Ordering::Relaxed)
-            > 0
-    );
+    assert!(engine.telemetry().metrics.snapshot().dropped_events > 0);
 }
 
 #[tokio::test]

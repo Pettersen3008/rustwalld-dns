@@ -179,8 +179,8 @@ async fn binding_metadata_is_revisioned_specific_and_failure_isolated() {
             .engine()
             .resolver()
             .metrics
-            .upstream_lookups
-            .load(Ordering::Relaxed),
+            .snapshot()
+            .upstream_lookups,
         0
     );
     harness.shutdown().await;

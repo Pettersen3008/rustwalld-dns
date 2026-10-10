@@ -1,5 +1,8 @@
 # Encrypted-upstream resilience baseline
 
+2026-10-10: DoT pipelining uses a concurrent TLS fixture for the new
+[rehearsal](dot-pipelining.md). The historical serial fixture is retained.
+
 2026-10-10: the latest 22 ms HTTPS / 11 ms TLS gap is the fixture's one-stream
 HTTP/2 setting. The same daemon measures 11.1 ms for both with
 `--https-streams 100`; see [the controlled diagnosis](doh-latency.md). The older

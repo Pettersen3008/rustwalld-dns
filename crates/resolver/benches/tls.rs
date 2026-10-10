@@ -37,6 +37,38 @@ fn tls(c: &mut Criterion) {
         )
     });
     group.finish();
+    let delayed = runtime.block_on(fixture::Mock::start(10));
+    let forwarder = std::sync::Arc::new(
+        Forwarder::with_transport(
+            vec![delayed.address],
+            Duration::from_secs(5),
+            &delayed.transport,
+        )
+        .unwrap(),
+    );
+    runtime.block_on(forwarder.resolve(&request)).unwrap();
+    let mut group = c.benchmark_group("dot_concurrent");
+    group.sample_size(10);
+    for clients in [8_u64, 32] {
+        group.throughput(Throughput::Elements(clients));
+        group.bench_function(format!("{clients}_queries_10ms_server"), |b| {
+            b.iter(|| {
+                runtime.block_on(async {
+                    let tasks: Vec<_> = (0..clients)
+                        .map(|_| {
+                            let forwarder = forwarder.clone();
+                            let query = request.clone();
+                            tokio::spawn(async move { forwarder.resolve(&query).await })
+                        })
+                        .collect();
+                    for task in tasks {
+                        task.await.unwrap().unwrap();
+                    }
+                })
+            })
+        });
+    }
+    group.finish();
 }
 criterion_group!(benches, tls);
 criterion_main!(benches);

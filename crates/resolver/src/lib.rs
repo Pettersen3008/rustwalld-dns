@@ -354,6 +354,8 @@ async fn exchange_tcp(
 pub mod https;
 mod tls;
 pub use tls::UpstreamTransport;
+/// Decode a bounded DNS-over-TLS payload, rejecting trailing or malformed data.
+pub use tls::decode_frame as decode_dot_frame;
 
 /// Bounded CLOCK caches shared by response and decision caching.
 pub mod cache;

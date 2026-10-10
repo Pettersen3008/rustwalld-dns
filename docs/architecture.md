@@ -143,8 +143,8 @@ Primary references (reviewed 2026-10-05):
 
 Explicit `transport.kind = "tls"` or `"https"` profiles compile rustls trust/identity state
 before publication. Resolver-owned bounded socket pools reuse warm encrypted connections:
-DoT with exclusive checkout, DoH with up to eight multiplexed HTTP/2 streams per
-connection, both with cancellation-safe disposal. Bootstrap IPs avoid
+DoT with eight pipelined queries and DoH with eight multiplexed HTTP/2 streams
+per connection, both with cancellation-safe disposal. Bootstrap IPs avoid
 recursive hostname resolution; strict certificate checks and sequential TLS-only
 fallback avoid silent downgrade. See [TLS decision](encrypted-upstreams.md).
 HTTPS uses POST wire messages over authenticated HTTP/2 with explicit header/body

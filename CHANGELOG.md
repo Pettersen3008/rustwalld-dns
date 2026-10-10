@@ -2,6 +2,12 @@
 
 ## 0.1.0 — unreleased
 
+- DoT pipelines eight pending queries per pooled connection, with unique message
+  IDs, out-of-order reply matching, cancellation cleanup, strict connection
+  retirement and bounded writer/admission queues. Local failure tests and the
+  `dot_concurrent` benchmark cover the shared connection lifecycle; see
+  [measurements](docs/dot-pipelining.md).
+
 - Explain the encrypted rehearsal's DoH latency gap: its one-stream fixture
   serialized two clients. With only the fixture limit changed to 100, HTTPS
   fresh p99 falls from 22.1 to 11.1 ms with the same daemon; TLS stays at 11.1 ms.

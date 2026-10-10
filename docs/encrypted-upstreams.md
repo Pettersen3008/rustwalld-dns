@@ -18,30 +18,41 @@ optional inline public CA PEM replaces those roots for private resolvers; parsin
 is bounded to 64 KiB / 32 certificates and occurs during compilation. Certificate
 chain, validity and hostname checks remain enabled. CA changes require a revision.
 
-A short mutex owns only idle sockets. Each admitted exchange owns its socket
-across awaits; a semaphore limits active + idle sockets to 1..8 per address.
-Existing global inflight admission bounds waiting requests. One exchange at a
-time per connection avoids response demultiplexing complexity; a small pool
-provides concurrency. Pipelining is a later measurement-driven option.
+Each pooled connection pipelines at most eight queries, following
+[RFC 7766 section 6.2.1.1](https://www.rfc-editor.org/rfc/rfc7766.html#section-6.2.1.1).
+A short mutex holds the pending map; no lock spans an await. One driver owns
+both TLS halves: its reader matches complete Hickory-decoded replies to waiters
+by message ID, and its writer consumes a bounded eight-frame channel. Request
+admission is limited to eight times the configured physical connection count.
+The driver retains the physical permit until both socket halves are dropped.
 
-The per-address deadline includes pool admission, TCP connect, TLS handshake and
-DNS exchange. Cancellation/error discards the socket. A stale reused socket may
-retry once on I/O failure within that same deadline, on that same TLS endpoint.
-Invalid DNS is never retried on its connection. Idle reuse expires after 60 s;
-expired sockets are closed when selected for checkout, or when the snapshot is released.
-There is no task that retains a retired generation just to reap idle sockets.
+IDs start at a random offset, advance without reuse, and retire the connection
+after the 65,536th reservation. Cancellation immediately removes the caller's
+pending entry and marks the connection suspect, preventing new admissions.
+Existing waiters finish; their cancelled siblings' late replies are discarded
+using at most eight tombstones. The driver closes when a suspect connection
+has no pending queries. Malformed/truncated/signed/trailing DNS data, mismatched
+questions/opcodes and unsolicited or duplicate IDs fail every pending query
+and close the connection. Invalid content is never retried.
+
+The per-address deadline includes request admission, physical admission, TCP
+connect, TLS handshake and DNS exchange. A reused connection lost to I/O may
+retry once under that same deadline. `Notify` signals released capacity, with
+a bounded periodic recheck for cancellation races. Idle reuse expires after
+60 seconds on checkout. Dropping the pool aborts remaining drivers; `Drop` never
+spawns tasks. Drivers retain connection state, not a policy generation.
 At most 32 profiles × 8 addresses × 8 sockets can be retained in one snapshot;
 inflight queries may briefly retain an older snapshot during publication.
 
-Hickory remains the DNS parser. Two-byte length framing limits responses to
-65,535 bytes. ID, question, opcode, response direction, signatures and truncation
-are checked using the existing validation contract. Cached responses partition
-by upstream profile and immutable generation, including changed trust/identity.
+Hickory remains the DNS parser. Two-byte framing bounds responses to 65,535
+bytes and strict decoding consumes the entire frame. Cached responses partition
+by upstream content identity, including changed trust/identity. No public
+configuration or durable revision format changed. A writer behind an async
+mutex was considered; a bounded channel gives one socket owner without holding
+any lock across network I/O.
 
-An actor owning multiplexed connections was considered. Exclusive checkout is
-smaller and makes timeout/cancellation safe without a second pending-query table.
-It deliberately gives up pipelining; benchmark warm versus cold TLS before adding
-that complexity. No zero-allocation claim is made.
+Pipelining's local measurements and rehearsal are recorded in
+[DoT pipelining](dot-pipelining.md). No zero-allocation claim is made.
 
 Evidence required: local TLS servers verify warm reuse, pool bounds, trusted and
 untrusted/expired/wrong-name certificates, stalled handshakes/replies, reconnect,

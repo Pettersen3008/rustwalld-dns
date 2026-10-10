@@ -63,7 +63,7 @@ impl Endpoint {
         if https {
             Self::Https(https::Mock::with_streams(0, streams).await)
         } else {
-            Self::Tls(tls::Mock::start(0).await)
+            Self::Tls(tls::Mock::start_pipelined(0).await)
         }
     }
     fn address(&self) -> SocketAddr {

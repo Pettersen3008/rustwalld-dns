@@ -551,6 +551,9 @@ corpus = Path("fuzz/corpus/filter_compile")
 PYSEEDS
 cargo +nightly fuzz run filter_compile -- -max_total_time=30 -max_len=524288
 cargo +nightly fuzz run tls_config -- -max_total_time=30 -max_len=65536
+mkdir -p fuzz/corpus/dot_response
+cp fuzz/seeds/dot_response/* fuzz/corpus/dot_response/
+cargo +nightly fuzz run dot_response -- -max_total_time=30 -max_len=65535
 cargo +nightly fuzz run doh_response -- -max_total_time=30 -max_len=65544
 cargo +nightly fuzz run policy_check -- -max_total_time=30 -max_len=4096
 mkdir -p fuzz/corpus/cache_lookup

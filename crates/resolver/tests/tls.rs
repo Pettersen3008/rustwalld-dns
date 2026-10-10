@@ -113,8 +113,8 @@ async fn timeout_cancel_and_pool_admission_do_not_poison_reuse() {
     assert_eq!(mock.accepted.load(Ordering::SeqCst), 1);
     first.abort();
     let _ = first.await;
-    // A new query gets a new connection; cancelled socket stays owned by the old
-    // server task and its eventual reply cannot be consumed by the new request.
+    // Cancellation retires the shared connection from admission. Existing
+    // pending requests retain it until their deadlines, then a new socket opens.
     for waiter in waiters {
         assert!(waiter.await.unwrap().is_err());
     }
@@ -334,4 +334,149 @@ async fn failed_endpoint_cools_down_single_probe_cancels_and_recovers() {
     );
     reconciled(&f.health()[0]);
     reconciled(&f.health()[1]);
+}
+
+fn named_query(name: &str) -> Message {
+    let mut q = query();
+    q.queries[0].set_name(Name::from_ascii(name).unwrap());
+    q
+}
+fn single(mock: &Mock) -> Arc<Forwarder> {
+    let mut transport = mock.transport.clone();
+    if let UpstreamTransport::Tls {
+        max_connections, ..
+    } = &mut transport
+    {
+        *max_connections = 1;
+    }
+    Arc::new(
+        Forwarder::with_transport(vec![mock.address], Duration::from_secs(2), &transport).unwrap(),
+    )
+}
+async fn pending_named(
+    f: &Arc<Forwarder>,
+    name: &'static str,
+) -> tokio::task::JoinHandle<Result<Message, rustwalld_dns_resolver::ResolveError>> {
+    let f = f.clone();
+    tokio::spawn(async move { f.resolve(&named_query(name)).await })
+}
+#[tokio::test]
+async fn pipelined_replies_can_arrive_out_of_order() {
+    let mock = Mock::start(11).await;
+    let f = single(&mock);
+    f.resolve(&query()).await.unwrap();
+    mock.pin_release.send_replace(false);
+    let slow = pending_named(&f, "slow-first.test.").await;
+    mock.wait_queries(2).await;
+    let fast = pending_named(&f, "fast-second.test.").await;
+    let fast = fast.await.unwrap().unwrap();
+    assert_eq!(fast.queries, named_query("fast-second.test.").queries);
+    assert!(!slow.is_finished());
+    assert_eq!(mock.accepted.load(Ordering::SeqCst), 1);
+    mock.pin_release.send_replace(true);
+    let slow = slow.await.unwrap().unwrap();
+    assert_eq!(slow.queries, named_query("slow-first.test.").queries);
+    drop(f);
+    mock.wait_closed().await;
+}
+#[tokio::test]
+async fn cancellation_discards_late_reply_without_failing_an_existing_waiter() {
+    let mock = Mock::start(11).await;
+    let f = single(&mock);
+    f.resolve(&query()).await.unwrap();
+    mock.pin_release.send_replace(false);
+    let live = pending_named(&f, "slow-live.test.").await;
+    mock.wait_queries(2).await;
+    let cancelled = pending_named(&f, "cancelled.test.").await;
+    mock.wait_queries(3).await;
+    cancelled.abort();
+    let _ = cancelled.await;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while mock.replies.load(Ordering::SeqCst) < 2 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!live.is_finished());
+    mock.pin_release.send_replace(true);
+    assert_eq!(
+        live.await.unwrap().unwrap().queries,
+        named_query("slow-live.test.").queries
+    );
+    f.resolve(&query()).await.unwrap();
+    assert_eq!(mock.accepted.load(Ordering::SeqCst), 2);
+    failure(&f.health()[0], FailureKind::Cancelled, 1);
+    drop(f);
+    mock.wait_closed().await;
+}
+#[tokio::test]
+async fn loss_unknown_id_and_malformed_frame_fail_all_pending_queries() {
+    for mode in [12, 13, 14] {
+        let mock = Mock::start(10).await;
+        let f = single(&mock);
+        f.resolve(&query()).await.unwrap();
+        mock.mode.store(mode, Ordering::SeqCst);
+        mock.pin_release.send_replace(false);
+        let a = pending_named(&f, "first.test.").await;
+        let b = pending_named(&f, "second.test.").await;
+        let c = pending_named(&f, "third.test.").await;
+        mock.wait_queries(4).await;
+        assert_eq!(mock.accepted.load(Ordering::SeqCst), 1);
+        mock.pin_release.send_replace(true);
+        for task in [a, b, c] {
+            assert!(task.await.unwrap().is_err());
+        }
+        let kind = if mode == 12 {
+            FailureKind::Connection
+        } else {
+            FailureKind::DnsResponse
+        };
+        failure(&f.health()[0], kind, 3);
+        mock.mode.store(10, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(260)).await;
+        assert!(f.resolve(&query()).await.is_ok());
+        drop(f);
+        mock.wait_closed().await;
+    }
+}
+#[tokio::test]
+async fn pending_capacity_is_bounded_and_released_after_cancellation() {
+    let mock = Mock::start(11).await;
+    let f = single(&mock);
+    f.resolve(&query()).await.unwrap();
+    mock.pin_release.send_replace(false);
+    let mut tasks = vec![];
+    for _ in 0..32 {
+        tasks.push(pending_named(&f, "slow-capacity.test.").await);
+    }
+    mock.wait_queries(9).await;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert_eq!(mock.queries.load(Ordering::SeqCst), 9);
+    assert_eq!(mock.peak.load(Ordering::SeqCst), 8);
+    assert_eq!(mock.active.load(Ordering::SeqCst), 1);
+    for task in &tasks {
+        task.abort();
+    }
+    for task in tasks {
+        let _ = task.await;
+    }
+    mock.wait_closed().await;
+    mock.pin_release.send_replace(true);
+    f.resolve(&query()).await.unwrap();
+    drop(f);
+    mock.wait_closed().await;
+}
+#[test]
+fn dot_decoder_rejects_trailing_data_and_invalid_envelopes() {
+    let mut reply = query().into_response();
+    let bytes = reply.to_vec().unwrap();
+    assert!(rustwalld_dns_resolver::decode_dot_frame(&bytes).is_ok());
+    let mut trailing = bytes;
+    trailing.push(0);
+    assert!(rustwalld_dns_resolver::decode_dot_frame(&trailing).is_err());
+    reply.metadata.truncation = true;
+    assert!(rustwalld_dns_resolver::decode_dot_frame(&reply.to_vec().unwrap()).is_err());
+    assert!(rustwalld_dns_resolver::decode_dot_frame(&query().to_vec().unwrap()).is_err());
+    assert!(rustwalld_dns_resolver::decode_dot_frame(&[0; 11]).is_err());
 }

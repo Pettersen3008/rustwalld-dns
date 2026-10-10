@@ -1,8 +1,12 @@
 //! Strict DNS-over-TLS. Trust/identity are compiled before snapshot publication.
-use crate::{ResolveError, tcp_frame, validate};
-use hickory_proto::op::Message;
+use crate::{FailureKind, ResolveError, tcp_frame, validate};
+use hickory_proto::{
+    op::{Message, MessageType},
+    serialize::binary::{BinDecodable, BinDecoder},
+};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::{HashMap, HashSet},
     net::SocketAddr,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -10,7 +14,8 @@ use std::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
-    sync::Semaphore,
+    sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc, oneshot},
+    task::JoinHandle,
 };
 use tokio_rustls::{
     TlsConnector,
@@ -96,8 +101,10 @@ pub(super) fn compile(
                 address: *address,
                 name: name.clone(),
                 connector: connector.clone(),
-                idle: Mutex::new(Vec::new()),
-                slots: Arc::new(Semaphore::new(*max_connections)),
+                connections: Mutex::new(Vec::new()),
+                capacity: Arc::new(Notify::new()),
+                requests: Arc::new(Semaphore::new(*max_connections * PENDING_LIMIT)),
+                physical: Arc::new(Semaphore::new(*max_connections)),
             })
         })
         .collect())
@@ -147,12 +154,20 @@ pub(super) fn client_config(
     Ok((name, Arc::new(config)))
 }
 
+/// Each connection pipelines at most eight pending requests. Physical permits
+/// stay with the driver until both halves of its TLS socket have been dropped.
+const PENDING_LIMIT: usize = 8;
+const IDLE_LIMIT: Duration = Duration::from_secs(60);
+const RECHECK: Duration = Duration::from_millis(25);
+
 pub(super) struct TlsPool {
     address: SocketAddr,
     name: ServerName<'static>,
     connector: TlsConnector,
-    idle: Mutex<Vec<(TlsStream<TcpStream>, Instant)>>,
-    slots: Arc<Semaphore>,
+    connections: Mutex<Vec<Arc<Connection>>>,
+    capacity: Arc<Notify>,
+    requests: Arc<Semaphore>,
+    physical: Arc<Semaphore>,
 }
 impl std::fmt::Debug for TlsPool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -162,81 +177,401 @@ impl std::fmt::Debug for TlsPool {
             .finish_non_exhaustive()
     }
 }
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|e| e.into_inner())
+}
+struct Waiter {
+    request: Message,
+    reply: oneshot::Sender<Result<Message, FailureKind>>,
+}
+struct Queries {
+    pending: HashMap<u16, Waiter>,
+    // IDs are never reused in a connection's lifetime. A bounded set distinguishes
+    // cancelled queries' late replies from unsolicited or duplicate responses.
+    cancelled: HashSet<u16>,
+    first_id: u16,
+    issued: u32,
+    suspect: bool,
+    closed: bool,
+    last_used: Instant,
+}
+struct State {
+    queries: Mutex<Queries>,
+    capacity: Arc<Notify>,
+    changed: Notify,
+}
+impl State {
+    fn fail(&self, kind: FailureKind) {
+        let pending = {
+            let mut queries = lock(&self.queries);
+            queries.closed = true;
+            std::mem::take(&mut queries.pending)
+        };
+        for (_, waiter) in pending {
+            let _ = waiter.reply.send(Err(kind));
+        }
+        self.capacity.notify_waiters();
+    }
+    async fn drained(&self) {
+        loop {
+            let notified = self.changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            let drained = {
+                let queries = lock(&self.queries);
+                queries.suspect && queries.pending.is_empty()
+            };
+            if drained {
+                return;
+            }
+            notified.await;
+        }
+    }
+}
+struct Frame {
+    id: u16,
+    bytes: Vec<u8>,
+}
+struct Connection {
+    state: Arc<State>,
+    send: mpsc::Sender<Frame>,
+    driver: JoinHandle<()>,
+}
+impl Connection {
+    fn retired(&self, now: Instant) -> bool {
+        let queries = lock(&self.state.queries);
+        queries.closed
+            || queries.suspect
+            || queries.issued == 65_536
+            || (queries.pending.is_empty()
+                && now.saturating_duration_since(queries.last_used) >= IDLE_LIMIT)
+    }
+    fn claim(self: &Arc<Self>, request: &Message) -> Option<(Pending, Message)> {
+        let mut queries = lock(&self.state.queries);
+        if queries.closed
+            || queries.suspect
+            || queries.issued == 65_536
+            || queries.pending.len() >= PENDING_LIMIT
+        {
+            return None;
+        }
+        // Conversion is checked even though the lifetime bound keeps it in range.
+        let offset = u16::try_from(queries.issued).ok()?;
+        let id = queries.first_id.wrapping_add(offset);
+        queries.issued += 1;
+        let mut query = request.clone();
+        query.metadata.id = id;
+        let (reply, receive) = oneshot::channel();
+        queries.pending.insert(
+            id,
+            Waiter {
+                request: query.clone(),
+                reply,
+            },
+        );
+        if queries.issued == 65_536 {
+            queries.suspect = true;
+        }
+        Some((
+            Pending {
+                connection: self.clone(),
+                id,
+                receive,
+            },
+            query,
+        ))
+    }
+}
+impl Drop for Connection {
+    fn drop(&mut self) {
+        self.driver.abort();
+    }
+}
+struct Pending {
+    connection: Arc<Connection>,
+    id: u16,
+    receive: oneshot::Receiver<Result<Message, FailureKind>>,
+}
+impl Drop for Pending {
+    fn drop(&mut self) {
+        let state = &self.connection.state;
+        {
+            let mut queries = lock(&state.queries);
+            if queries.pending.remove(&self.id).is_some() {
+                queries.cancelled.insert(self.id);
+                queries.suspect = true;
+            }
+            queries.last_used = Instant::now();
+        }
+        state.changed.notify_one();
+        state.capacity.notify_one();
+    }
+}
+/// A guard captured whole by the driver, so cancellation before its first poll
+/// still drops the socket before releasing its physical permit.
+struct PhysicalConnection {
+    reader: Option<tokio::io::ReadHalf<TlsStream<TcpStream>>>,
+    writer: Option<tokio::io::WriteHalf<TlsStream<TcpStream>>>,
+    permit: Option<OwnedSemaphorePermit>,
+    state: Arc<State>,
+}
+impl Drop for PhysicalConnection {
+    fn drop(&mut self) {
+        drop(self.reader.take());
+        drop(self.writer.take());
+        self.state.fail(FailureKind::Connection);
+        drop(self.permit.take());
+        self.state.capacity.notify_waiters();
+    }
+}
 impl TlsPool {
-    async fn connect(&self) -> Result<TlsStream<TcpStream>, ResolveError> {
+    async fn connect(&self, permit: OwnedSemaphorePermit) -> Result<Arc<Connection>, ResolveError> {
         let socket = TcpStream::connect(self.address).await?;
         socket.set_nodelay(true)?;
-        Ok(self.connector.connect(self.name.clone(), socket).await?)
+        let stream = self.connector.connect(self.name.clone(), socket).await?;
+        let state = Arc::new(State {
+            queries: Mutex::new(Queries {
+                pending: HashMap::with_capacity(PENDING_LIMIT),
+                cancelled: HashSet::with_capacity(PENDING_LIMIT),
+                first_id: rand::random(),
+                issued: 0,
+                suspect: false,
+                closed: false,
+                last_used: Instant::now(),
+            }),
+            capacity: self.capacity.clone(),
+            changed: Notify::new(),
+        });
+        let (reader, writer) = tokio::io::split(stream);
+        let owned = PhysicalConnection {
+            reader: Some(reader),
+            writer: Some(writer),
+            permit: Some(permit),
+            state: state.clone(),
+        };
+        let (send, receive) = mpsc::channel(PENDING_LIMIT);
+        let driver = tokio::spawn(async move {
+            let mut owned = owned;
+            if let (Some(reader), Some(writer)) = (owned.reader.as_mut(), owned.writer.as_mut()) {
+                let result = tokio::select! {
+                    result = read_replies(reader, &owned.state) => result,
+                    result = write_queries(writer, receive, &owned.state) => result,
+                    _ = owned.state.drained() => Ok(()),
+                };
+                if let Err(error) = result {
+                    owned.state.fail(error.failure_kind());
+                }
+            }
+        });
+        Ok(Arc::new(Connection {
+            state,
+            send,
+            driver,
+        }))
+    }
+    fn prune(pool: &mut Vec<Arc<Connection>>) -> Vec<Arc<Connection>> {
+        let now = Instant::now();
+        let mut retired = Vec::new();
+        pool.retain(|connection| {
+            let keep = !connection.retired(now);
+            if !keep {
+                retired.push(connection.clone());
+            }
+            keep
+        });
+        retired
+    }
+    fn checkout(&self, request: &Message) -> Option<(Pending, Message)> {
+        let (claim, retired) = {
+            let mut pool = lock(&self.connections);
+            let retired = Self::prune(&mut pool);
+            let claim = pool
+                .iter()
+                .min_by_key(|c| lock(&c.state.queries).pending.len())
+                .and_then(|connection| connection.claim(request));
+            (claim, retired)
+        };
+        drop(retired);
+        claim
+    }
+    async fn open(
+        &self,
+        permit: OwnedSemaphorePermit,
+        request: &Message,
+    ) -> Result<(Pending, Message), ResolveError> {
+        let connection = match self.connect(permit).await {
+            Ok(connection) => connection,
+            Err(error) => {
+                self.capacity.notify_waiters();
+                return Err(error);
+            }
+        };
+        let claim = connection.claim(request).ok_or(ResolveError::Unavailable)?;
+        lock(&self.connections).push(connection);
+        self.capacity.notify_waiters();
+        Ok(claim)
+    }
+    async fn claim(&self, request: &Message) -> Result<(Pending, Message, bool), ResolveError> {
+        loop {
+            let notified = self.capacity.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if let Some((pending, query)) = self.checkout(request) {
+                return Ok((pending, query, true));
+            }
+            if let Ok(permit) = self.physical.clone().try_acquire_owned() {
+                let (pending, query) = self.open(permit, request).await?;
+                return Ok((pending, query, false));
+            }
+            let _ = tokio::time::timeout(RECHECK, notified).await;
+        }
     }
     pub async fn exchange(&self, request: &Message) -> Result<Message, ResolveError> {
-        // Forwarder's deadline includes admission, connect, handshake and exchange.
-        // Resolver's global inflight admission bounds the number of pool waiters.
-        let _permit = self
-            .slots
+        // The forwarder's deadline also includes request and physical admission.
+        let _request = self
+            .requests
             .clone()
             .acquire_owned()
             .await
             .map_err(|_| ResolveError::Unavailable)?;
-        let reused = loop {
-            // Take at most one socket per permit. Moving all expired sockets out
-            // together could temporarily exceed the physical connection cap while
-            // other admitted requests create replacements. Close outside the lock.
-            let candidate = self.idle.lock().unwrap_or_else(|e| e.into_inner()).pop();
-            match candidate {
-                Some((stream, used)) if used.elapsed() < Duration::from_secs(60) => {
-                    break Some(stream);
-                }
-                Some((stream, _)) => drop(stream),
-                None => break None,
-            }
-        };
-        let was_reused = reused.is_some();
-        let mut stream = match reused {
-            Some(stream) => stream,
-            None => self.connect().await?,
-        };
-        let mut query = request.clone();
-        query.metadata.id = rand::random();
-        let frame = tcp_frame(&query.to_vec().map_err(|_| ResolveError::Encoding)?)?;
-        let result = framed_exchange(&mut stream, &query, &frame).await;
-        let response = match result {
-            // A server may close an idle connection. Retry that endpoint once, still
-            // within the original deadline; never reconnect on invalid DNS content.
-            Err(ResolveError::Io(_)) if was_reused => {
-                drop(stream);
-                stream = self.connect().await?;
-                framed_exchange(&mut stream, &query, &frame).await?
-            }
-            result => result?,
-        };
-        // Ownership stays local across awaits. Cancellation/error drops the socket,
-        // so a late reply can never contaminate another request's pooled connection.
-        self.idle
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push((stream, Instant::now()));
-        Ok(response)
+        let (pending, query, reused) = self.claim(request).await?;
+        let result = send_query(pending, query).await;
+        if reused
+            && result
+                .as_ref()
+                .is_err_and(|e| e.failure_kind() == FailureKind::Connection)
+        {
+            // Retry a stale/closed reused connection once under the same deadline.
+            // Malformed content is never retried; claim prunes the closed socket.
+            let (pending, query, _) = self.claim(request).await?;
+            return send_query(pending, query).await;
+        }
+        result
     }
 }
-async fn framed_exchange(
-    stream: &mut TlsStream<TcpStream>,
-    request: &Message,
-    frame: &[u8],
-) -> Result<Message, ResolveError> {
-    // One write produces one TLS record for the length and message.
-    stream.write_all(frame).await?;
-    // rustls may buffer a small write; flush before awaiting the server.
-    stream.flush().await?;
-    let len = usize::from(stream.read_u16().await?);
-    if len < 12 {
+async fn send_query(mut pending: Pending, query: Message) -> Result<Message, ResolveError> {
+    let bytes = tcp_frame(&query.to_vec().map_err(|_| ResolveError::Encoding)?)?;
+    pending
+        .connection
+        .send
+        .send(Frame {
+            id: pending.id,
+            bytes,
+        })
+        .await
+        .map_err(|_| ResolveError::Failure(FailureKind::Connection))?;
+    (&mut pending.receive)
+        .await
+        .map_err(|_| ResolveError::Failure(FailureKind::Connection))?
+        .map_err(ResolveError::Failure)
+}
+async fn write_queries(
+    writer: &mut tokio::io::WriteHalf<TlsStream<TcpStream>>,
+    mut receive: mpsc::Receiver<Frame>,
+    state: &State,
+) -> Result<(), ResolveError> {
+    while let Some(frame) = receive.recv().await {
+        // Cancellation before writing leaves no query on the wire. A cancellation
+        // racing this check is safe: the reader recognizes its tombstone.
+        if !lock(&state.queries).pending.contains_key(&frame.id) {
+            continue;
+        }
+        writer.write_all(&frame.bytes).await?;
+        writer.flush().await?;
+    }
+    Ok(())
+}
+async fn read_replies(
+    reader: &mut tokio::io::ReadHalf<TlsStream<TcpStream>>,
+    state: &State,
+) -> Result<(), ResolveError> {
+    loop {
+        let len = usize::from(reader.read_u16().await?);
+        if len < 12 {
+            return Err(ResolveError::InvalidResponse);
+        }
+        let mut bytes = vec![0; len];
+        reader.read_exact(&mut bytes).await?;
+        let response = decode_frame(&bytes)?;
+        let waiter = {
+            let mut queries = lock(&state.queries);
+            if queries.cancelled.remove(&response.metadata.id) {
+                continue;
+            }
+            let waiter = queries
+                .pending
+                .remove(&response.metadata.id)
+                .ok_or(ResolveError::InvalidResponse)?;
+            if let Err(error) = validate(&waiter.request, &response) {
+                // Keep this waiter in the set so connection failure reaches it too.
+                queries.pending.insert(response.metadata.id, waiter);
+                return Err(error);
+            }
+            queries.last_used = Instant::now();
+            waiter
+        };
+        let _ = waiter.reply.send(Ok(response));
+        state.capacity.notify_one();
+        state.changed.notify_one();
+    }
+}
+/// Strict, bounded DoT DNS payload decoding, shared with the fuzz harness.
+pub fn decode_frame(bytes: &[u8]) -> Result<Message, ResolveError> {
+    if !(12..=65_535).contains(&bytes.len()) {
         return Err(ResolveError::InvalidResponse);
     }
-    let mut bytes = vec![0; len];
-    stream.read_exact(&mut bytes).await?;
-    let response = Message::from_vec(&bytes).map_err(|_| ResolveError::InvalidResponse)?;
-    validate(request, &response)?;
-    if response.metadata.truncation {
+    let mut decoder = BinDecoder::new(bytes);
+    let response = Message::read(&mut decoder).map_err(|_| ResolveError::InvalidResponse)?;
+    if !decoder.is_empty()
+        || response.metadata.truncation
+        || response.metadata.message_type != MessageType::Response
+        || response.signature.is_some()
+    {
         return Err(ResolveError::InvalidResponse);
     }
     Ok(response)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    #[tokio::test]
+    async fn a_connection_never_reuses_an_id_even_after_wraparound() {
+        let state = Arc::new(State {
+            queries: Mutex::new(Queries {
+                pending: HashMap::new(),
+                cancelled: HashSet::new(),
+                first_id: 65_532,
+                issued: 0,
+                suspect: false,
+                closed: false,
+                last_used: Instant::now(),
+            }),
+            capacity: Arc::new(Notify::new()),
+            changed: Notify::new(),
+        });
+        let (send, _receive) = mpsc::channel(PENDING_LIMIT);
+        let connection = Arc::new(Connection {
+            state,
+            send,
+            driver: tokio::spawn(std::future::pending()),
+        });
+        let mut seen = HashSet::new();
+        for _ in 0..65_536 {
+            let (pending, query) = connection.claim(&Message::query()).unwrap();
+            assert!(seen.insert(query.metadata.id));
+            // Simulate a completed response before reserving the next ID.
+            let waiter = lock(&connection.state.queries)
+                .pending
+                .remove(&pending.id)
+                .unwrap();
+            let _ = waiter.reply.send(Ok(query.into_response()));
+            drop(pending);
+        }
+        assert_eq!(seen.len(), 65_536);
+        assert!(connection.retired(Instant::now()));
+        assert!(connection.claim(&Message::query()).is_none());
+    }
 }

@@ -76,3 +76,10 @@ path = "fuzz_targets/engine_prepare.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "dot_response"
+path = "fuzz_targets/dot_response.rs"
+test = false
+doc = false
+bench = false

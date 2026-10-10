@@ -30,6 +30,8 @@ pub struct Mock {
     pub accepted: Arc<AtomicUsize>,
     pub active: Arc<AtomicUsize>,
     pub queries: Arc<AtomicUsize>,
+    /// Most requests the server was processing at once, across connections.
+    pub peak: Arc<AtomicUsize>,
     pub mode: Arc<AtomicU8>,
     pub disconnect: tokio::sync::watch::Sender<u64>,
     pub pinned: tokio::sync::watch::Sender<Option<String>>,
@@ -47,6 +49,14 @@ impl Mock {
         Self::with_expiry(mode, false).await
     }
     pub async fn with_expiry(mode: u8, expired: bool) -> Self {
+        Self::configured(mode, expired, 1).await
+    }
+    /// A server advertising `streams` concurrent HTTP/2 streams per connection.
+    #[allow(dead_code)]
+    pub async fn with_streams(mode: u8, streams: u32) -> Self {
+        Self::configured(mode, false, streams).await
+    }
+    async fn configured(mode: u8, expired: bool, streams: u32) -> Self {
         let key = rcgen::KeyPair::generate().unwrap();
         let mut params = rcgen::CertificateParams::new(vec!["resolver.test".into()]).unwrap();
         if expired {
@@ -71,6 +81,8 @@ impl Mock {
         let accepted = Arc::new(AtomicUsize::new(0));
         let active = Arc::new(AtomicUsize::new(0));
         let queries = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let inflight = Arc::new(AtomicUsize::new(0));
         let mode = Arc::new(AtomicU8::new(mode));
         let (disconnect, _) = tokio::sync::watch::channel(0);
         let (pinned, _) = tokio::sync::watch::channel(None);
@@ -82,6 +94,7 @@ impl Mock {
                 queries.clone(),
                 mode.clone(),
             );
+            let (peak, inflight) = (peak.clone(), inflight.clone());
             let disconnect = disconnect.clone();
             let pinned = pinned.clone();
             let pin_release = pin_release.clone();
@@ -92,6 +105,7 @@ impl Mock {
                         Ok((socket,_)) = listener.accept() => {
                             accepted.fetch_add(1, Ordering::SeqCst); active.fetch_add(1, Ordering::SeqCst);
                             let (acceptor, active, queries, mode) = (acceptor.clone(), active.clone(), queries.clone(), mode.clone());
+                            let (peak, inflight) = (peak.clone(), inflight.clone());
                             let mut disconnect = disconnect.subscribe();
                             let pinned = pinned.clone();
                             let pin_release = pin_release.clone();
@@ -100,7 +114,7 @@ impl Mock {
                                 if mode.load(Ordering::SeqCst) == 16 { tokio::time::sleep(Duration::from_secs(5)).await; return }
                                 socket.set_nodelay(true).unwrap();
                                 let Ok(tls) = acceptor.accept(socket).await else { return };
-                                let Ok(mut connection) = h2::server::Builder::new().max_concurrent_streams(1).handshake(tls).await else { return };
+                                let Ok(mut connection) = h2::server::Builder::new().max_concurrent_streams(streams).handshake(tls).await else { return };
                                 let mut requests = JoinSet::new();
                                 loop {
                                     tokio::select! {
@@ -108,6 +122,7 @@ impl Mock {
                                         request = connection.accept() => {
                                             let Some(Ok((mut request, mut respond))) = request else { break };
                                             let (queries, mode) = (queries.clone(), mode.clone());
+                                            let (inflight, peak) = (inflight.clone(), peak.clone());
                                             let pinned = pinned.clone();
                                             let pin_release = pin_release.clone();
                                             requests.spawn(async move {
@@ -131,8 +146,12 @@ impl Mock {
                                                     }
                                                 }
                                                 assert_eq!(query.metadata.id, 0);
-                                                queries.fetch_add(1, Ordering::SeqCst);
+                                                let served = queries.fetch_add(1, Ordering::SeqCst);
+                                                let _inflight = Active(inflight.clone());
+                                                peak.fetch_max(inflight.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
                                                 let mode = mode.load(Ordering::SeqCst);
+                                                // Refuse the first request only; it was never processed.
+                                                if mode == 23 && served == 0 { respond.send_reset(h2::Reason::REFUSED_STREAM); return; }
                                                 if mode == 22 { respond.send_reset(h2::Reason::INTERNAL_ERROR); return; }
                                                 if mode == 9 { tokio::time::sleep(Duration::from_secs(5)).await; }
                                                 if mode == 17 { tokio::time::sleep(Duration::from_millis(10)).await; }
@@ -181,6 +200,7 @@ impl Mock {
             accepted,
             active,
             queries,
+            peak,
             mode,
             disconnect,
             pinned,

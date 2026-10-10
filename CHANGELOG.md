@@ -2,6 +2,10 @@
 
 ## 0.1.0 — unreleased
 
+- DNS-over-HTTPS multiplexes up to eight requests per HTTP/2 connection within
+  the existing socket cap: 32 concurrent misses against a 10 ms server complete
+  in 22 ms instead of 178 ms (~8x throughput, [evidence](docs/doh-design.md)).
+  Refused streams are retried once; timed-out requests retire their connection.
 - Query path is 2–16% faster than before this review on every warm wire
   scenario with unchanged allocation counts ([evidence](docs/engine-split.md)):
   replies finalize in place, and rewrite answers are grouped by record type at

@@ -54,9 +54,9 @@ resolver sends a fresh EDNS envelope, so options cannot change cached content.
 Implement cache/forwarding semantics before forwarding any. Pass DO/CD explicitly;
 clear AD: this server does not perform DNSSEC validation.
 
-Accepted TCP streams use TCP_NODELAY once per connection. DNS length/payload are
-separate writes; disabling Nagle prevents an observed delayed-ACK stall between
-them on persistent connections. Admission, frame/deadline bounds and protocol
+Accepted TCP streams use TCP_NODELAY once per connection, and each reply (length
+prefix and payload) leaves in a single write. Upstream TCP fallback and DoT also
+frame requests into one write with TCP_NODELAY. Admission, frame/deadline bounds and protocol
 handling remain unchanged. See [matched wire measurements](comparison.md).
 
 Default DNS/API binds are loopback and unprivileged. Non-loopback DNS listeners
@@ -142,8 +142,9 @@ Primary references (reviewed 2026-10-05):
 ## Authenticated upstream transport
 
 Explicit `transport.kind = "tls"` or `"https"` profiles compile rustls trust/identity state
-before publication. Resolver-owned bounded socket pools reuse warm encrypted connections
-with exclusive checkout and cancellation-safe disposal. Bootstrap IPs avoid
+before publication. Resolver-owned bounded socket pools reuse warm encrypted connections:
+DoT with exclusive checkout, DoH with up to eight multiplexed HTTP/2 streams per
+connection, both with cancellation-safe disposal. Bootstrap IPs avoid
 recursive hostname resolution; strict certificate checks and sequential TLS-only
 fallback avoid silent downgrade. See [TLS decision](encrypted-upstreams.md).
 HTTPS uses POST wire messages over authenticated HTTP/2 with explicit header/body

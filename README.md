@@ -335,8 +335,12 @@ redirects, resolve bootstrap hostnames, use environment proxies, or fall back to
 HTTP/1/plaintext. HTTP headers and DNS bodies are bounded. HTTP `Age` reduces DNS
 TTLs, including negative-cache lifetimes; expired answers are not cached.
 
-The initial pool allows one outstanding exchange per connection. Cancellation
-retires its driver/socket before a physical connection slot can be reused.
+DNS-over-TLS sends one outstanding exchange per connection. DNS-over-HTTPS
+multiplexes up to eight requests per HTTP/2 connection (fewer if the server
+advertises a lower stream limit) within the `max_connections` socket cap, so
+bursts of cache misses no longer queue behind each other; a request that times
+out marks its connection for replacement. Cancellation retires a driver/socket
+before its physical connection slot can be reused.
 Validation and shadow staging do not probe upstream availability. See the
 [HTTPS design](docs/doh-design.md) and [local benchmark evidence](docs/doh-baseline.md).
 

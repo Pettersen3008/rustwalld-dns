@@ -429,3 +429,38 @@ async fn failed_endpoint_cools_down_single_probe_cancels_and_recovers() {
     reconciled(&f.health()[0]);
     reconciled(&f.health()[1]);
 }
+
+#[tokio::test]
+async fn concurrent_queries_share_connections_up_to_the_stream_limit() {
+    // A server allowing 100 streams answers after 10 ms.
+    let mock = Mock::with_streams(17, 100).await;
+    let f = Arc::new(forward(&mock));
+    let tasks: Vec<_> = (0..16)
+        .map(|_| {
+            let f = f.clone();
+            tokio::spawn(async move { f.resolve(&query()).await })
+        })
+        .collect();
+    for task in tasks {
+        assert!(task.await.unwrap().is_ok());
+    }
+    // Within the two-connection cap, requests overlapped on shared connections.
+    assert!(mock.accepted.load(Ordering::SeqCst) <= 2);
+    assert!(
+        mock.peak.load(Ordering::SeqCst) > 2,
+        "requests were not multiplexed"
+    );
+    assert_eq!(f.health()[0].successes.load(Ordering::SeqCst), 16);
+    reconciled(&f.health()[0]);
+}
+
+#[tokio::test]
+async fn refused_streams_are_retried_once() {
+    let mock = Mock::start(23).await;
+    let f = forward(&mock);
+    assert!(f.resolve(&query()).await.is_ok());
+    // The refused request reached the server once and the retry succeeded.
+    assert_eq!(mock.queries.load(Ordering::SeqCst), 2);
+    assert_eq!(f.health()[0].successes.load(Ordering::SeqCst), 1);
+    failure(&f.health()[0], FailureKind::HttpProtocol, 0);
+}

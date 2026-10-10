@@ -12,6 +12,9 @@ require negotiated ALPN h2. There is no runtime hostname lookup, plaintext or
 HTTP/1 fallback, redirect following, proxy environment handling, cookie store,
 or GET/JSON DNS dialect. Existing UDP and TLS revisions remain readable.
 
+Update (2026-10-10): DoH now multiplexes requests; see "Multiplexing" below. The
+original single-stream design is kept here for context.
+
 `resolver` owns HTTP/2 via h2/http/bytes and tokio-rustls. A short mutex contains
 only idle connection handles. An admitted exchange exclusively owns a handle;
 one outstanding request per connection deliberately avoids a second multiplexed
@@ -53,3 +56,44 @@ Primary references reviewed: [RFC 8484](https://www.rfc-editor.org/rfc/rfc8484.h
 (POST wire bodies, ID zero, HTTP status/media type, TTL/Age),
 [h2 client Builder](https://docs.rs/h2/0.4.19/h2/client/struct.Builder.html)
 (explicit HTTP2 bounds), existing tokio-rustls and DoT trust contracts.
+
+## Multiplexing (2026-10-10)
+
+Measured benefit, so multiplexing replaces exclusive checkout:
+
+- A connection carries up to eight concurrent requests (`STREAMS_PER_CONNECTION`).
+  Request admission per address is `max_connections × 8`, and physical sockets
+  stay bounded by `max_connections`. h2 additionally honours the server's
+  `SETTINGS_MAX_CONCURRENT_STREAMS`. Before those settings arrive, one stream is
+  opened at a time.
+- New requests take the least-loaded live connection with free stream capacity,
+  or open a connection while a physical slot is free. Otherwise they wait for a
+  capacity notification (rechecked every 25 ms as a safety net), never on the
+  physical semaphore, so capacity freed elsewhere is used at once.
+- Streams are independent: a cancelled or failed request resets only its own
+  stream. A request abandoned without an HTTP answer (deadline or transport
+  failure) marks its connection suspect. New requests avoid it, and the socket
+  closes after its remaining streams finish, so a server stuck on one
+  connection is replaced as before.
+- Retry once, within the original deadline:
+  - A `REFUSED_STREAM` (never processed, RFC 9113 §8.7) retries on any
+    connection.
+  - A stale reused connection (I/O error or graceful GOAWAY) retries on a new
+    connection.
+  - Invalid DNS content is never retried.
+- Each connection's receive window is eight full DNS messages, so concurrent
+  large answers cannot block each other.
+
+Evidence: `crates/resolver/benches/https.rs`, `doh_concurrent` group. The
+loopback mock answers after 10 ms and allows 100 streams per connection; two
+connections per address. AMD Ryzen 7 9800X3D, Linux 7.2, Rust 1.99.0, cores 4–9.
+
+| Concurrent queries | Exclusive checkout | Multiplexed | Throughput |
+| ---: | ---: | ---: | ---: |
+| 8 | 44.45 ms | 11.19 ms | 180 → 715 queries/s |
+| 32 | 177.77 ms | 22.41 ms | 180 → 1,428 queries/s |
+
+Single-query `doh_loopback` warm and cold timings did not regress (−2% and −4%).
+New tests prove that requests overlap on at most two connections and that a
+refused stream is retried; both fail on the previous implementation. Raw output
+is kept in `target/review/doh-mux/`.

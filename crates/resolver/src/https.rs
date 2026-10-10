@@ -9,18 +9,29 @@ use hickory_proto::{
 use http::{HeaderMap, Request, StatusCode, Uri, header};
 use std::{
     net::SocketAddr,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 use tokio::{
     net::TcpStream,
-    sync::{OwnedSemaphorePermit, Semaphore},
+    sync::{Notify, OwnedSemaphorePermit, Semaphore},
     task::JoinHandle,
 };
 use tokio_rustls::{TlsConnector, client::TlsStream, rustls::pki_types::ServerName};
 /// Largest DNS message, also the HTTP/2 flow-control window per stream.
 const DNS_WINDOW: u32 = 65_535;
 const DNS_LIMIT: usize = DNS_WINDOW as usize;
+/// Concurrent DNS requests multiplexed on one connection (fewer when the
+/// server advertises a lower `SETTINGS_MAX_CONCURRENT_STREAMS`).
+const STREAMS_PER_CONNECTION: usize = 8;
+/// A connection without requests for this long is closed.
+const IDLE_LIMIT: Duration = Duration::from_secs(60);
+/// Waiters recheck capacity at least this often, so a release that races a
+/// cancelled connection attempt delays a request briefly instead of stranding it.
+const RECHECK: Duration = Duration::from_millis(25);
 
 pub(super) fn compile(
     addresses: &[SocketAddr],
@@ -67,20 +78,26 @@ pub(super) fn compile(
                 name: name.clone(),
                 connector: connector.clone(),
                 uri,
-                idle: Mutex::new(vec![]),
-                requests: Arc::new(Semaphore::new(*max_connections)),
+                connections: Mutex::new(vec![]),
+                capacity: Arc::new(Notify::new()),
+                requests: Arc::new(Semaphore::new(*max_connections * STREAMS_PER_CONNECTION)),
                 physical: Arc::new(Semaphore::new(*max_connections)),
             }))
         })
         .collect()
 }
 
+/// Bounded HTTP/2 connections to one address. Each connection carries up to
+/// [`STREAMS_PER_CONNECTION`] concurrent requests; streams are independent, so
+/// a cancelled or failed request resets only its own stream.
 pub(super) struct HttpsPool {
     address: SocketAddr,
     name: ServerName<'static>,
     connector: TlsConnector,
     uri: Uri,
-    idle: Mutex<Vec<(Connection, Instant)>>,
+    connections: Mutex<Vec<Arc<Connection>>>,
+    /// Signalled when stream or connection capacity may have become free.
+    capacity: Arc<Notify>,
     requests: Arc<Semaphore>,
     physical: Arc<Semaphore>,
 }
@@ -94,28 +111,64 @@ impl std::fmt::Debug for HttpsPool {
 struct Connection {
     sender: h2::client::SendRequest<Bytes>,
     driver: JoinHandle<()>,
+    /// Requests currently using this connection.
+    streams: AtomicUsize,
+    last_used: Mutex<Instant>,
+    /// A request was abandoned without an answer (deadline or failure). The
+    /// server may be stuck on this connection, so new requests avoid it; its
+    /// remaining streams finish and the socket closes after them.
+    suspect: AtomicBool,
+}
+impl Connection {
+    fn retired(&self, now: Instant) -> bool {
+        self.driver.is_finished()
+            || self.suspect.load(Ordering::Acquire)
+            || (self.streams.load(Ordering::Acquire) == 0
+                && now.saturating_duration_since(*lock(&self.last_used)) >= IDLE_LIMIT)
+    }
 }
 impl Drop for Connection {
     fn drop(&mut self) {
         self.driver.abort();
     }
 }
-// Rust drops struct fields in declaration order, including task cancellation
-// before its first poll. TLS disposal must precede waking a replacement owner.
+/// One request's claim on a connection's stream capacity.
+struct Stream {
+    connection: Arc<Connection>,
+    capacity: Arc<Notify>,
+    answered: bool,
+}
+impl Drop for Stream {
+    fn drop(&mut self) {
+        if !self.answered {
+            self.connection.suspect.store(true, Ordering::Release);
+        }
+        *lock(&self.connection.last_used) = Instant::now();
+        self.connection.streams.fetch_sub(1, Ordering::AcqRel);
+        self.capacity.notify_one();
+    }
+}
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|e| e.into_inner())
+}
+/// Owned by a connection's driver task, including when that task is cancelled
+/// before its first poll. TLS disposal precedes releasing the physical slot,
+/// which precedes waking a replacement owner.
 struct PhysicalConnection {
-    connection: h2::client::Connection<TlsStream<TcpStream>, Bytes>,
-    _permit: OwnedSemaphorePermit,
+    connection: Option<h2::client::Connection<TlsStream<TcpStream>, Bytes>>,
+    permit: Option<OwnedSemaphorePermit>,
+    capacity: Arc<Notify>,
+}
+impl Drop for PhysicalConnection {
+    fn drop(&mut self) {
+        drop(self.connection.take());
+        drop(self.permit.take());
+        self.capacity.notify_waiters();
+    }
 }
 impl HttpsPool {
-    async fn connect(&self) -> Result<Connection, ResolveError> {
-        // This permit lives in the driver, so replacement must wait for a cancelled
-        // driver's actual socket disposal, not just cancellation of its caller.
-        let physical = self
-            .physical
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| ResolveError::Unavailable)?;
+    /// Open a connection with an already reserved physical slot.
+    async fn connect(&self, physical: OwnedSemaphorePermit) -> Result<Connection, ResolveError> {
         let socket = TcpStream::connect(self.address).await?;
         socket.set_nodelay(true)?;
         let stream = self.connector.connect(self.name.clone(), socket).await?;
@@ -124,87 +177,191 @@ impl HttpsPool {
         }
         let (sender, connection) = h2::client::Builder::new()
             .initial_window_size(DNS_WINDOW)
-            .initial_connection_window_size(DNS_WINDOW)
+            // Every stream may have a full DNS message in flight.
+            .initial_connection_window_size(
+                DNS_WINDOW.saturating_mul(u32::try_from(STREAMS_PER_CONNECTION).unwrap_or(1)),
+            )
             .max_frame_size(16384)
             .max_header_list_size(16384)
             .header_table_size(4096)
             .max_concurrent_streams(0) // no server-initiated streams
+            // Until the server's SETTINGS arrive, open one stream at a time;
+            // h2 then adopts the advertised limit (capped by our stream claims).
             .initial_max_send_streams(1)
             .max_concurrent_reset_streams(8)
             .max_send_buffer_size(DNS_LIMIT)
             .enable_push(false)
             .handshake(stream)
             .await?;
+        // This permit lives in the driver, so replacement must wait for a
+        // cancelled driver's actual socket disposal, not just its caller.
         let owned = PhysicalConnection {
-            connection,
-            _permit: physical,
+            connection: Some(connection),
+            permit: Some(physical),
+            capacity: self.capacity.clone(),
         };
         let driver = tokio::spawn(async move {
             // Move the complete guard, avoiding disjoint field captures.
             let mut owned = owned;
-            let _ = (&mut owned.connection).await;
+            if let Some(connection) = owned.connection.as_mut() {
+                let _ = connection.await;
+            }
         });
-        Ok(Connection { sender, driver })
+        Ok(Connection {
+            sender,
+            driver,
+            streams: AtomicUsize::new(0),
+            last_used: Mutex::new(Instant::now()),
+            suspect: AtomicBool::new(false),
+        })
+    }
+    /// Remove retired connections from the pool. Each closes once its last
+    /// in-flight stream ends; the caller drops them outside the lock.
+    fn prune(pool: &mut Vec<Arc<Connection>>) -> Vec<Arc<Connection>> {
+        let now = Instant::now();
+        let mut retired = Vec::new();
+        pool.retain(|connection| {
+            let keep = !connection.retired(now);
+            if !keep {
+                retired.push(connection.clone());
+            }
+            keep
+        });
+        retired
+    }
+    /// Claim a stream on the least-loaded live connection, if one has room.
+    fn checkout(&self) -> Option<Stream> {
+        let (stream, retired) = {
+            let mut pool = lock(&self.connections);
+            let retired = Self::prune(&mut pool);
+            let stream = pool
+                .iter()
+                .filter(|c| c.streams.load(Ordering::Acquire) < STREAMS_PER_CONNECTION)
+                .min_by_key(|c| c.streams.load(Ordering::Acquire))
+                .map(|connection| {
+                    connection.streams.fetch_add(1, Ordering::AcqRel);
+                    Stream {
+                        connection: connection.clone(),
+                        capacity: self.capacity.clone(),
+                        answered: false,
+                    }
+                });
+            (stream, retired)
+        };
+        // Close retired connections outside the lock.
+        drop(retired);
+        stream
+    }
+    /// Open a new connection and claim its first stream.
+    async fn open(&self, physical: OwnedSemaphorePermit) -> Result<Stream, ResolveError> {
+        let connection = match self.connect(physical).await {
+            Ok(connection) => Arc::new(connection),
+            Err(error) => {
+                // The slot was released with the failed attempt.
+                self.capacity.notify_waiters();
+                return Err(error);
+            }
+        };
+        connection.streams.fetch_add(1, Ordering::AcqRel);
+        lock(&self.connections).push(connection.clone());
+        // Others may now share the new connection.
+        self.capacity.notify_waiters();
+        Ok(Stream {
+            connection,
+            capacity: self.capacity.clone(),
+            answered: false,
+        })
+    }
+    /// A stream on a shared connection, opening a connection while the
+    /// physical cap allows. Returns whether the connection was reused.
+    async fn stream(&self) -> Result<(Stream, bool), ResolveError> {
+        loop {
+            let notified = self.capacity.notified();
+            tokio::pin!(notified);
+            // Register before checking, so a release cannot be missed.
+            notified.as_mut().enable();
+            if let Some(stream) = self.checkout() {
+                return Ok((stream, true));
+            }
+            if let Ok(physical) = self.physical.clone().try_acquire_owned() {
+                return Ok((self.open(physical).await?, false));
+            }
+            let _ = tokio::time::timeout(RECHECK, notified).await;
+        }
+    }
+    /// A physical slot for a fresh connection, waiting for one to close.
+    async fn physical_slot(&self) -> OwnedSemaphorePermit {
+        loop {
+            let notified = self.capacity.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            let retired = Self::prune(&mut lock(&self.connections));
+            drop(retired);
+            if let Ok(physical) = self.physical.clone().try_acquire_owned() {
+                return physical;
+            }
+            let _ = tokio::time::timeout(RECHECK, notified).await;
+        }
     }
     pub async fn exchange(&self, request: &Message) -> Result<Message, ResolveError> {
+        // Bounds this address's concurrent requests to its stream capacity.
         let _request = self
             .requests
             .clone()
             .acquire_owned()
             .await
             .map_err(|_| ResolveError::Unavailable)?;
-        let reused = loop {
-            let candidate = self.idle.lock().unwrap_or_else(|e| e.into_inner()).pop();
-            match candidate {
-                Some((connection, used))
-                    if used.elapsed() < Duration::from_secs(60)
-                        && !connection.driver.is_finished() =>
-                {
-                    break Some(connection);
-                }
-                Some((connection, _)) => drop(connection),
-                None => break None,
-            }
-        };
-        let was_reused = reused.is_some();
-        let mut connection = match reused {
-            Some(c) => c,
-            None => self.connect().await?,
-        };
         let mut query = request.clone();
         query.metadata.id = 0; // HTTP stream correlates each response (RFC 8484).
         let bytes = Bytes::from(query.to_vec().map_err(|_| ResolveError::Encoding)?);
         if bytes.len() > DNS_LIMIT {
             return Err(ResolveError::Encoding);
         }
-        let result = post(&mut connection, &self.uri, &query, bytes.clone()).await;
-        let response = match result {
-            Err(ResolveError::Http2(crate::Http2Error(ref error)))
-                if was_reused
+        let (mut stream, reused) = self.stream().await?;
+        let result = post(&stream.connection.sender, &self.uri, &query, bytes.clone()).await;
+        let (refused, stale) = match &result {
+            Err(ResolveError::Http2(crate::Http2Error(error))) => (
+                error.reason() == Some(h2::Reason::REFUSED_STREAM),
+                reused
                     && (error.is_io()
-                        || (error.is_go_away()
-                            && error.reason() == Some(h2::Reason::NO_ERROR))) =>
-            {
-                drop(connection);
-                connection = self.connect().await?;
-                post(&mut connection, &self.uri, &query, bytes).await?
-            }
-            result => result?,
+                        || (error.is_go_away() && error.reason() == Some(h2::Reason::NO_ERROR))),
+            ),
+            _ => (false, false),
         };
-        self.idle
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push((connection, Instant::now()));
-        Ok(response)
+        // Any HTTP-level answer means the connection works; so does a refused
+        // stream, which only reports the server's concurrency limit.
+        stream.answered = refused || !transport_failure(&result);
+        if !refused && !stale {
+            return result;
+        }
+        drop(stream);
+        // Retry once, within the original deadline. A refused stream was never
+        // processed (RFC 9113 section 8.7) and may share another connection; a
+        // stale reused connection is replaced. Invalid DNS content is never
+        // retried.
+        let mut stream = if refused {
+            self.stream().await?.0
+        } else {
+            self.open(self.physical_slot().await).await?
+        };
+        let result = post(&stream.connection.sender, &self.uri, &query, bytes).await;
+        stream.answered = !transport_failure(&result);
+        result
     }
 }
+/// Whether a request failed below HTTP (connection, TLS or HTTP/2 framing).
+fn transport_failure(result: &Result<Message, ResolveError>) -> bool {
+    matches!(result, Err(ResolveError::Http2(_) | ResolveError::Io(_)))
+}
 async fn post(
-    connection: &mut Connection,
+    sender: &h2::client::SendRequest<Bytes>,
     uri: &Uri,
     query: &Message,
     bytes: Bytes,
 ) -> Result<Message, ResolveError> {
-    std::future::poll_fn(|cx| connection.sender.poll_ready(cx)).await?;
+    // Each request uses its own handle, which waits for a free stream slot.
+    let mut sender = sender.clone();
+    std::future::poll_fn(|cx| sender.poll_ready(cx)).await?;
     let request = Request::builder()
         .method("POST")
         .uri(uri.clone())
@@ -213,7 +370,7 @@ async fn post(
         .header(header::CONTENT_LENGTH, bytes.len())
         .body(())
         .map_err(|_| ResolveError::Encoding)?;
-    let (response, mut send) = connection.sender.send_request(request, false)?;
+    let (response, mut send) = sender.send_request(request, false)?;
     send.send_data(bytes, true)?;
     let mut response = response.await?;
     check_headers(response.status(), response.headers())?;

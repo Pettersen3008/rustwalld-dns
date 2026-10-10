@@ -35,6 +35,40 @@ fn https(c: &mut Criterion) {
         )
     });
     group.finish();
+    // Concurrent misses against a server that answers after 10 ms and allows
+    // 100 streams per connection, like public DoH services.
+    let delayed = runtime.block_on(fixture::Mock::with_streams(17, 100));
+    let forwarder = std::sync::Arc::new(
+        Forwarder::with_transport(
+            vec![delayed.address],
+            Duration::from_secs(5),
+            &delayed.transport,
+        )
+        .unwrap(),
+    );
+    runtime.block_on(forwarder.resolve(&query)).unwrap();
+    let mut group = c.benchmark_group("doh_concurrent");
+    group.sample_size(10);
+    for clients in [8_u64, 32] {
+        group.throughput(Throughput::Elements(clients));
+        group.bench_function(format!("{clients}_queries_10ms_server"), |b| {
+            b.iter(|| {
+                runtime.block_on(async {
+                    let tasks: Vec<_> = (0..clients)
+                        .map(|_| {
+                            let forwarder = forwarder.clone();
+                            let query = query.clone();
+                            tokio::spawn(async move { forwarder.resolve(&query).await })
+                        })
+                        .collect();
+                    for task in tasks {
+                        task.await.unwrap().unwrap();
+                    }
+                })
+            })
+        });
+    }
+    group.finish();
 }
 criterion_group!(benches, https);
 criterion_main!(benches);

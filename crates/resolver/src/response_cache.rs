@@ -1,4 +1,4 @@
-use crate::{UpstreamId, cache::BoundedCache};
+use crate::{ResolveError, UpstreamId, cache::BoundedCache};
 use hickory_proto::{
     op::{Message, Query, ResponseCode},
     rr::RData,
@@ -7,6 +7,28 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+
+/// Validated opt-in retention window after the response's normal expiry.
+/// Zero disables serve-stale; the maximum is one day. No background refresh.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ServeStale(Duration);
+impl ServeStale {
+    /// Validate a maximum staleness measured from the original minimum-TTL expiry.
+    ///
+    /// # Errors
+    /// Rejects a window exceeding one day.
+    pub fn new(max_staleness: Duration) -> Result<Self, ResolveError> {
+        if max_staleness > Duration::from_secs(86_400) {
+            return Err(ResolveError::Configuration(
+                "maximum staleness must be at most 86400 seconds".into(),
+            ));
+        }
+        Ok(Self(max_staleness))
+    }
+    pub(crate) fn enabled(self) -> bool {
+        !self.0.is_zero()
+    }
+}
 
 /// Response cache and coalescing identity. Policy decisions are made before a
 /// query reaches the resolver and blocked/rewritten answers never enter this
@@ -78,9 +100,34 @@ impl ResponseCache {
     pub fn get(&self, key: &CacheKey, now: Instant) -> Option<Message> {
         self.entry(key, now).map(|entry| entry.materialize(now))
     }
+    /// An expired response still within a validated stale window. All RR TTLs
+    /// are 30 seconds; callers must first exhaust upstreams and enforce policy.
+    /// Reading stale data never extends its original expiry/retention deadline.
+    pub fn stale(&self, key: &CacheKey, now: Instant, policy: ServeStale) -> Option<Message> {
+        if policy.0.is_zero() {
+            return None;
+        }
+        let entry = self.entries.get(key)?;
+        if now < entry.expires || now.saturating_duration_since(entry.expires) >= policy.0 {
+            return None;
+        }
+        let mut response = entry.response.clone();
+        for record in response
+            .answers
+            .iter_mut()
+            .chain(&mut response.authorities)
+            .chain(&mut response.additionals)
+        {
+            record.ttl = 30;
+        }
+        Some(response)
+    }
     /// Cache a cacheable response, returning whether it was stored. Truncated,
     /// signed, SERVFAIL-like, zero-TTL and SOA-less negative replies are not.
-    pub fn insert(&self, key: CacheKey, mut response: Message, now: Instant) -> bool {
+    /// A completed NoError/NXDOMAIN refresh that cannot be cached removes an
+    /// older entry; error codes or invalid envelopes leave it intact.
+    pub fn insert(&self, key: CacheKey, response: Message, now: Instant) -> bool {
+        // Errors/invalid content are not a refresh (RFC 8767 section 4).
         if response.metadata.truncation
             || response.signature.is_some()
             || !matches!(
@@ -90,66 +137,18 @@ impl ResponseCache {
         {
             return false;
         }
-        // NODATA: aliases without a terminal requested RR require a negative SOA.
-        let negative = response.metadata.response_code == ResponseCode::NXDomain
-            || !response
-                .answers
-                .iter()
-                .any(|r| r.data.record_type() == key.query.query_type());
-        let negative_ttl = if negative {
-            let Some(ttl) = response
-                .authorities
-                .iter()
-                .filter_map(|r| match &r.data {
-                    RData::SOA(soa) => Some(r.ttl.min(soa.minimum)),
-                    _ => None,
-                })
-                .min()
-            else {
-                return false;
-            };
-            for record in &mut response.authorities {
-                if matches!(record.data, RData::SOA(_)) {
-                    record.ttl = record.ttl.min(ttl);
-                }
+        match cache_entry(&key, response, now) {
+            Some(entry) => {
+                self.entries.insert(key, Arc::new(entry));
+                true
             }
-            Some(ttl)
-        } else {
-            None
-        };
-        let Some(mut ttl) = response
-            .all_sections()
-            // RFC 2181 section 8: a TTL with the top bit set is treated as zero.
-            .map(|r| {
-                if r.ttl > i32::MAX.unsigned_abs() {
-                    0
-                } else {
-                    r.ttl
-                }
-            })
-            .min()
-        else {
-            return false;
-        };
-        if let Some(negative_ttl) = negative_ttl {
-            ttl = ttl.min(negative_ttl);
+            None => {
+                // A completed refresh supersedes old data even if its new TTL or
+                // negative envelope cannot be cached. Never resurrect that data.
+                self.entries.remove(&key);
+                false
+            }
         }
-        // Conservative upper cap and full-message expiry keep RRsets coherent.
-        ttl = ttl.min(86400);
-        if ttl == 0 {
-            return false;
-        }
-        response.edns = None;
-        response.metadata.authentic_data = false;
-        self.entries.insert(
-            key,
-            Arc::new(Entry {
-                response,
-                inserted: now,
-                expires: now + Duration::from_secs(u64::from(ttl)),
-            }),
-        );
-        true
     }
     /// Cached responses, including expired ones not yet evicted.
     pub fn len(&self) -> usize {
@@ -159,6 +158,59 @@ impl ResponseCache {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+}
+
+fn cache_entry(key: &CacheKey, mut response: Message, now: Instant) -> Option<Entry> {
+    // NODATA: aliases without a terminal requested RR require a negative SOA.
+    let negative = response.metadata.response_code == ResponseCode::NXDomain
+        || !response
+            .answers
+            .iter()
+            .any(|r| r.data.record_type() == key.query.query_type());
+    let negative_ttl = if negative {
+        let ttl = response
+            .authorities
+            .iter()
+            .filter_map(|r| match &r.data {
+                RData::SOA(soa) => Some(r.ttl.min(soa.minimum)),
+                _ => None,
+            })
+            .min()?;
+        for record in &mut response.authorities {
+            if matches!(record.data, RData::SOA(_)) {
+                record.ttl = record.ttl.min(ttl);
+            }
+        }
+        Some(ttl)
+    } else {
+        None
+    };
+    let mut ttl = response
+        .all_sections()
+        // RFC 2181 section 8: a TTL with the top bit set is treated as zero.
+        .map(|r| {
+            if r.ttl > i32::MAX.unsigned_abs() {
+                0
+            } else {
+                r.ttl
+            }
+        })
+        .min()?;
+    if let Some(negative_ttl) = negative_ttl {
+        ttl = ttl.min(negative_ttl);
+    }
+    // Conservative upper cap and full-message expiry keep RRsets coherent.
+    ttl = ttl.min(86400);
+    if ttl == 0 {
+        return None;
+    }
+    response.edns = None;
+    response.metadata.authentic_data = false;
+    Some(Entry {
+        response,
+        inserted: now,
+        expires: now + Duration::from_secs(u64::from(ttl)),
+    })
 }
 
 #[cfg(test)]
@@ -265,5 +317,97 @@ mod tests {
         response.metadata.truncation = false;
         response.metadata.response_code = ResponseCode::ServFail;
         assert!(!cache.insert(key, response, now));
+    }
+    #[test]
+    fn stale_deadline_ttls_partitions_capacity_and_refresh_invalidation() {
+        let (key, response) = fixture();
+        let cache = ResponseCache::new(1);
+        let now = Instant::now();
+        let policy = ServeStale::new(Duration::from_secs(10)).unwrap();
+        assert!(cache.insert(key.clone(), response.clone(), now));
+        assert!(
+            cache
+                .stale(&key, now + Duration::from_secs(29), policy)
+                .is_none()
+        );
+        assert!(cache.get(&key, now + Duration::from_secs(30)).is_none());
+        assert_eq!(cache.len(), 1);
+        for age in [30, 35, 39] {
+            let stale = cache
+                .stale(&key, now + Duration::from_secs(age), policy)
+                .unwrap();
+            assert!(stale.all_sections().all(|r| r.ttl == 30));
+            assert!(!stale.metadata.authentic_data);
+        }
+        assert!(
+            cache
+                .stale(&key, now + Duration::from_secs(40), policy)
+                .is_none()
+        );
+        assert!(
+            cache
+                .stale(&key, now + Duration::from_secs(30), ServeStale::default())
+                .is_none()
+        );
+        for partition in 0..3 {
+            let mut other = key.clone();
+            match partition {
+                0 => other.upstream = upstream(1),
+                1 => other.dnssec_ok = true,
+                _ => other.checking_disabled = true,
+            }
+            assert!(
+                cache
+                    .stale(&other, now + Duration::from_secs(31), policy)
+                    .is_none()
+            );
+        }
+        let mut other = key.clone();
+        other.upstream = upstream(1);
+        cache.insert(other, response.clone(), now);
+        assert_eq!(cache.len(), 1);
+        assert!(
+            cache
+                .stale(&key, now + Duration::from_secs(31), policy)
+                .is_none()
+        );
+        cache.insert(key.clone(), response.clone(), now);
+        let mut fresh = response;
+        fresh.answers[0].ttl = 0;
+        assert!(!cache.insert(key.clone(), fresh, now));
+        assert!(cache.is_empty());
+        assert!(
+            cache
+                .stale(&key, now + Duration::from_secs(31), policy)
+                .is_none()
+        );
+        assert!(ServeStale::new(Duration::from_secs(86_400)).is_ok());
+        assert!(ServeStale::new(Duration::from_secs(86_400) + Duration::from_nanos(1)).is_err());
+    }
+    #[test]
+    fn error_or_invalid_response_does_not_invalidate_retained_data() {
+        let (key, response) = fixture();
+        let cache = ResponseCache::new(1);
+        let now = Instant::now();
+        let policy = ServeStale::new(Duration::from_secs(10)).unwrap();
+        cache.insert(key.clone(), response.clone(), now);
+        for code in [ResponseCode::ServFail, ResponseCode::Refused] {
+            let mut bad = response.clone();
+            bad.metadata.response_code = code;
+            assert!(!cache.insert(key.clone(), bad, now));
+            assert!(
+                cache
+                    .stale(&key, now + Duration::from_secs(31), policy)
+                    .is_some()
+            );
+        }
+        let mut bad = response;
+        bad.metadata.truncation = true;
+        assert!(!cache.insert(key.clone(), bad, now));
+        assert!(
+            cache
+                .stale(&key, now + Duration::from_secs(31), policy)
+                .is_some()
+        );
     }
 }

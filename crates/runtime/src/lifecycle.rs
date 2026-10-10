@@ -16,6 +16,8 @@ pub struct RuntimeConfig {
     pub database: PathBuf,
     /// Response-cache entries.
     pub dns_cache_entries: usize,
+    /// Maximum expired-cache age in seconds; zero disables it, at most one day.
+    pub serve_stale_max_staleness_secs: u64,
     /// Decision-cache entries.
     pub decision_cache_entries: usize,
     /// Distinct upstream lookups in flight.
@@ -40,6 +42,7 @@ impl Default for RuntimeConfig {
             dns_listen: SocketAddr::from(([127, 0, 0, 1], 5353)),
             database: PathBuf::from("rustwalld.sqlite"),
             dns_cache_entries: 4096,
+            serve_stale_max_staleness_secs: 0,
             decision_cache_entries: 16384,
             max_inflight: 256,
             max_udp_queries: 512,
@@ -63,6 +66,10 @@ impl RuntimeConfig {
     }
     /// Validate numeric bounds independently of policy compilation.
     pub fn validate_limits(&self) -> std::result::Result<(), String> {
+        rustwalld_dns_core::ServeStale::new(Duration::from_secs(
+            self.serve_stale_max_staleness_secs,
+        ))
+        .map_err(|error| error.to_string())?;
         for (name, value, max) in [
             ("DNS cache", self.dns_cache_entries, 1000000),
             ("decision cache", self.decision_cache_entries, 1000000),
@@ -183,6 +190,9 @@ impl Runtime {
                 cache_entries: config.dns_cache_entries,
                 decision_entries: config.decision_cache_entries,
                 max_inflight: config.max_inflight,
+                serve_stale: rustwalld_dns_core::ServeStale::new(Duration::from_secs(
+                    config.serve_stale_max_staleness_secs,
+                ))?,
             },
             telemetry,
         )?;

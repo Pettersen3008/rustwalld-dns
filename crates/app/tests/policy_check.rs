@@ -303,3 +303,21 @@ fn check_config_treats_file_exceptions_as_new_intake() {
         }
     }
 }
+
+#[test]
+fn serve_stale_settings_default_off_validate_the_cap_and_reach_runtime() {
+    let config: Config = toml::from_str("").unwrap();
+    assert_eq!(config.serve_stale_max_staleness_secs, 0);
+    for seconds in [0, 1, 86400] {
+        let config: Config =
+            toml::from_str(&format!("serve_stale_max_staleness_secs = {seconds}")).unwrap();
+        config.validate_settings().unwrap();
+        assert_eq!(
+            config.into_runtime().serve_stale_max_staleness_secs,
+            seconds
+        );
+    }
+    let config: Config = toml::from_str("serve_stale_max_staleness_secs = 86401").unwrap();
+    assert!(config.validate_settings().is_err());
+    assert!(toml::from_str::<Config>("serve_stale_max_staleness_secs = -1").is_err());
+}

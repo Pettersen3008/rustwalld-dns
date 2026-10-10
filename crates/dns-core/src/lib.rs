@@ -17,5 +17,6 @@ pub use rustwalld_dns_policy::{
     Assertion, Binding, BindingMetadata, PolicyConfig, PolicyConfigSet, PolicySnapshot, Rewrite,
     TemporaryException, UpstreamProfile, UpstreamTransport,
 };
+pub use rustwalld_dns_resolver::response_cache::ServeStale;
 pub use server::{Server, ServerConfig};
 pub use telemetry::{QueryEvent, QuerySource, Telemetry};

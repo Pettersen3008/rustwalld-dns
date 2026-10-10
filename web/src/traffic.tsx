@@ -18,7 +18,7 @@ function clock(timestamp: number) {
 function category(event: HistoryEvent) {
   if (event.source === "failure") return 4;
   if (event.action === "block") return 2;
-  if (event.source === "cache") return 1;
+  if (["cache", "stale"].includes(event.source)) return 1;
   if (event.source === "rewrite") return 3;
   return 0;
 }

@@ -29,7 +29,9 @@ export function Queries({ api }: { api: Api }) {
             ? event.action === "block"
             : outcome === "forwarded"
               ? ["upstream", "coalesced"].includes(event.source)
-              : event.source === outcome),
+              : outcome === "cache"
+                ? ["cache", "stale"].includes(event.source)
+                : event.source === outcome),
       ),
     [history.data, outcome],
   );

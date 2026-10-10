@@ -121,6 +121,31 @@ impl<K: Eq + Hash, V: Clone> BoundedCache<K, V> {
         };
         index.insert_unique(hash, position, |&slot| slots[slot].hash);
     }
+    /// Remove a key, returning its value and immediately releasing its cache slot.
+    pub fn remove<Q: Hash + Equivalent<K> + ?Sized>(&self, key: &Q) -> Option<V> {
+        let (hash, shard) = self.locate(key);
+        let mut shard = shard.lock().unwrap_or_else(|e| e.into_inner());
+        let Shard {
+            index, slots, hand, ..
+        } = &mut *shard;
+        let found = index
+            .find_entry(hash, |&slot| key.equivalent(&slots[slot].key))
+            .ok()?;
+        let position = found.remove().0;
+        let last = slots.len() - 1;
+        let removed = slots.swap_remove(position);
+        if position < slots.len() {
+            if let Some(slot) = index.find_mut(slots[position].hash, |&slot| slot == last) {
+                *slot = position;
+            }
+            if *hand == last {
+                *hand = position;
+            }
+        } else if *hand >= slots.len() {
+            *hand = 0;
+        }
+        Some(removed.value)
+    }
     /// Entries currently cached (locks each shard briefly).
     pub fn len(&self) -> usize {
         self.shards
@@ -243,5 +268,24 @@ mod tests {
             }
         });
         assert!(cache.len() <= 97);
+    }
+    #[test]
+    fn removing_colliding_slots_preserves_other_entries_and_allows_regrowth() {
+        let cache = BoundedCache::new(96);
+        for (key, value) in [("a", 1), ("b", 2), ("c", 3)] {
+            cache.insert(CollisionKey(key.into()), value);
+        }
+        assert_eq!(cache.remove(&CollisionLookup("b")), Some(2));
+        assert_eq!(cache.get(&CollisionLookup("a")), Some(1));
+        assert_eq!(cache.get(&CollisionLookup("c")), Some(3));
+        assert_eq!(cache.remove(&CollisionLookup("b")), None);
+        assert_eq!(cache.remove(&CollisionLookup("c")), Some(3));
+        assert_eq!(cache.remove(&CollisionLookup("a")), Some(1));
+        assert!(cache.is_empty());
+        for key in ["d", "e", "f", "g"] {
+            cache.insert(CollisionKey(key.into()), 4);
+        }
+        assert_eq!(cache.len(), 3);
+        assert_eq!(cache.get(&CollisionLookup("g")), Some(4));
     }
 }

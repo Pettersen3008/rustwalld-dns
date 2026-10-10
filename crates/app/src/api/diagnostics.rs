@@ -88,6 +88,7 @@ pub(super) async fn metrics(State(state): State<Arc<AppState>>) -> String {
         ("temporary_allows", &m.temporary_allows),
         ("rewrites", &m.rewrites),
         ("failures", &m.failures),
+        ("stale_answers", &m.stale_answers),
         ("decision_cache_hits", &m.decision_hits),
         ("events_dropped", &m.dropped_events),
         ("shadow_differences", &m.shadow_differences),

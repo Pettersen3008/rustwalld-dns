@@ -278,6 +278,33 @@ Restart/recompilation needs a correct system clock; existing application
 connections cannot be withdrawn. See [semantics and verification](docs/temporary-exceptions.md)
 and [schema-2 upgrade recovery](docs/operations.md).
 
+## Serve-stale during upstream outages
+
+`serve_stale_max_staleness_secs = 0` disables serve-stale by default. To enable
+[RFC 8767](https://www.rfc-editor.org/rfc/rfc8767.html) behavior, set a positive
+maximum age in seconds at the top of `config.toml`, before `[policy]`:
+
+```toml
+serve_stale_max_staleness_secs = 3600
+```
+
+The validated cap is 86,400 seconds (one day), measured from the response's
+original minimum-TTL expiry. Allowed queries still try all eligible upstreams
+under their ordinary deadlines. If all fail or time out, a retained expired
+response within that age is returned with every RR TTL set to 30. Successful
+fallback wins. Cache/forward admission overload, shedding and shutdown do not
+trigger stale fallback. There is no background refresh or early stale reply.
+
+Expired entries still consume the configured cache slots and may be evicted.
+Stale reads never renew the retention deadline, and each coalesced caller checks
+age when receiving its answer. Policy blocks and rewrites run first; temporary
+allows still cap reply TTLs to their remaining lifetime and recheck expiry after
+upstream waits. Upstream content identity, question and DO/CD partitions remain
+intact. A successful uncacheable refresh removes any older cached answer.
+`rustwalld_stale_answers_total` counts answers actually served stale after final
+policy checks; query history records source `stale`. The setting is a startup
+limit, alongside other cache settings. See [design and tests](docs/serve-stale.md).
+
 ## DNS-over-TLS upstreams
 
 In the console, choose **Policies → Upstream profiles → DNS over TLS**, enter the
@@ -304,8 +331,8 @@ Set the policy's `upstream` to the profile name. Leaving `transport` absent keep
 UDP with TCP fallback. TLS verifies chains, validity and hostnames using bundled
 public roots. An optional inline CA PEM replaces public roots; certificate files
 are never loaded during a DNS query. The deadline includes waiting for a pool
-slot and the handshake. Responses use the same validation/cache semantics as
-plaintext forwarding. Trust or transport changes publish a new generation.
+slot and the handshake. Connections pipeline up to eight queries each with reply matching by message
+ID. Responses use the same validation/cache semantics as plaintext forwarding. Trust or transport changes publish a new generation.
 
 Validation/shadow mode checks policy decisions and configuration; it does not
 probe resolver availability or compare upstream answers. Verify connectivity
@@ -559,6 +586,9 @@ cargo +nightly fuzz run policy_check -- -max_total_time=30 -max_len=4096
 mkdir -p fuzz/corpus/cache_lookup
 cp fuzz/seeds/cache_lookup/* fuzz/corpus/cache_lookup/
 cargo +nightly fuzz run cache_lookup -- -max_total_time=30 -max_len=4096
+mkdir -p fuzz/corpus/serve_stale
+cp fuzz/seeds/serve_stale/* fuzz/corpus/serve_stale/
+cargo +nightly fuzz run serve_stale -- -max_total_time=30 -max_len=65543
 mkdir -p fuzz/corpus/engine_prepare
 cp fuzz/seeds/engine_prepare/* fuzz/corpus/engine_prepare/
 cargo +nightly fuzz run engine_prepare -- -max_total_time=30 -max_len=4096

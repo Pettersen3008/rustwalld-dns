@@ -421,3 +421,55 @@ test("upstream failure reasons, recovery and generation reset use real DNS", asy
     fresh[0]!.servers.every((s) => s.attempts === 0 && s.inflight === 0),
   ).toBeTruthy();
 });
+
+test("stale answers appear under cache while retaining their path", async ({
+  page,
+}) => {
+  const events = ["stale", "cache", "upstream"].map((source, index) => ({
+    id: index + 1,
+    timestamp: new Date().toISOString(),
+    client: "127.0.0.1",
+    domain: `${source}.fixture.test`,
+    qtype: 1,
+    generation: 1,
+    policy_id: 0,
+    action: "allow",
+    rule_id: null,
+    decision_cached: false,
+    response_code: 0,
+    source,
+    latency_us: 40000,
+    shadow: null,
+  }));
+  await page.route(/\/api\/v1\/queries\?/, (route) =>
+    route.fulfill({ json: events }),
+  );
+  await login(page);
+  await expect(
+    page.locator(".chart-legend span").filter({ hasText: "Cached" }),
+  ).toContainText(/Cached\s*2/);
+  await expect(
+    page.locator(".chart-legend span").filter({ hasText: "Forwarded" }),
+  ).toContainText(/Forwarded\s*1/);
+  await page.getByRole("link", { name: "Query log", exact: true }).click();
+  await page.getByRole("button", { name: "Cached", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "stale.fixture.test", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "cache.fixture.test", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "upstream.fixture.test", exact: true }),
+  ).not.toBeVisible();
+  await expect(
+    page.getByRole("row").filter({ hasText: "stale.fixture.test" }),
+  ).toContainText("stale");
+  await page.getByRole("button", { name: "Forwarded", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "upstream.fixture.test", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "stale.fixture.test", exact: true }),
+  ).not.toBeVisible();
+});

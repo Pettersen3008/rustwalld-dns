@@ -147,6 +147,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             cache_entries: 4096,
             decision_entries: 4096,
             max_inflight: 256,
+            ..Default::default()
         },
         telemetry,
     );

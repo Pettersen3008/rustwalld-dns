@@ -1,6 +1,6 @@
 use crate::{
     Forwarder, ResolveError,
-    response_cache::{CacheKey, Entry, ResponseCache},
+    response_cache::{CacheKey, Entry, ResponseCache, ServeStale},
 };
 use hickory_proto::op::{Edns, Message};
 use std::{
@@ -14,7 +14,12 @@ use std::{
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
 use tokio_util::sync::CancellationToken;
-type SharedResult = Option<Result<Arc<(Message, Instant)>, ()>>;
+#[derive(Clone, Copy)]
+enum FlightError {
+    Upstream,
+    Shutdown,
+}
+type SharedResult = Option<Result<Arc<(Message, Instant)>, FlightError>>;
 type Flights = Arc<Vec<Mutex<HashMap<CacheKey, watch::Receiver<SharedResult>>>>>;
 const FLIGHT_SHARDS: usize = 32;
 /// Monotonic resolver counters.
@@ -39,6 +44,7 @@ pub struct Resolver {
     hash: RandomState,
     slots: Arc<Semaphore>,
     cancel: CancellationToken,
+    serve_stale: ServeStale,
 }
 /// Where a resolution's answer came from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -46,6 +52,8 @@ pub struct Resolver {
 pub enum ResolutionSource {
     /// The response cache.
     Cache,
+    /// An expired response used after all upstreams failed.
+    Stale,
     /// A lookup this call started.
     Upstream,
     /// An identical lookup already in flight.
@@ -75,6 +83,15 @@ impl Resolver {
     /// A resolver caching up to `cache_entries` responses and running at most
     /// `max_inflight` distinct upstream lookups at once.
     pub fn new(cache_entries: usize, max_inflight: usize) -> Arc<Self> {
+        Self::with_stale(cache_entries, max_inflight, ServeStale::default())
+    }
+    /// Construct a resolver with a validated opt-in stale fallback. It is used
+    /// only after upstream failure, never overload or shutdown.
+    pub fn with_stale(
+        cache_entries: usize,
+        max_inflight: usize,
+        serve_stale: ServeStale,
+    ) -> Arc<Self> {
         Arc::new(Self {
             cache: ResponseCache::new(cache_entries),
             metrics: ResolverMetrics::default(),
@@ -86,6 +103,7 @@ impl Resolver {
             hash: RandomState::new(),
             slots: Arc::new(Semaphore::new(max_inflight)),
             cancel: CancellationToken::new(),
+            serve_stale,
         })
     }
     /// Cancel in-flight lookups and refuse new ones.
@@ -137,6 +155,8 @@ impl Resolver {
         if self.cancel.is_cancelled() {
             return Err(ResolveError::Unavailable);
         }
+        // Default-off keeps the existing miss path free of a new key clone.
+        let stale_key = self.serve_stale.enabled().then(|| key.clone());
         let index = self.shard(&key);
         // The shard lock covers only map, cache-pointer and permit operations.
         // Message copies, request construction and spawning happen after it.
@@ -190,8 +210,8 @@ impl Resolver {
         loop {
             let result = receiver.borrow().clone();
             if let Some(result) = result {
-                return result
-                    .map(|response| {
+                return match result {
+                    Ok(response) => Ok({
                         let elapsed = response.1.elapsed().as_secs();
                         let elapsed = u32::try_from(elapsed).unwrap_or(u32::MAX);
                         let mut message = response.0.clone();
@@ -207,8 +227,17 @@ impl Resolver {
                             response: message,
                             source,
                         }
-                    })
-                    .map_err(|()| ResolveError::Unavailable);
+                    }),
+                    Err(FlightError::Upstream) if !self.cancel.is_cancelled() => stale_key
+                        .as_ref()
+                        .and_then(|key| self.cache.stale(key, Instant::now(), self.serve_stale))
+                        .map(|response| Resolution {
+                            response,
+                            source: ResolutionSource::Stale,
+                        })
+                        .ok_or(ResolveError::Unavailable),
+                    Err(_) => Err(ResolveError::Unavailable),
+                };
             }
             if receiver.changed().await.is_err() {
                 return Err(ResolveError::Unavailable);
@@ -251,16 +280,14 @@ impl Resolver {
                 .upstream_lookups
                 .fetch_add(1, Ordering::Relaxed);
             let result = tokio::select! {
-                () = resolver.cancel.cancelled() => Err(ResolveError::Unavailable),
-                result = upstream.resolve(&request) => result,
+                () = resolver.cancel.cancelled() => Err(FlightError::Shutdown),
+                result = upstream.resolve(&request) => result.map_err(|_| FlightError::Upstream),
             };
-            let result = result
-                .map(|response| {
-                    let received = Instant::now();
-                    resolver.cache.insert(key, response.clone(), received);
-                    Arc::new((response, received))
-                })
-                .map_err(|_| ());
+            let result = result.map(|response| {
+                let received = Instant::now();
+                resolver.cache.insert(key, response.clone(), received);
+                Arc::new((response, received))
+            });
             sender.send_replace(Some(result));
         });
     }

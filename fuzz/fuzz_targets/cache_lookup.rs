@@ -43,6 +43,12 @@ fuzz_target!(|bytes: &[u8]| {
             policy: key.policy,
             generation: key.generation,
         };
+        if operation[0] % 3 == 1 {
+            if let Some(removed) = cache.remove(&lookup) {
+                assert_eq!(removed, key);
+            }
+            assert!(cache.get(&key).is_none());
+        }
         let borrowed = cache.get(&lookup);
         assert_eq!(borrowed, cache.get(&key));
         if let Some(value) = borrowed {

@@ -4,6 +4,9 @@ dns_listen = "127.0.0.1:5353"
 api_listen = "127.0.0.1:8080"
 database = "rustwalld.sqlite"
 dns_cache_entries = 4096
+# Serve expired answers only after every upstream fails: 0 disables; maximum 86400.
+# Age is measured from normal TTL expiry; stale replies use TTL 30.
+serve_stale_max_staleness_secs = 0
 decision_cache_entries = 16384
 max_inflight = 256
 max_udp_queries = 512

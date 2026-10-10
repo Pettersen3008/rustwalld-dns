@@ -30,8 +30,14 @@ export const baseline: Configuration = {
   assertions: [{ client: "127.0.0.1", domain: "ads.test", expected: "block" }],
 };
 export async function reset(request: APIRequestContext) {
-  const update = await request.put("/api/v1/config", {
+  const current = await request.get("/api/v1/config", {
     headers: authorization,
+  });
+  expect(current.ok()).toBeTruthy();
+  const etag = current.headers()["etag"];
+  expect(etag).toBeDefined();
+  const update = await request.put("/api/v1/config", {
+    headers: { ...authorization, "If-Match": etag ?? "" },
     data: baseline,
   });
   expect(update.ok()).toBeTruthy();

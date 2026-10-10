@@ -105,6 +105,8 @@ pub struct EngineConfig {
     pub decision_entries: usize,
     /// Distinct upstream lookups in flight at once.
     pub max_inflight: usize,
+    /// Validated expired-cache fallback window; disabled by default.
+    pub serve_stale: crate::ServeStale,
 }
 impl Default for EngineConfig {
     fn default() -> Self {
@@ -112,6 +114,7 @@ impl Default for EngineConfig {
             cache_entries: 4096,
             decision_entries: 16384,
             max_inflight: 256,
+            serve_stale: crate::ServeStale::default(),
         }
     }
 }
@@ -182,7 +185,11 @@ impl Engine {
             Self {
                 active,
                 shadow,
-                resolver: Resolver::new(config.cache_entries, config.max_inflight),
+                resolver: Resolver::with_stale(
+                    config.cache_entries,
+                    config.max_inflight,
+                    config.serve_stale,
+                ),
                 telemetry,
                 decisions: BoundedCache::new(config.decision_entries),
             },
@@ -386,6 +393,7 @@ impl Engine {
                 match result.source {
                     ResolutionSource::Cache => QuerySource::Cache,
                     ResolutionSource::Coalesced => QuerySource::Coalesced,
+                    ResolutionSource::Stale => QuerySource::Stale,
                     // Any other resolver source still came from an upstream.
                     _ => QuerySource::Upstream,
                 },
@@ -510,6 +518,9 @@ impl Engine {
             }
             None
         };
+        if outcome.source == QuerySource::Stale {
+            metrics.stale_answers.fetch_add(1, Ordering::Relaxed);
+        }
         if outcome.source == QuerySource::Failure {
             metrics.failures.fetch_add(1, Ordering::Relaxed);
         }

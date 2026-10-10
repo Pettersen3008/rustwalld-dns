@@ -83,3 +83,10 @@ path = "fuzz_targets/dot_response.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "serve_stale"
+path = "fuzz_targets/serve_stale.rs"
+test = false
+doc = false
+bench = false

@@ -13,6 +13,8 @@ pub struct Config {
     pub database: PathBuf,
     pub web_root: Option<PathBuf>,
     pub dns_cache_entries: usize,
+    /// Maximum expired-cache age in seconds; zero disables it, at most one day.
+    pub serve_stale_max_staleness_secs: u64,
     pub decision_cache_entries: usize,
     pub max_inflight: usize,
     pub max_udp_queries: usize,
@@ -39,6 +41,7 @@ impl Default for Config {
             database: PathBuf::from("rustwalld.sqlite"),
             web_root: None,
             dns_cache_entries: 4096,
+            serve_stale_max_staleness_secs: 0,
             decision_cache_entries: 16384,
             max_inflight: 256,
             max_udp_queries: 512,
@@ -123,6 +126,7 @@ impl Config {
         }
         rustwalld_dns_runtime::RuntimeConfig {
             dns_cache_entries: self.dns_cache_entries,
+            serve_stale_max_staleness_secs: self.serve_stale_max_staleness_secs,
             decision_cache_entries: self.decision_cache_entries,
             max_inflight: self.max_inflight,
             max_udp_queries: self.max_udp_queries,
@@ -140,6 +144,7 @@ impl Config {
             dns_listen: self.dns_listen,
             database: self.database,
             dns_cache_entries: self.dns_cache_entries,
+            serve_stale_max_staleness_secs: self.serve_stale_max_staleness_secs,
             decision_cache_entries: self.decision_cache_entries,
             max_inflight: self.max_inflight,
             max_udp_queries: self.max_udp_queries,

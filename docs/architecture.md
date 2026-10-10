@@ -71,10 +71,15 @@ responsibility; local packet regression tests and fuzz targets are required.
 
 Cache complete validated upstream messages, not independently extracted records:
 never promote unsolicited additional records to separate cache entries. Cache key
-includes canonical name, type, class, upstream profile, DO/CD and generation.
+includes canonical name, type, class, upstream content identity and DO/CD.
+Policy decisions remain partitioned by policy and immutable generation.
 Expire conservatively at the minimum RR TTL, decrement every TTL on hits, and
 cache NXDOMAIN/NODATA only with SOA, using min(SOA TTL, SOA MINIMUM) (RFC 2308).
-Keep final policy answers out of the upstream cache. Coalesced work must survive
+Keep final policy answers out of the upstream cache. Optional
+[serve-stale](serve-stale.md) checks expired responses only after all upstreams
+fail, with validated age bounds and a final temporary-exception expiry check.
+Expired entries count against capacity; stale reads never extend retention and
+successful uncacheable refreshes invalidate older data. Coalesced work must survive
 one waiter's cancellation and release its slot after timeout/completion.
 Construct the owned canonical forwarding message only for an admitted upstream
 flight. Cache hits and coalesced waiters derive the existing semantic key from

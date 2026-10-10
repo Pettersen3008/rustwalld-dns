@@ -2,6 +2,12 @@
 
 ## 0.1.0 — unreleased
 
+- Opt-in serve-stale returns retained expired answers with TTL 30 only after
+  every upstream fails, within a validated maximum age of one day. Default off;
+  policy blocks/rewrites, temporary deadlines and upstream partitions remain
+  enforced. Adds `rustwalld_stale_answers_total` and `stale` history sources;
+  uncacheable refreshes invalidate older answers. See [setting and tests](docs/serve-stale.md).
+
 - DoT pipelines eight pending queries per pooled connection, with unique message
   IDs, out-of-order reply matching, cancellation cleanup, strict connection
   retirement and bounded writer/admission queues. Local failure tests and the

@@ -26,6 +26,7 @@ impl TestEngine {
             cache_entries,
             decision_entries,
             max_inflight,
+            ..Default::default()
         };
         let (engine, control) = Engine::controlled(snapshot, config, telemetry);
         Self {

@@ -169,6 +169,7 @@ impl Harness {
                 cache_entries: 100,
                 decision_entries: 100,
                 max_inflight: 32,
+                ..Default::default()
             },
             telemetry,
         );

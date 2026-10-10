@@ -98,6 +98,7 @@ async fn main() {
             cache_entries: 4096,
             decision_entries: 4096,
             max_inflight: 256,
+            ..Default::default()
         },
         telemetry,
     );

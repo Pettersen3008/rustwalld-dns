@@ -64,6 +64,8 @@ pub struct Metrics {
     pub rewrites: AtomicU64,
     /// Queries answered SERVFAIL.
     pub failures: AtomicU64,
+    /// Expired-cache answers sent after upstream failure and final policy checks.
+    pub stale_answers: AtomicU64,
     /// Decisions served from the decision cache.
     pub decision_hits: AtomicU64,
     /// Events dropped because the telemetry queue was full or closed.
@@ -137,6 +139,8 @@ pub enum QuerySource {
     Blocked,
     /// The response cache.
     Cache,
+    /// An expired-cache answer after every upstream failed.
+    Stale,
     /// An upstream lookup this query started.
     Upstream,
     /// An identical upstream lookup already in flight.
@@ -151,6 +155,7 @@ impl QuerySource {
             Self::Rewrite => "rewrite",
             Self::Blocked => "blocked",
             Self::Cache => "cache",
+            Self::Stale => "stale",
             Self::Upstream => "upstream",
             Self::Coalesced => "coalesced",
             Self::Failure => "failure",

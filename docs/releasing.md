@@ -45,3 +45,7 @@ default bundles record an empty feature list. This identifies the owned two-work
 backend in addition to the binary hash. With `--skip-build`, the caller must first
 build the matching Cargo feature mode and console; verify the binary SHA-256
 against the bundle manifest. Library features remain independently selectable.
+
+The latest default-bundle rebuild and installed stale-outage smoke are described
+in [release rebuild verification](release-rebuild.md). Detailed logs, manifest
+hashes and archives remain local under `target/review/release-rebuild/`.

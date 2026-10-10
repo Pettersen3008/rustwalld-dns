@@ -14,6 +14,7 @@ import h2.events
 import threading
 import subprocess
 import time
+import tomllib
 import urllib.error
 import urllib.request
 
@@ -26,7 +27,11 @@ account = pwd.getpwnam('rustwalld-dns')
 assert 0 < account.pw_uid < 1000
 subprocess.run(['systemd-analyze', 'verify', '/usr/lib/systemd/system/rustwalld-dns.service'], check=True)
 config = Path('/etc/rustwalld-dns/config.toml')
-config.write_text(config.read_text().replace('lists = []', 'lists = [{name="installed",action="block",rules="installed.test"}]'))
+assert tomllib.loads(config.read_text())['serve_stale_max_staleness_secs'] == 0
+# Enable only this isolated smoke appliance; shipped defaults stay disabled.
+config.write_text(config.read_text()
+                  .replace('serve_stale_max_staleness_secs = 0', 'serve_stale_max_staleness_secs = 120')
+                  .replace('lists = []', 'lists = [{name="installed",action="block",rules="installed.test"}]'))
 original_config = config.read_bytes()
 secret = Path('/etc/rustwalld-dns/service.env').read_bytes()
 token = secret.decode().strip().split('=', 1)[1]
@@ -80,7 +85,7 @@ def stop(child):
     assert child.wait(timeout=10) == 0
 
 
-def dns(domain, tcp=False, answer=False):
+def dns(domain, tcp=False, answer=False, ttl=None):
     labels = b''.join(bytes([len(label)]) + label.encode() for label in domain.split('.'))
     packet = bytes.fromhex('123401000001000000000000') + labels + bytes.fromhex('0000010001')
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM if tcp else socket.SOCK_DGRAM) as connection:
@@ -103,6 +108,9 @@ def dns(domain, tcp=False, answer=False):
     assert response[:2] == packet[:2]
     if answer:
         assert int.from_bytes(response[6:8], 'big') == 1 and response[-4:] == bytes([192, 0, 2, 1])
+        if ttl is not None:
+            assert response[8:12] == b'\0\0\0\0' # no other records after the A answer
+            assert int.from_bytes(response[-10:-6], 'big') == ttl
     return response[3] & 15
 
 
@@ -132,6 +140,7 @@ tls_listener = socket.socket()
 tls_listener.bind(('127.0.0.1', 0))
 tls_listener.listen(8)
 tls_counts = {'connections': 0, 'queries': 0}
+tls_reply = {'ttl': 60, 'servfail': False}
 
 
 def wire_answer(query):
@@ -141,8 +150,10 @@ def wire_answer(query):
         assert query[end] <= 63
         end += 1 + query[end]
     end += 5 # root label + qtype + qclass; exclude request EDNS
+    if tls_reply['servfail']:
+        return query[:2] + bytes.fromhex('81820001000000000000') + query[12:end]
     response = query[:2] + bytes.fromhex('81800001000100000000') + query[12:end]
-    return response + bytes.fromhex('c00c000100010000003c0004c0000201')
+    return response + bytes.fromhex('c00c00010001') + tls_reply['ttl'].to_bytes(4, 'big') + bytes.fromhex('0004c0000201')
 
 
 def https_mock(stream):
@@ -259,6 +270,21 @@ try:
     assert api('/api/v1/upstreams')[0]['transport'] == 'https'
     assert dns('https-one.test', answer=True) == 0 and dns('https-two.test', tcp=True, answer=True) == 0
     assert tls_counts == {'connections': 2, 'queries': 4}
+    # Verify opt-in serve-stale on the actual installed executable and both ingress transports.
+    tls_reply['ttl'] = 1
+    assert dns('stale.test', answer=True, ttl=1) == 0
+    time.sleep(1.2)
+    tls_reply['servfail'] = True
+    before = tls_counts['queries']
+    try:
+        assert dns('stale.test', answer=True, ttl=30) == 0
+        assert dns('stale.test', tcp=True, answer=True, ttl=30) == 0
+        assert dns('uncached-outage.test') == 2
+        assert tls_counts['queries'] == before + 3 # every lookup attempted the failing upstream
+        metrics = api('/metrics').decode()
+        assert 'rustwalld_stale_answers_total 2' in metrics.splitlines()
+    finally:
+        tls_reply.update(ttl=60, servfail=False)
     policy['filter_sources'] = [{'policy': 'default', 'list': 'installed',
                                 'url': f'https://resolver.test:{list_port}/domains.txt',
                                 'bootstrap_ips': ['127.0.0.1'], 'ca_pem': (fixture / 'ca.pem').read_text()}]
@@ -402,4 +428,4 @@ try:
     assert api('/api/v1/filter-sources')['sources'][0]['download']['sha256'] == candidate_fingerprint
 finally:
     stop(process)
-print('PASS: clean non-root installation, UDP/TCP clients, authenticated warm DoT/HTTP2 DoH, reviewed HTTPS lists with offline-publisher recovery, conditional 200/304/restart retrieval, scheduled shadow backup/upgrade/recovery with offline publisher and explicit promotion, binding annotations, temporary allows and permanent assertions, unit validation, upgrade preservation, schema-2 WAL snapshot and expired-exception recovery; native sandbox activation not exercised')
+print('PASS: clean non-root installation, UDP/TCP clients, authenticated warm DoT/HTTP2 DoH, opt-in TTL-30 stale outage fallback over UDP/TCP with metric reconciliation and uncached SERVFAIL, reviewed HTTPS lists with offline-publisher recovery, conditional 200/304/restart retrieval, scheduled shadow backup/upgrade/recovery with offline publisher and explicit promotion, binding annotations, temporary allows and permanent assertions, unit validation, upgrade preservation, schema-2 WAL snapshot and expired-exception recovery; native sandbox activation not exercised')

@@ -172,6 +172,9 @@ The smoke container is isolated with `--network none`, has only a read-only bund
 mount and does not activate the host service manager. The unit is validated with
 systemd-analyze, and the actual installed process runs as the service user. It
 also tests upgrade preservation, online WAL backup and recovery followed by boot.
+The smoke enables serve-stale only in its isolated config and checks expired-cache
+TTL-30 answers over UDP/TCP, the stale metric and uncached outage SERVFAIL.
+The packaged default remains disabled. See [the latest rebuild](release-rebuild.md).
 The separate real-process benchmark exercises stalled body admission, concurrent
 shadow compilation, history-write failure and a scheduled authenticated HTTPS
 body stall while DNS traffic continues. The scheduled phase is capped at five

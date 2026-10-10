@@ -2,6 +2,12 @@
 
 ## 0.1.0 — unreleased
 
+- Refresh native bundle documentation for pipelining, serve-stale and runtime
+  snapshots, and make the disabled stale default explicit in the install template.
+  Packaged non-root smoke now checks TTL-30 stale answers over UDP/TCP during a
+  local encrypted-upstream outage, alongside upgrade/WAL recovery and independent
+  library consumer checks. See [release verification](docs/release-rebuild.md).
+
 - Split SQLite persistence and scheduled refreshes into focused internal modules,
   preserving SQL, durability and scheduling behavior. Encapsulate upstream,
   telemetry, resolver and history atomics behind plain `snapshot()` values;

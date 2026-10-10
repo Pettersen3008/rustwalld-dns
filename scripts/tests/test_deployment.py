@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import tarfile
 import tempfile
+import tomllib
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -121,6 +122,13 @@ class Deployment(unittest.TestCase):
             self.assertEqual(manifest['target'], 'x86_64-unknown-linux-gnu' if os.uname().machine == 'x86_64' else 'aarch64-unknown-linux-gnu')
             self.assertTrue((bundle / 'bin/rustwalld-dns').stat().st_mode & 0o111)
             self.assertEqual(manifest['features'], [])
+            for name in ('engine-split', 'cache-eviction', 'filter-matching', 'doh-latency',
+                         'dot-pipelining', 'serve-stale', 'property-tests', 'runtime-modules',
+                         'release-rebuild'):
+                self.assertIn(f'docs/{name}.md', manifest['files'])
+                self.assertTrue((bundle / f'docs/{name}.md').is_file())
+            settings = tomllib.loads((bundle / 'config/config.toml').read_text())
+            self.assertEqual(settings['serve_stale_max_staleness_secs'], 0)
             # Explicit prebuilt mode identifies a distinct installable bundle;
             # caller must supply the corresponding freshly built executable.
             optional = release.build(directory, skip_build=True, parallel_compilation=True)

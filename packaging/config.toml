@@ -3,6 +3,8 @@ dns_listen = "127.0.0.1:5353"
 api_listen = "127.0.0.1:8080"
 database = "/var/lib/rustwalld-dns/rustwalld.sqlite"
 web_root = "/opt/rustwalld-dns/current/web"
+# Opt-in outage fallback: 0 disables it; maximum expired-entry age is 86400 seconds.
+serve_stale_max_staleness_secs = 0
 
 [policy]
 default_policy = "default"

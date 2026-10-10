@@ -549,6 +549,8 @@ validation and a clean 24–72-hour representative-network soak; see the
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --locked
+# Expanded model runs; all network fixtures are local.
+PROPTEST_CASES=128 PROPTEST_RNG_SEED=20261010 cargo test --locked -p rustwalld-dns-resolver --lib properties
 cargo bench --workspace
 DNS_BENCH_SIZES=100000,1000000,5000000,10000000 cargo bench -p rustwalld-dns-filter --bench matching
 cargo run --release --locked -p rustwalld-dns-filter --example footprint -- 1000000

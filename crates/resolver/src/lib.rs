@@ -448,3 +448,8 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+extern crate self as rustwalld_dns_resolver;
+#[cfg(test)]
+mod pool_properties;

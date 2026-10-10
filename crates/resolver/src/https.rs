@@ -167,6 +167,17 @@ impl Drop for PhysicalConnection {
     }
 }
 impl HttpsPool {
+    #[cfg(test)]
+    pub(super) fn test_capacity(&self) -> (Arc<Semaphore>, Arc<Semaphore>) {
+        (self.requests.clone(), self.physical.clone())
+    }
+    #[cfg(test)]
+    pub(super) fn test_loads(&self) -> Vec<usize> {
+        lock(&self.connections)
+            .iter()
+            .map(|connection| connection.streams.load(Ordering::Acquire))
+            .collect()
+    }
     /// Open a connection with an already reserved physical slot.
     async fn connect(&self, physical: OwnedSemaphorePermit) -> Result<Connection, ResolveError> {
         let socket = TcpStream::connect(self.address).await?;
@@ -239,7 +250,12 @@ impl HttpsPool {
                 .filter(|c| c.streams.load(Ordering::Acquire) < STREAMS_PER_CONNECTION)
                 .min_by_key(|c| c.streams.load(Ordering::Acquire))
                 .map(|connection| {
-                    connection.streams.fetch_add(1, Ordering::AcqRel);
+                    let _previous = connection.streams.fetch_add(1, Ordering::AcqRel);
+                    #[cfg(test)]
+                    assert!(
+                        _previous < STREAMS_PER_CONNECTION,
+                        "DoH stream limit exceeded"
+                    );
                     Stream {
                         connection: connection.clone(),
                         capacity: self.capacity.clone(),
@@ -262,7 +278,12 @@ impl HttpsPool {
                 return Err(error);
             }
         };
-        connection.streams.fetch_add(1, Ordering::AcqRel);
+        let _previous = connection.streams.fetch_add(1, Ordering::AcqRel);
+        #[cfg(test)]
+        assert!(
+            _previous < STREAMS_PER_CONNECTION,
+            "DoH stream limit exceeded"
+        );
         lock(&self.connections).push(connection.clone());
         // Others may now share the new connection.
         self.capacity.notify_waiters();

@@ -2,6 +2,12 @@
 
 ## 0.1.0 — unreleased
 
+- Dev-only proptest models compare CLOCK eviction with a rotating queue and
+  cache removal/regrowth with a map, and stress DoT/DoH cancellation across
+  admission, connection setup and active requests. They check reply identity,
+  per-connection limits, capacity recovery and socket/permit disposal; see
+  [test depth](docs/property-tests.md).
+
 - Opt-in serve-stale returns retained expired answers with TTL 30 only after
   every upstream fails, within a validated maximum age of one day. Default off;
   policy blocks/rewrites, temporary deadlines and upstream partitions remain

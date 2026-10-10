@@ -189,8 +189,8 @@ mod tests {
         assert_eq!(disabled.get("a.test"), None);
     }
     #[derive(Clone, Eq, PartialEq)]
-    struct CollisionKey(String);
-    struct CollisionLookup<'a>(&'a str);
+    pub(super) struct CollisionKey(pub(super) String);
+    pub(super) struct CollisionLookup<'a>(pub(super) &'a str);
     impl Hash for CollisionKey {
         fn hash<H: Hasher>(&self, state: &mut H) {
             state.write_u8(0);
@@ -287,5 +287,105 @@ mod tests {
         }
         assert_eq!(cache.len(), 3);
         assert_eq!(cache.get(&CollisionLookup("g")), Some(4));
+    }
+}
+
+#[cfg(test)]
+mod properties {
+    #![allow(clippy::unwrap_used)]
+    use super::{
+        tests::{CollisionKey, CollisionLookup},
+        *,
+    };
+    use proptest::{prelude::*, test_runner::FileFailurePersistence};
+    use std::collections::{BTreeMap, VecDeque};
+
+    struct ClockModel {
+        capacity: usize,
+        ring: VecDeque<(u8, u16, bool)>,
+    }
+    impl ClockModel {
+        fn get(&mut self, key: u8) -> Option<u16> {
+            let entry = self.ring.iter_mut().find(|entry| entry.0 == key)?;
+            entry.2 = true;
+            Some(entry.1)
+        }
+        fn insert(&mut self, key: u8, value: u16) {
+            if self.capacity == 0 {
+                return;
+            }
+            if let Some(entry) = self.ring.iter_mut().find(|entry| entry.0 == key) {
+                *entry = (key, value, true);
+                return;
+            }
+            if self.ring.len() == self.capacity {
+                loop {
+                    let (key, value, referenced) = self.ring.pop_front().unwrap();
+                    if !referenced {
+                        break;
+                    }
+                    self.ring.push_back((key, value, false));
+                }
+            }
+            self.ring.push_back((key, value, false));
+        }
+    }
+    fn config() -> ProptestConfig {
+        ProptestConfig {
+            cases: std::env::var("PROPTEST_CASES")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(128),
+            failure_persistence: Some(Box::new(FileFailurePersistence::Direct(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../target/review/property-tests/cache-regressions.txt"
+            )))),
+            ..Default::default()
+        }
+    }
+    proptest! {
+        #![proptest_config(config())]
+        #[test]
+        fn clock_matches_a_rotating_queue_reference(
+            capacity in 0_usize..13,
+            operations in prop::collection::vec((0_u8..3,0_u8..32,any::<u16>()),0..300),
+        ) {
+            // Every key collides into one uniform shard, so the independent
+            // model needs neither a hash table nor slot indices/clock hand.
+            let cache = BoundedCache::new(capacity * MAX_SHARDS);
+            let mut model = ClockModel { capacity, ring: VecDeque::new() };
+            for (operation,key,value) in operations {
+                let domain = key.to_string();
+                if operation < 2 {
+                    cache.insert(CollisionKey(domain),value);
+                    model.insert(key,value);
+                } else {
+                    prop_assert_eq!(cache.get(&CollisionLookup(&domain)),model.get(key));
+                }
+                prop_assert_eq!(cache.len(),model.ring.len());
+            }
+        }
+        #[test]
+        fn remove_replace_and_regrow_match_a_plain_map(
+            enabled in any::<bool>(),
+            operations in prop::collection::vec((0_u8..3,0_u8..16,any::<u16>()),0..300),
+        ) {
+            // Enough room for the complete key domain; removal and borrowed
+            // identity are checked exactly, independent of eviction choices.
+            let cache = BoundedCache::new(if enabled { 16 * MAX_SHARDS } else { 0 });
+            let mut model = BTreeMap::new();
+            for (operation,key,value) in operations {
+                let domain = key.to_string();
+                match operation {
+                    0 => {
+                        cache.insert(CollisionKey(domain),value);
+                        if enabled { model.insert(key,value); }
+                    }
+                    1 => prop_assert_eq!(cache.remove(&CollisionLookup(&domain)),model.remove(&key)),
+                    _ => prop_assert_eq!(cache.get(&CollisionLookup(&domain)),model.get(&key).copied()),
+                }
+                prop_assert_eq!(cache.len(),model.len());
+            }
+        }
     }
 }

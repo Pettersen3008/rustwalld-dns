@@ -269,6 +269,11 @@ impl Connection {
                 reply,
             },
         );
+        #[cfg(test)]
+        assert!(
+            queries.pending.len() <= PENDING_LIMIT,
+            "DoT pending limit exceeded"
+        );
         if queries.issued == 65_536 {
             queries.suspect = true;
         }
@@ -325,6 +330,17 @@ impl Drop for PhysicalConnection {
     }
 }
 impl TlsPool {
+    #[cfg(test)]
+    pub(super) fn test_capacity(&self) -> (Arc<Semaphore>, Arc<Semaphore>) {
+        (self.requests.clone(), self.physical.clone())
+    }
+    #[cfg(test)]
+    pub(super) fn test_loads(&self) -> Vec<usize> {
+        lock(&self.connections)
+            .iter()
+            .map(|connection| lock(&connection.state.queries).pending.len())
+            .collect()
+    }
     async fn connect(&self, permit: OwnedSemaphorePermit) -> Result<Arc<Connection>, ResolveError> {
         let socket = TcpStream::connect(self.address).await?;
         socket.set_nodelay(true)?;

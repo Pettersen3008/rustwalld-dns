@@ -556,6 +556,9 @@ cargo +nightly fuzz run policy_check -- -max_total_time=30 -max_len=4096
 mkdir -p fuzz/corpus/cache_lookup
 cp fuzz/seeds/cache_lookup/* fuzz/corpus/cache_lookup/
 cargo +nightly fuzz run cache_lookup -- -max_total_time=30 -max_len=4096
+mkdir -p fuzz/corpus/engine_prepare
+cp fuzz/seeds/engine_prepare/* fuzz/corpus/engine_prepare/
+cargo +nightly fuzz run engine_prepare -- -max_total_time=30 -max_len=4096
 mkdir -p fuzz/corpus/download_config
 cp fuzz/seeds/download_config/* fuzz/corpus/download_config/
 cargo +nightly fuzz run download_config -- -max_total_time=30 -max_len=4096

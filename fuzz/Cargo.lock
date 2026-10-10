@@ -1033,6 +1033,7 @@ dependencies = [
  "hickory-proto",
  "http",
  "libfuzzer-sys",
+ "rustwalld-dns-core",
  "rustwalld-dns-filter",
  "rustwalld-dns-policy",
  "rustwalld-dns-resolver",

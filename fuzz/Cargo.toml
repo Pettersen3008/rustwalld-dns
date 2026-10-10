@@ -17,6 +17,7 @@ rustwalld-dns-filter = { path = "../crates/filtering", features = ["parallel"] }
 rustwalld-dns-resolver = { path = "../crates/resolver" }
 rustwalld-dns-policy = { path = "../crates/policy" }
 rustwalld-dns-runtime = { path = "../crates/runtime" }
+rustwalld-dns-core = { path = "../crates/dns-core" }
 http = "1"
 serde_json = "1"
 
@@ -65,6 +66,13 @@ bench = false
 [[bin]]
 name = "cache_lookup"
 path = "fuzz_targets/cache_lookup.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "engine_prepare"
+path = "fuzz_targets/engine_prepare.rs"
 test = false
 doc = false
 bench = false

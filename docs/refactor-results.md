@@ -159,4 +159,4 @@ keep all samples, allocation/correctness checks and failures.
 
 Native deployment-host validation and a clean 24–72-hour representative-network
 soak remain pending release gates. Registry publication and actual Rustwalld
-integration are separate future work; the private repository does not claim them.
+integration are separate future work; the public alpha does not claim them.

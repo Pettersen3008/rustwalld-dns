@@ -15,8 +15,8 @@ tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "net", "tim
 tokio-util = { version = "0.7", features = ["rt"] }
 ```
 
-Rust 1.95+ is required. A pinned Git revision of the private repository is another
-option for authorized collaborators; after publication use registry versions.
+Rust 1.95+ is required. A pinned Git revision of the public repository is another
+option; use registry versions only after the separate crates.io publication.
 The core reexports high-level policy inputs and telemetry so a host can build
 its engine without importing app. Direct protocol use also requires Hickory.
 HTTP/2 libraries in core's dependency tree implement encrypted DNS forwarding;

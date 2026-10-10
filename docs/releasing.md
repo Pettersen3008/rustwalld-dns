@@ -14,10 +14,14 @@ graph, licenses and examples without publishing or using checkout source paths.
 `--allow-dirty` is available for reviewing work in progress. No verification is
 waived with `--no-verify`.
 
+The source is available as a [public alpha](public-alpha.md), with private
+vulnerability reporting documented in [SECURITY.md](../SECURITY.md). The owner
+reviews contributor PRs; release and dependency changes follow the same local
+verification contract. Alpha artifacts are marked prerelease on GitHub.
+
 Before registry publication:
 
-- Confirm repository visibility and private security reporting before making the
-  project public; the development repository is private.
+- Confirm private security reporting remains enabled before publication.
 - Confirm ownership/availability of all five registry names and authorize actual
   publication. A successful local archive check does not reserve names.
 - Review license/trust-anchor notices, changelog, public docs, API support policy
@@ -28,7 +32,8 @@ Before registry publication:
   references. Tags and release artifacts must identify the verified source.
 
 Registry uploads and native service activation require separate authorization.
-The development repository is private and has no GitHub Actions workflows. The Linux appliance additionally requires native
+The repository has no GitHub Actions workflows. A stable Linux appliance release
+additionally requires native
 systemd/install/upgrade/recovery verification on the deployment host and a clean
 24–72-hour representative-network soak. Local/container checks cover reproducible
 fixtures and do not replace those gates.

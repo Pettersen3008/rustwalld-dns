@@ -4,6 +4,30 @@ Start with [architecture](docs/architecture.md), [roadmap](docs/roadmap.md) and
 [AGENTS.md](AGENTS.md). Work in complete, reviewable slices. DNS correctness,
 security and predictable latency take priority over throughput.
 
+The project is maintained by [@Pettersen3008](https://github.com/Pettersen3008).
+Every contributor change must arrive as a pull request and receive the
+maintainer's approval before merging. The root [CODEOWNERS](CODEOWNERS) covers
+all files. New commits that change an approved PR's diff invalidate its approval; dependency updates
+have the same review requirement. Auto-merge is disabled. The owner retains
+administrative control for their own maintenance and release changes; other
+contributors are not granted direct push or merge access.
+
+Discuss substantial features or architecture changes in an issue before starting
+a large implementation. Keep PRs focused and use the
+[PR template](pull_request_template.md). Follow the
+[community conduct](CODE_OF_CONDUCT.md); support and sanitized feedback go through
+[SUPPORT.md](SUPPORT.md), and vulnerabilities go through
+[SECURITY.md](SECURITY.md).
+
+Contributions are licensed under the project's existing MIT OR Apache-2.0 terms.
+Preserve third-party notices and include only code/assets you have the right to
+contribute. No contributor license agreement is required.
+
+This repository intentionally has no hosted CI/CD or `.github/` directory.
+GitHub Actions are disabled. Contributors run checks locally and retain generated
+evidence under ignored `target/review/`; summarize sanitized results in the PR.
+The maintainer verifies changes locally before merging, including Dependabot PRs.
+
 Use the pinned `rust-toolchain.toml` for reproducible local performance/release
 work. Libraries support Rust 1.95 and edition 2024; local checks test that floor separately
 from the pinned measurement toolchain. Linux is the verified appliance platform. A C toolchain is
@@ -15,6 +39,7 @@ Before submitting a meaningful change:
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --locked
+cargo +1.95.0 check --workspace --all-targets --locked
 cargo bench --workspace --no-run --locked
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps --locked
 python3 scripts/verify-consumers.py

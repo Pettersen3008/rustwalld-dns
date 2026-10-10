@@ -299,11 +299,11 @@ does not replace native/production observation or establish maximum capacity.
 - [x] Complete matched timing/allocation/memory and local recovery verification.
 
 See [the approved design](open-source-refactor.md), [embedding](embedding.md) and
-[verification evidence](refactor-results.md). The private development repository
+[verification evidence](refactor-results.md). The public alpha repository
 has no CI/CD or `.github/` folder; checks are local commands/scripts.
 
 Native deployment and the representative-network soak above remain pending
-release gates. Actual Rustwalld integration needs a separate change in that
+stable-release gates. Actual Rustwalld integration needs a separate change in that
 project; no files in `~/Work/rustwalld` were changed.
 
 ## Bounded parallel compilation

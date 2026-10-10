@@ -124,9 +124,13 @@ class Deployment(unittest.TestCase):
             self.assertEqual(manifest['features'], [])
             for name in ('engine-split', 'cache-eviction', 'filter-matching', 'doh-latency',
                          'dot-pipelining', 'serve-stale', 'property-tests', 'runtime-modules',
-                         'release-rebuild'):
+                         'release-rebuild', 'public-alpha'):
                 self.assertIn(f'docs/{name}.md', manifest['files'])
                 self.assertTrue((bundle / f'docs/{name}.md').is_file())
+            for name in ('SUPPORT.md', 'CODE_OF_CONDUCT.md', 'CODEOWNERS',
+                         'pull_request_template.md'):
+                self.assertIn(name, manifest['files'])
+                self.assertTrue((bundle / name).is_file())
             settings = tomllib.loads((bundle / 'config/config.toml').read_text())
             self.assertEqual(settings['serve_stale_max_staleness_secs'], 0)
             # Explicit prebuilt mode identifies a distinct installable bundle;

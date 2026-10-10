@@ -44,18 +44,19 @@ def build(output, skip_build=False, parallel_compilation=False):
         for path in sorted((ROOT / directory).rglob("*")):
             if path.is_file() and "__pycache__" not in path.parts and not any(part.startswith(".") for part in path.relative_to(ROOT).parts):
                 source[str(path.relative_to(ROOT))] = digest(path.read_bytes())
-    for name in ("Cargo.toml", "Cargo.lock", "web/package.json", "web/package-lock.json", "web/vite.config.ts", "web/tsconfig.json", "web/index.html", "README.md", "rust-toolchain.toml", "CONTRIBUTING.md", "SECURITY.md", "CHANGELOG.md"):
+    for name in ("Cargo.toml", "Cargo.lock", "web/package.json", "web/package-lock.json", "web/vite.config.ts", "web/tsconfig.json", "web/index.html", "README.md", "rust-toolchain.toml", "CONTRIBUTING.md", "SECURITY.md", "CHANGELOG.md", "SUPPORT.md", "CODE_OF_CONDUCT.md", "CODEOWNERS", "pull_request_template.md"):
         source[name] = digest((ROOT / name).read_bytes())
     files = {"bin/rustwalld-dns": binary.read_bytes(),
              "systemd/rustwalld-dns.service": (ROOT / "packaging/rustwalld-dns.service").read_bytes(),
              "config/config.toml": (ROOT / "packaging/config.toml").read_bytes()}
-    for name in ("README.md", "CONTRIBUTING.md", "SECURITY.md", "CHANGELOG.md", "LICENSE-MIT", "LICENSE-APACHE", "LICENSE-WEBPKI-ROOTS"):
+    for name in ("README.md", "CONTRIBUTING.md", "SECURITY.md", "CHANGELOG.md", "SUPPORT.md", "CODE_OF_CONDUCT.md", "CODEOWNERS", "pull_request_template.md", "LICENSE-MIT", "LICENSE-APACHE", "LICENSE-WEBPKI-ROOTS"):
         files[name] = (ROOT / name).read_bytes()
     for name in ("operations.md", "encrypted-upstreams.md", "tls-baseline.md", "doh-design.md", "doh-baseline.md", "encrypted-resilience.md", "encrypted-resilience-baseline.md", "upstream-diagnostics.md", "upstream-diagnostics-baseline.md", "upstream-backoff.md", "upstream-backoff-baseline.md", "console-design.md", "offline-policy-checks.md", "temporary-exceptions.md", "downloaded-lists.md", "client-metadata.md", "scheduled-refreshes.md", "conditional-retrieval.md", "control-plane-soak.md", "filter-memory.md", "query-allocations.md", "cache-forwarding.md", "borrowed-decisions.md", "cpu-query.md", "embedding.md", "releasing.md", "refactor-results.md", "rust-1.99-performance.md", "parallel-compilation.md", "engine-split.md", "cache-eviction.md", "filter-matching.md", "doh-latency.md", "dot-pipelining.md", "serve-stale.md", "property-tests.md", "runtime-modules.md", "release-rebuild.md"):
         files["docs/" + name] = (ROOT / "docs" / name).read_bytes()
     for crate in ("filtering", "resolver", "policy", "dns-core", "runtime"):
         files[f"crates/{crate}/README.md"] = (ROOT / "crates" / crate / "README.md").read_bytes()
     files["docs/comparison.md"] = (ROOT / "docs/comparison.md").read_bytes()
+    files["docs/public-alpha.md"] = (ROOT / "docs/public-alpha.md").read_bytes()
     files["install.py"] = (ROOT / "scripts/install.py").read_bytes()
     for path in sorted((ROOT / "web/dist").rglob("*")):
         if path.is_file():

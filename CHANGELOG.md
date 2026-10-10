@@ -1,6 +1,15 @@
 # Changelog
 
-## 0.1.0 — unreleased
+## Unreleased
+
+## 0.1.0-alpha.1 — 2026-10-10
+
+- Open the source as a public alpha under MIT OR Apache-2.0. Add maintainer-wide
+  code ownership, contributor review/local-verification guidance, a PR template,
+  conduct and support documents, private security reporting and explicit alpha
+  deployment limits. Update public embedding/release guidance and the README's
+  DoT pipelining description. Native deployment and the long network soak remain
+  pending; crates.io publication is separate.
 
 - Refresh native bundle documentation for pipelining, serve-stale and runtime
   snapshots, and make the disabled stale default explicit in the install template.

@@ -8,6 +8,9 @@ The v0.1 feature and redesign scope is complete. Stop adding features to this
 release. Exit gates are a reproducible common-behavior comparison, native
 deployment/upgrade/restore validation and a 24–72-hour representative-network
 soak. Fix failures found by those gates; later roadmap features stay separate.
+The source and experimental artifacts may be shared as the explicitly scoped
+[public alpha](public-alpha.md) while native deployment and soak gates remain
+pending for a stable appliance release.
 The network soak is elapsed observation, not a coding deadline or proof of
 universal reliability.
 

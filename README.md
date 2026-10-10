@@ -4,13 +4,21 @@ A local-first DNS policy and security engine written in Rust. Policies are compi
 into immutable generations; DNS workers use those snapshots while the management
 plane validates, tests, persists and promotes changes.
 
-This repository contains a usable **MVP with a local management console**. UDP/TCP
-forwarding, filtering, caching, client/subnet policies, the API and React console
+This repository contains a usable **public alpha with a local management console**.
+UDP/TCP forwarding, filtering, caching, client/subnet policies, the API and React console
 are implemented, including authenticated DNS-over-TLS and HTTP/2 DNS-over-HTTPS
 upstreams with bounded persistent connections. DoQ, HA, plugins and firewall
 integration remain later phases.
-This is an initial implementation with measured baselines, not a claim of mature
-production hardening.
+Native deployment validation, a longer representative-network soak and independent
+security review remain pending. See [alpha scope](docs/public-alpha.md).
+
+[Build and run](#run) · [Alpha downloads](https://github.com/Pettersen3008/rustwalld-dns/releases)
+· [Installation and recovery](docs/operations.md) · [Feedback](SUPPORT.md)
+
+The source is licensed under **MIT OR Apache-2.0**. Contributions are welcome and
+require review by [@Pettersen3008](https://github.com/Pettersen3008); see
+[CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities through the private
+channel in [SECURITY.md](SECURITY.md).
 
 An [encrypted-upstream failure rehearsal](docs/encrypted-resilience.md) exercises
 the real appliance with local TLS/HTTPS outages and concurrent durable promotions.
@@ -362,12 +370,12 @@ redirects, resolve bootstrap hostnames, use environment proxies, or fall back to
 HTTP/1/plaintext. HTTP headers and DNS bodies are bounded. HTTP `Age` reduces DNS
 TTLs, including negative-cache lifetimes; expired answers are not cached.
 
-DNS-over-TLS sends one outstanding exchange per connection. DNS-over-HTTPS
-multiplexes up to eight requests per HTTP/2 connection (fewer if the server
-advertises a lower stream limit) within the `max_connections` socket cap, so
-bursts of cache misses no longer queue behind each other; a request that times
-out marks its connection for replacement. Cancellation retires a driver/socket
-before its physical connection slot can be reused.
+DNS-over-TLS pipelines up to eight pending queries per pooled connection, with
+unique message IDs and out-of-order reply matching; see [DoT pipelining](docs/dot-pipelining.md).
+DNS-over-HTTPS multiplexes up to eight requests per HTTP/2 connection (fewer if
+the server advertises a lower stream limit). Both pools keep the
+`max_connections` physical socket cap. Suspect connections are retired, and a
+physical connection slot is reused only after its driver/socket closes.
 Validation and shadow staging do not probe upstream availability. See the
 [HTTPS design](docs/doh-design.md) and [local benchmark evidence](docs/doh-baseline.md).
 

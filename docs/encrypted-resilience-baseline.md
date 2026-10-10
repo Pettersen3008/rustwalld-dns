@@ -1,5 +1,10 @@
 # Encrypted-upstream resilience baseline
 
+2026-10-10: the latest 22 ms HTTPS / 11 ms TLS gap is the fixture's one-stream
+HTTP/2 setting. The same daemon measures 11.1 ms for both with
+`--https-streams 100`; see [the controlled diagnosis](doh-latency.md). The older
+table below remains historical evidence. New evidence lives under `target/review/`.
+
 Automation note (2026-10-06): GitHub Actions and `.github/` were removed at
 the maintainer's request. References to CI below describe historical verification;
 run the documented commands locally and retain artifacts under `target/`.

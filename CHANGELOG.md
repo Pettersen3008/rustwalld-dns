@@ -2,6 +2,11 @@
 
 ## 0.1.0 — unreleased
 
+- Explain the encrypted rehearsal's DoH latency gap: its one-stream fixture
+  serialized two clients. With only the fixture limit changed to 100, HTTPS
+  fresh p99 falls from 22.1 to 11.1 ms with the same daemon; TLS stays at 11.1 ms.
+  Add `--https-streams` and an overlap/lifecycle test ([evidence](docs/doh-latency.md)).
+
 - DNS-over-HTTPS multiplexes up to eight requests per HTTP/2 connection within
   the existing socket cap: 32 concurrent misses against a 10 ms server complete
   in 22 ms instead of 178 ms (~8x throughput, [evidence](docs/doh-design.md)).

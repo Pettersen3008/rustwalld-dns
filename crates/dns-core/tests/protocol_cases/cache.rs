@@ -222,7 +222,9 @@ async fn raw_client_requests_keep_flag_type_and_upstream_identity_cache_partitio
     let (telemetry, mut events) = Telemetry::channel(32);
     let engine = Engine::new(
         PolicySnapshot::compile(config.clone(), 1).unwrap(),
-        32,
+        // Ten distinct keys must coexist even if they all select one shard.
+        // This tests partition identity, so eviction must not affect the result.
+        320,
         32,
         4,
         telemetry,

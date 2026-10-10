@@ -44,6 +44,9 @@ struct Args {
     clients: usize,
     #[arg(long)]
     output: Option<PathBuf>,
+    /// HTTP/2 stream limit advertised by the local HTTPS fixtures.
+    #[arg(long, default_value_t = 1)]
+    https_streams: u32,
     /// Sample only the real daemon during each malformed-outage phase.
     #[arg(long)]
     profile_outage_dir: Option<PathBuf>,
@@ -56,9 +59,9 @@ enum Endpoint {
     Https(https::Mock),
 }
 impl Endpoint {
-    async fn start(https: bool) -> Self {
+    async fn start(https: bool, streams: u32) -> Self {
         if https {
-            Self::Https(https::Mock::start(0).await)
+            Self::Https(https::Mock::with_streams(0, streams).await)
         } else {
             Self::Tls(tls::Mock::start(0).await)
         }
@@ -479,7 +482,7 @@ async fn promote(client: &reqwest::Client, base: &str, policy: &PolicyConfigSet)
 async fn run(args: &Args, https: bool) -> Value {
     let mut endpoints = Vec::new();
     for _ in 0..4 {
-        endpoints.push(Endpoint::start(https).await);
+        endpoints.push(Endpoint::start(https, args.https_streams).await);
     }
     let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
     let mut config = Config {
@@ -944,6 +947,7 @@ async fn main() {
     let args = Args::parse();
     assert!((100..=30000).contains(&args.duration_ms));
     assert!((1..=8).contains(&args.clients));
+    assert!((1..=100).contains(&args.https_streams));
     assert!(
         std::path::Path::new("/proc/self/fd").is_dir(),
         "Linux /proc is required"
@@ -969,7 +973,7 @@ async fn main() {
                 .to_owned()
         })
         .unwrap_or_default();
-    let report = json!({"hardware":std::fs::read_to_string("/proc/cpuinfo").unwrap().lines().find(|l|l.starts_with("model name")).unwrap_or("unknown"),"os":output("uname","-srmo"),"rustc":output("rustc","--version"),"binary":args.binary,"binary_sha256":hash,"duration_ms_per_phase":args.duration_ms,"clients_per_lane":args.clients,"upstream_timeout_ms":80,"connections_per_address":2,"histogram":"exact us through 1 ms; 100 us upper-bound buckets thereafter; 1 s cap","tls":tls,"https":https});
+    let report = json!({"hardware":std::fs::read_to_string("/proc/cpuinfo").unwrap().lines().find(|l|l.starts_with("model name")).unwrap_or("unknown"),"os":output("uname","-srmo"),"rustc":output("rustc","--version"),"binary":args.binary,"binary_sha256":hash,"duration_ms_per_phase":args.duration_ms,"clients_per_lane":args.clients,"https_streams_per_connection":args.https_streams,"upstream_timeout_ms":80,"connections_per_address":2,"histogram":"exact us through 1 ms; 100 us upper-bound buckets thereafter; 1 s cap","tls":tls,"https":https});
     let text = serde_json::to_string_pretty(&report).unwrap() + "\n";
     if let Some(path) = &args.output {
         std::fs::write(path, &text).unwrap();

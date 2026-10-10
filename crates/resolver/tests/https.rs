@@ -464,3 +464,26 @@ async fn refused_streams_are_retried_once() {
     assert_eq!(f.health()[0].successes.load(Ordering::SeqCst), 1);
     failure(&f.health()[0], FailureKind::HttpProtocol, 0);
 }
+
+#[tokio::test]
+async fn fixture_stream_limit_controls_overlap_on_a_warm_connection() {
+    for (streams, expected_peak) in [(1, 1), (100, 2)] {
+        let mock = Mock::with_streams(17, streams).await;
+        let forwarder = Arc::new(forward(&mock));
+        forwarder.resolve(&query()).await.unwrap();
+        let tasks: Vec<_> = (0..2)
+            .map(|_| {
+                let forwarder = forwarder.clone();
+                tokio::spawn(async move { forwarder.resolve(&query()).await })
+            })
+            .collect();
+        for task in tasks {
+            task.await.unwrap().unwrap();
+        }
+        assert_eq!(mock.accepted.load(Ordering::SeqCst), 1);
+        assert_eq!(mock.peak.load(Ordering::SeqCst), expected_peak);
+        assert_eq!(mock.queries.load(Ordering::SeqCst), 3);
+        drop(forwarder);
+        mock.wait_closed().await;
+    }
+}

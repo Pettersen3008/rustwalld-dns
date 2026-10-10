@@ -97,3 +97,7 @@ Single-query `doh_loopback` warm and cold timings did not regress (−2% and −
 New tests prove that requests overlap on at most two connections and that a
 refused stream is retried; both fail on the previous implementation. Raw output
 is kept in `target/review/doh-mux/`.
+
+The encrypted-resilience fixture historically advertises just one HTTP/2 stream.
+Its 22 ms versus 11 ms DoT p99 disappears at `--https-streams 100` with the same
+daemon binary; see [the measured diagnosis](doh-latency.md).

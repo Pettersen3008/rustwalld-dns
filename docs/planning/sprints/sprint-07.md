@@ -1,7 +1,7 @@
 # Sprint 07 Qualify the representative soak lab
 
-Status: Collector and disposable Docker lab delivered; representative acceptance
-remains open. Goal: qualify a named independent lab against the
+Status: Closed with representative acceptance unmet and carried to the backlog.
+Collector and disposable Docker lab delivered. Goal: qualify a named independent lab against the
 [protocol](../../engineering/soak.md), using the bounded
 [driver](../../operations/soak-runner.md). Personal context; repository planning,
 no Jira. The [backlog](../backlog.md) owns story status/acceptance.
@@ -52,3 +52,6 @@ No workstation takeover, inferred router/DNS/DHCP/firewall changes, public relea
 or independent-reviewer contact. DNS-024 needs an identified independent reviewer.
 The old native acceptance guest and unrelated router VMs were never activated or
 changed by this slice.
+
+The two-hour M2 continuation moves executable coverage work to [Sprint 08](sprint-08.md).
+DNS-021 remains open; closing this delivery iteration does not accept its goal.

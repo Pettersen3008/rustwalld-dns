@@ -23,7 +23,7 @@ Use actual artifact/kernel/runtime/image identities in the manifest; the exercis
 does not assume a guest's existing installation or public image tag is current.
 Do not use the general Compose file's automatic restart or physical-LAN mappings
 unchanged for this disposable experiment. Keep keys, guest images, manifests and
-all raw output under ignored target/review/sprint-07/lab/.
+all raw output under ignored target/review/sprint-07/lab/ or sprint-08/lab/.
 
 The release image contains no Python collector. Keep that image unchanged:
 collection runs from the appliance VM's Python environment, entering **only the
@@ -34,11 +34,11 @@ require the actual application PID/start ticks and exclusive listener. This lets
 the collector verify the target-owned loopback API without adding Python
 or tools to the application image. PID/network rebinding after restart is explicit.
 
-Initial collector coverage is numeric loopback **HTTP**, so the synthetic fixture
-uses token mode with HTTP confined to guest loopback and inaccessible from the
-client lab interface.
-Production HTTPS/password/encrypted-ingress coverage remains separate and cannot
-be claimed from that fixture. No secret belongs in command arguments or run.json.
+Sprint 07 used token mode with numeric-loopback HTTP. Sprint 08 separately
+verified the HTTPS collector against a password-mode appliance, with explicit CA/
+SAN identity and wrong-name/PID/environment failure checks. The API remains confined
+to guest loopback. Client encrypted DNS ingress remains a separate acceptance gate.
+No secret belongs in command arguments or run.json.
 
 ## Bounded exercise and result
 
@@ -46,8 +46,8 @@ The **synthetic** offered load is 20 QPS steady, then 100 QPS burst, 80% UDP/
 20% TCP, with maximum 32 outstanding attempts. Use the fixed private `.test`
 corpus exported by `wire_compare references`: block,
 allow, local, A/AAAA, CNAME, fresh, NXDOMAIN/NODATA and upstream UDP truncation
-with TCP recovery. This small truncated reply does not cover large downstream
-answers. `wire_compare serve --listen 172.30.77.20:1053` keeps count control on
+with TCP recovery. That original small reply covers upstream fallback; the separate
+`large.bench.test` reference and `wire_compare probe-large` cover downstream replies. `wire_compare serve --listen 172.30.77.20:1053` keeps count control on
 client loopback; listener parsing rejects public/wildcard/IPv6/zero ports. Freeze
 numeric deadlines, latency, RSS/FD/thread/storage/cache/inflight/output budgets
 after a bounded pilot, before qualification. Configuration defaults are not measured
@@ -87,6 +87,21 @@ restore work. After-drain request counters exactly match each run's sent attempt
 The application and owned services stopped, restart remained disabled, and guest PIDs/
 loopback listeners are absent. Separate agent review checked code and evidence.
 
+Sprint 08 rebuilt the release image after the large-reply probe found uncommitted
+bytes after a truncated message. The repaired appliance returns a complete
+498-byte UDP response with TC and 29 answers, and all 64 records in 1058-byte TCP.
+A separate five-second 20-QPS run passed 100 logical probes (UDP80/TCP20), with
+180 actual requests because all 80 UDP probes fell back to TCP. This run covers
+two large-response lanes, not the earlier complete 20-lane corpus.
+
+A bounded frame proxy observed a complete request and the actual appliance reply
+before withholding it and interrupting the driver. Live SIGINT retained one
+cancellation, no reply, reconciled accounting and peer EOF; target collection after
+drain retained its PID. This intentionally failed driver run is cancellation
+evidence. Source/plan/deployed-artifact and image identities were checked. Both
+new guests and owned services stopped, restart remained disabled and listeners
+were absent. Original failing packet/image and unsuccessful attempts are retained.
+
 ## Remaining acceptance
 
 This topology can qualify lab mechanics and container recovery. It does not prove
@@ -101,4 +116,8 @@ workload. Reuse the collector, fixed budgets as a starting measurement hypothesi
 private fixtures, explicit phase/fault schedule and outside-volume recorder/backup.
 Freeze the actual start/end and stop owner with separate long-window authority;
 recheck limits on the representative target before using these synthetic budgets.
-No 24-hour run or persistent scheduler has started.
+The selected reference profile for later qualification is a Docker Linux VM and
+an independent client on an isolated routed test network, starting with synthetic
+20/100-QPS UDP80/TCP20. The exercised link above is private Ethernet, not that
+routed path; actual household rates/device counts remain unmeasured. No 24-hour
+run or persistent scheduler has started.

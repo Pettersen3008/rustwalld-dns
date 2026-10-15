@@ -327,7 +327,7 @@ No representative/remote-collector/long-window acceptance is claimed.
 ### DNS-021 Qualify representative soak lab — E4 — M
 
 Status: Backlog. Priority: 7. Dependencies: DNS-020, DNS-025, DNS-026 and named representative lab.
-Sprint: 07 proposed; not Ready without target/workload/budget/authority prerequisites.
+Sprint: carried from 07; not Ready without target/workload/budget/authority prerequisites.
 The [two-VM exercise](../operations/soak-lab.md) passed synthetic mechanics under
 DNS-026 and is stopped; it does not establish the operator's representative
 routed/storage workload.
@@ -404,6 +404,106 @@ fail as intended; SIGINT had no outstanding exchanges. All owned guests/services
 stopped, restart disabled and listeners absent. Required local checks pass.
 Physical representative paths/workloads and DNS-021 remain open.
 
+
+
+### DNS-027 Collect verified HTTPS appliance observations — E4 — M
+
+Status: Done. Priority: 7. Dependencies: DNS-025. Sprint: 08.
+Outcome: collect actual production-style TLS API observations without weakening
+PID/namespace/socket identity or introducing environment writes/trust fallback.
+Acceptance: explicit bounded CA/server identity, numeric-loopback-only connect,
+verified TLS>=1.2, strict framing/deadline/output limits, real success/failure TLS
+fixtures and actual appliance handoff; unchanged HTTP/schema/production DNS path.
+Spec: [HTTPS collector](../specs/DNS-027-https-collector.md); separate agent design review accepted.
+Tasks: current sprint. No representative/long-run/security-audit claim.
+Accepted: 25 focused TLS/collector regressions and actual password-mode TLS appliance
+collection; wrong identity/PID/environment failures, bounded parser mutations and
+separate source/runtime review. Required/security/compatibility gates pass.
+Shared review/evidence: [Sprint 08](../reviews/sprint-08.md), ignored target/review/sprint-08/.
+
+### DNS-028 Qualify large replies and live CLI cancellation — E4 — M
+
+Status: Done. Priority: 7. Dependencies: DNS-020, DNS-026. Sprint: 08.
+Outcome: distinguish actual downstream fallback and interrupted live exchanges
+from the earlier upstream-only truncation and idle SIGINT evidence.
+Acceptance: fixed bounded Hickory large RRset/reference, exact oracle, actual
+appliance UDP<=512+TC/fullTCP/driverfallback, OS SIGINT after observed outstanding
+request, positive cancellation accounting, peer EOF/target survival and cleanup.
+Spec: [protocol coverage](../specs/DNS-028-soak-protocol-coverage.md); separate agent design review accepted.
+No production query path/schema/dependency or large-scale performance change.
+Accepted: actual rebuilt VM image returns complete 498-byte UDP TC/29RR and
+1058-byte TCP/64RR. 100 logical probes reconcile with 180 wire requests; live OS
+SIGINT retains one cancellation, peer EOF and target survival. Both guests off.
+Shared review/evidence: [Sprint 08](../reviews/sprint-08.md), ignored target/review/sprint-08/.
+
+### DNS-029 Preserve CD in accepted soak request envelopes — E4 — S
+
+Status: Done. Priority: 6 (confirmed acceptance defect). Dependencies: DNS-020. Sprint: 08.
+Reproduced: CD=true response reference validates, but transmitted query CD=false;
+a correct echoing responder is reported wrong. No appliance defect is inferred.
+Acceptance: preserve reference CD for UDP/TCP/fallback; reject mixed-CD transition
+references before traffic; wrong CD still fails; uniform existing records unchanged.
+Spec: [CD envelope fix](../specs/DNS-029-soak-cd-envelope.md); separate agent design review accepted.
+Reproducer: ignored target/review/m2-adversarial/; tasks in current sprint.
+Accepted: before/after local UDP/TCP/fallback regressions preserve correct CD and
+reject wrong/mixed CD; separate review and all required/security gates pass.
+Shared review/evidence: [Sprint 08](../reviews/sprint-08.md), ignored target/review/sprint-08/.
+
+### DNS-030 Reject incomplete and unmatched raw soak DNS wire — E4 — S
+
+Status: Done. Priority: 6 (confirmed oracle defect). Dependencies: DNS-020. Sprint: 08.
+Reproduced: exact valid reply plus trailing bytes is reported correct; fixture hex
+also accepts the suffix. Hickory decodes only a prefix. Reserved header Z is also
+normalized away; enforce zero only in the strict tool profile, not production DNS.
+Acceptance: shared Hickory complete-consumption boundary for references and UDP/TCP
+replies and advertised UDP byte bounds; suffix/truncation/Z regressions, unchanged valid/compressed DNS, preserved
+failure evidence and required checks. No parser replacement or production change.
+Spec: [complete oracle wire](../specs/DNS-030-complete-soak-wire.md); separate agent design review accepted.
+Reproducers: ignored target/review/m2-adversarial/. Tasks in Sprint 08.
+Accepted: all original false-acceptance reproducers now fail; valid compressed
+wire and full TCP remain accepted. Seeded ASAN smoke and required gates pass.
+Shared review/evidence: [Sprint 08](../reviews/sprint-08.md), ignored target/review/sprint-08/.
+
+### DNS-031 Remove uncommitted bytes from truncated DNS replies — E4 — S
+
+Status: Done. Priority: 5 (confirmed production correctness defect).
+Dependencies: none. Sprint: 08. Discovered by DNS-028 actual appliance acceptance.
+Hickory truncation rolls back its cursor but retains partial Vec bytes; engine
+returns that suffix. Captured511-byte UDP/29RR TC reply fails complete decoding.
+Acceptance: return only committed encoder bytes; raw UDP/EDNS/TCP regression,
+actual repaired container fallback across VMs, preserved failing packet/image,
+required checks/security and matched hot-path measurement. No custom parser/API change.
+Spec: [truncated wire boundary](../specs/DNS-031-truncated-wire-boundary.md); separate agent design review accepted.
+Evidence: ignored target/review/sprint-08/lab/large-wire*; tasks in Sprint 08.
+Accepted: 18 raw A/AAAA transport cases and repaired actual VM fallback pass;
+matched warm measurements retain both favorable/unfavorable observations with
+unchanged fixture allocations. Seeded ASAN and full compatibility gates pass.
+Shared review/evidence: [Sprint 08](../reviews/sprint-08.md), ignored target/review/sprint-08/.
+
+### DNS-032 Reconcile saved driver evidence offline — E4 — M
+
+Status: In progress. Priority: 7. Dependencies: DNS-020. Sprint: 08.
+Split mechanical analysis from DNS-023, whose actual long-run acceptance remains
+blocked on DNS-022. Outcome: safely validate consistency of the four bounded native
+report files without opening recorded paths or exercising any network/service.
+Acceptance: native count/bin/quantile/window/client/resource reconciliation,
+explicit passing versus consistent failed runs, incomplete/tampered/special-file
+refusal; actual Sprint 07/08 fixtures and targeted malformed-input checks.
+Spec: [offline evidence verifier](../specs/DNS-032-offline-soak-verifier.md), separate agent design review accepted.
+No provenance, authority, representative-path, fault-matrix or long-run claim.
+
+### DNS-033 Review native driver input replacement races — E4 — S
+
+Status: Backlog. Priority: 7. Dependencies: DNS-020. Type: spike.
+Observed during DNS-032 exploration: soak_record::bounded_file checks path metadata
+before File::open, then follows the path again. A replacement between those calls
+may bypass the initial symlink/special-file refusal or block opening a FIFO; the
+post-open regular-file check happens after opening. No exploit or operational
+failure was demonstrated. Investigate descriptor-based no-follow/nonblocking
+opening and identity checks without weakening caps or adding a production parser.
+Acceptance: decide supported platform/dependency tradeoffs, bounded owned-file
+regressions and an implementable spec or evidence that existing constraints suffice.
+Do not treat the Python verifier's safer reader as fixing this separate native path.
 
 ## Deferred ideas
 

@@ -101,6 +101,9 @@ enum Behavior {
     Stall,
     Truncate,
     Malformed,
+    Trailing,
+    Reserved,
+    Oversized,
     Late,
     Switch,
 }
@@ -142,7 +145,23 @@ fn reply(bytes: &[u8], behavior: Behavior, tcp: bool, ordinal: u64) -> Vec<u8> {
         reply.metadata.truncation = true;
         reply.answers.clear();
     }
-    reply.to_vec().unwrap()
+    if matches!(behavior, Behavior::Oversized) {
+        for last in 2..=64 {
+            reply.add_answer(Record::from_rdata(
+                query.queries[0].name().clone(),
+                60,
+                RData::A(A::new(192, 0, 2, last)),
+            ));
+        }
+    }
+    let mut bytes = reply.to_vec().unwrap();
+    if matches!(behavior, Behavior::Trailing) {
+        bytes.extend_from_slice(b"unparsed suffix");
+    }
+    if matches!(behavior, Behavior::Reserved) {
+        bytes[3] |= 0x40;
+    }
+    bytes
 }
 async fn fixture(behavior: Behavior) -> Fixture {
     let tcp = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -494,9 +513,18 @@ async fn overload_is_explicit_and_cancellation_closes_owned_tcp_connections() {
         let _collector = collector(&r, f.requests.clone());
         let cancel = CancellationToken::new();
         let trigger = cancel.clone();
+        let observed = f.requests.clone();
+        let active = f.active.clone();
         let task = tokio::spawn(async move {
             if cancel_run {
-                sleep(Duration::from_millis(50)).await;
+                timeout(Duration::from_secs(1), async {
+                    while observed.load(Ordering::SeqCst) == 0 || active.load(Ordering::SeqCst) == 0
+                    {
+                        sleep(Duration::from_millis(1)).await;
+                    }
+                })
+                .await
+                .unwrap();
                 trigger.cancel();
             }
         });
@@ -636,3 +664,6 @@ fn recorder_enforces_clipping_window_aggregate_and_total_caps() {
     );
     assert!(dir.path().join("aggregate/summary.json").exists());
 }
+
+#[path = "soak_envelope_tests.rs"]
+mod envelope;

@@ -1,5 +1,5 @@
 //! One bounded exchange owns its sockets. No retry or connection survives a timeout.
-use super::soak_record::{Lane, Transport, invalid};
+use super::soak_record::{Lane, Transport, complete_message, invalid};
 use hickory_proto::{op::Message, rr::Record};
 use std::{
     io,
@@ -64,6 +64,7 @@ async fn exchange(
     peer: SocketAddr,
     transport: Transport,
     query: &[u8],
+    udp_limit: u16,
 ) -> io::Result<Message> {
     let mut buffer = vec![0; 65535];
     let n = match transport {
@@ -71,7 +72,11 @@ async fn exchange(
             let socket = UdpSocket::bind(SocketAddr::new(bind, 0)).await?;
             socket.connect(peer).await?;
             socket.send(query).await?;
-            socket.recv(&mut buffer).await?
+            let n = socket.recv(&mut buffer).await?;
+            if n > usize::from(udp_limit) {
+                return Err(invalid("reply exceeds advertised UDP payload"));
+            }
+            n
         }
         Transport::Tcp => {
             let socket = if peer.is_ipv4() {
@@ -92,7 +97,7 @@ async fn exchange(
             n
         }
     };
-    Message::from_vec(&buffer[..n]).map_err(|_| invalid("invalid DNS reply"))
+    complete_message(&buffer[..n])
 }
 pub async fn probe(
     bind: IpAddr,
@@ -129,6 +134,7 @@ pub async fn probe(
     let mut request = Message::query();
     request.metadata.id = ordinal as u16;
     request.metadata.recursion_desired = true;
+    request.metadata.checking_disabled = expected[0].metadata.checking_disabled;
     request.queries = expected[0].queries.clone();
     // Only the EDNS request envelope is derived from the explicitly frozen fixture.
     request.edns = expected[0].edns.clone();
@@ -136,7 +142,14 @@ pub async fn probe(
         return Outcome::Error;
     };
     let result = tokio::time::timeout(std::time::Duration::from_millis(deadline_ms), async {
-        let mut reply = exchange(bind, lane.endpoint, lane.transport, &bytes).await?;
+        let mut reply = exchange(
+            bind,
+            lane.endpoint,
+            lane.transport,
+            &bytes,
+            request.max_payload(),
+        )
+        .await?;
         if reply.metadata.truncation && lane.tcp_fallback {
             if !accepted
                 .iter()
@@ -144,7 +157,14 @@ pub async fn probe(
             {
                 return Ok::<_, io::Error>(false);
             }
-            reply = exchange(bind, lane.endpoint, Transport::Tcp, &bytes).await?;
+            reply = exchange(
+                bind,
+                lane.endpoint,
+                Transport::Tcp,
+                &bytes,
+                request.max_payload(),
+            )
+            .await?;
         }
         Ok(accepted
             .iter()

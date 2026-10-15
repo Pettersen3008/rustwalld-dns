@@ -3,7 +3,9 @@
 2026-10-15. Personal context; repository planning, no Jira. User requested commit/
 push and agent-assisted continuation. DNS-025 collector was reviewed, verified and
 pushed as `4a980b6`. DNS-026 now qualifies synthetic Docker lab mechanics. DNS-021
-representative acceptance and the sprint's full goal remain open.
+representative acceptance and the sprint's full goal remain unmet. This iteration
+is closed with that work carried forward; [Sprint 08](../planning/sprints/sprint-08.md)
+continues executable M2 coverage under the user's two-hour goal.
 
 ## Delivered
 

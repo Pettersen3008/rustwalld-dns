@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Return only committed Hickory bytes after response truncation, removing partial
+  record tails while preserving transport limits and complete fitting replies.
+- Verify target-local HTTPS collection with explicit bounded CA/SAN trust; reject
+  environment trust/key logging and retain PID/socket/framing/deadline checks.
+- Preserve CD in soak requests, require complete wire oracles and advertised UDP
+  bounds; add large downstream reply/fallback and live SIGINT acceptance across
+  isolated disposable VMs with verified teardown.
+
 - Extend the private DNS fixture with explicit private IPv4 binding and fixed
   Hickory reference exports; qualify collector/driver, failure handling and Docker
   backup/restore across two isolated disposable VMs with verified teardown.

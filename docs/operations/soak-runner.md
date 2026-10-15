@@ -41,7 +41,11 @@ include no credentials. Configuration text cannot establish operational authorit
 Input caps at 256 KiB; unknown/missing fields, public/unspecified endpoints, invalid
 templates or missing numeric budgets fail before traffic. Reference packets cap at
 4096 bytes each, four per lane, with the same single IN `.test` question, QR/query
-opcode/RD, no truncation/signature. Never learn the expected answer from the target.
+opcode/RD, no truncation/signature, complete wire consumption and zero reserved header Z
+(the tool’s strict profile). Lane transition templates must agree on CD; each fresh
+request preserves it. UDP replies must fit that request’s advertised limit (512
+without EDNS); TCP retains its separate framing limit. Never learn the expected
+answer from the target.
 Freeze flags/rcode/RRsets/EDNS independently; template EDNS is also the request
 envelope. Signed/non-IN/other-name/encrypted-ingress profiles need separate support.
 
@@ -66,12 +70,20 @@ python3 scripts/soak-collect.py --run-id qualification-demo --target-id applianc
 
 Replace PID/start ticks and all identity/scope values with the controller's actual
 target. The collector and target must share the network namespace; owned listening
-socket inodes must match the numeric loopback HTTP endpoint before and after the
+socket inodes must match the numeric loopback endpoint before and after the
 observation. It refuses another/reused PID, ambiguous ownership or changed generation.
-No redirects, proxies, credentials or HTTPS fallback. HTTP responses need exactly
-one explicit bounded Content-Length and no Transfer-Encoding; unsupported framing
-or incomplete data fails. HTTPS/password-mode targets need additional collector
-support before qualification. Changing/disappearing FDs fail conservatively.
+For HTTPS, add both `--tls-ca-file /absolute/ca.pem` and
+`--tls-server-name collector.test` (DNS or IP SAN). The CA is explicitly read through
+no-follow access, capped at 64 KiB. TLS requires a trusted chain and matching SAN,
+TLS 1.2 or newer and HTTP/1.1. The identity never resolves a hostname: the connection
+still goes directly to the numeric loopback address. Common-name fallback, system/
+environment trust, environment key logging, proxies, redirects, credentials and
+plaintext downgrade are unsupported. TLS options are rejected for HTTP.
+
+Both HTTP and HTTPS responses need exactly one explicit bounded Content-Length and
+no Transfer-Encoding; unsupported framing or incomplete data fails. Public status/
+metrics support collection in password mode without supplying credentials.
+Changing/disappearing FDs fail conservatively.
 
 The tool bounds ordinary proc input to 64 KiB, TCP tables to 1 MiB, HTTP bodies
 to 64 KiB, FD/storage entries to 4096, storage depth to eight and JSON to 16 KiB.
@@ -125,8 +137,10 @@ drain after offered time. Late/capacity-blocked slots fail with skipped counts; 
 queue/retry hides lower load. Fresh sockets and whole connect/write/read/fallback
 deadlines of at most two seconds bound late replies and connections/buffers.
 
-`sent` counts dispatched exchange attempts, including connect/write failures, not
-verified wire delivery. Final `sent = replies + timeouts + errors + cancelled` and
+`sent` counts dispatched logical probes, including connect/write failures; it does
+not prove wire delivery. A UDP probe with TCP fallback remains one logical probe
+but sends two DNS requests. Reconcile observed wire counters against the actual
+transport/fallback path; do not assume they equal `sent`. Final `sent = replies + timeouts + errors + cancelled` and
 `offered = sent + skipped`; stopped future slots are `unoffered`. Windows include
 inflight start/end to reconcile outcomes across boundaries. Quantiles merge bin
 counts and exclude timeouts. Wrong/clipped/over-budget replies, unexpected loss,

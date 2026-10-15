@@ -49,6 +49,12 @@ enum Command {
         listen: SocketAddrV4,
     },
     References,
+    ProbeLarge {
+        #[arg(long, value_parser = wire_fixture::listen_address)]
+        endpoint: SocketAddrV4,
+        #[arg(long, value_parser = wire_fixture::bind_address)]
+        bind: std::net::Ipv4Addr,
+    },
     Check {
         #[arg(long, default_value_t = 100000)]
         rules: u32,
@@ -130,6 +136,9 @@ fn mock_answer(request: &Message, tcp: bool, corrupt: bool) -> Result<Message> {
         .first()
         .ok_or_else(|| invalid("fixture requires one question"))?;
     let name = q.name().to_ascii().to_ascii_lowercase();
+    if name == "large.bench.test." {
+        return wire_fixture::large_answer(request, tcp, corrupt);
+    }
     let code = if name.starts_with("nx-") {
         ResponseCode::NXDomain
     } else {
@@ -213,6 +222,9 @@ fn validate(request: &Message, response: &Message) -> Result<()> {
     validate_header(request, response, false)?;
     let q = &request.queries[0];
     let name = q.name().to_ascii().to_ascii_lowercase();
+    if name == "large.bench.test." {
+        return wire_fixture::validate_large(request, response);
+    }
     if blocked(&name) {
         if !response.answers.is_empty() {
             return Err(invalid("blocked answer has data").into());
@@ -687,6 +699,10 @@ async fn main() -> Result<()> {
         } => serve(inject_wrong_answer, listen).await,
         Command::References => {
             println!("{}", serde_json::to_string(&wire_fixture::references()?)?);
+            Ok(())
+        }
+        Command::ProbeLarge { endpoint, bind } => {
+            println!("{}", wire_fixture::probe_large(endpoint, bind).await?);
             Ok(())
         }
         Command::Check { rules } if (1..=1_000_000).contains(&rules) => check(rules).await,

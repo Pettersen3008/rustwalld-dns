@@ -65,9 +65,14 @@ pub(super) fn encode(
         Transport::Udp => request.max_payload().clamp(512, 1232),
     };
     let mut output = Vec::with_capacity(512);
-    let mut encoder = BinEncoder::new(&mut output);
-    encoder.set_max_size(max);
-    response.emit(&mut encoder).ok()?;
+    let committed = {
+        let mut encoder = BinEncoder::new(&mut output);
+        encoder.set_max_size(max);
+        response.emit(&mut encoder).ok()?;
+        encoder.offset()
+    };
+    // Hickory rolls back an incomplete record's cursor, retaining its Vec bytes.
+    output.truncate(committed);
     Some(output)
 }
 
@@ -84,6 +89,91 @@ pub(super) fn canonical_ascii(name: &Name) -> String {
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+    use hickory_proto::{
+        rr::{
+            RData, Record,
+            rdata::{A, AAAA},
+        },
+        serialize::binary::{BinDecodable, BinDecoder},
+    };
+    use std::net::{Ipv4Addr, Ipv6Addr};
+
+    #[test]
+    fn encoded_transport_limits_end_at_complete_record_boundaries() {
+        for count in [1, 64, 128] {
+            for ipv6 in [false, true] {
+                for (transport, payload) in [
+                    (Transport::Udp, None),
+                    (Transport::Udp, Some(1232)),
+                    (Transport::Tcp, None),
+                ] {
+                    let mut request = Message::query();
+                    request.metadata.id = 0x3131;
+                    request.metadata.recursion_desired = true;
+                    let name = Name::from_ascii("large-wire.test.").unwrap();
+                    request.add_query(Query::query(
+                        name.clone(),
+                        if ipv6 {
+                            RecordType::AAAA
+                        } else {
+                            RecordType::A
+                        },
+                    ));
+                    if let Some(payload) = payload {
+                        let mut edns = Edns::new();
+                        edns.set_max_payload(payload);
+                        request.edns = Some(edns);
+                    }
+                    let mut response = crate::reply(&request, ResponseCode::NoError);
+                    for index in 0..count {
+                        let data = if ipv6 {
+                            RData::AAAA(AAAA(Ipv6Addr::new(
+                                0x2001,
+                                0xdb8,
+                                0,
+                                0,
+                                0,
+                                0,
+                                0,
+                                u16::from(index),
+                            )))
+                        } else {
+                            RData::A(A(Ipv4Addr::new(192, 0, 2, index)))
+                        };
+                        response.add_answer(Record::from_rdata(name.clone(), 300, data));
+                    }
+                    finalize(&request, &mut response);
+                    let limit = match transport {
+                        Transport::Tcp => usize::from(u16::MAX),
+                        Transport::Udp => usize::from(payload.unwrap_or(512)),
+                    };
+                    let complete = response.to_vec().unwrap();
+                    let bytes = encode(&request, &response, transport).unwrap();
+                    assert!(bytes.len() <= limit);
+                    let mut decoder = BinDecoder::new(&bytes);
+                    let decoded = Message::read(&mut decoder).unwrap();
+                    assert!(
+                        decoder.is_empty(),
+                        "unparsed suffix: {} bytes, count={count}, ipv6={ipv6}, payload={payload:?}",
+                        decoder.len()
+                    );
+                    assert_eq!(decoded.metadata.id, request.metadata.id);
+                    assert_eq!(decoded.queries, request.queries);
+                    assert_eq!(decoded.metadata.response_code, ResponseCode::NoError);
+                    assert_eq!(decoded.metadata.truncation, complete.len() > limit);
+                    let written = usize::from(u16::from_be_bytes([bytes[6], bytes[7]]));
+                    assert_eq!(written, decoded.answers.len());
+                    assert_eq!(decoded.answers, response.answers[..written]);
+                    if complete.len() <= limit {
+                        assert_eq!(decoded.answers.len(), usize::from(count));
+                        assert_eq!(bytes, complete);
+                    } else {
+                        assert!(written > 0 && written < usize::from(count));
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn canonical_ascii_preserves_hickory_escaping_and_case_semantics() {

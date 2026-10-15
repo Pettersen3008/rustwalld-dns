@@ -59,7 +59,7 @@ secure_ingress tests independently verify trust, hostname and plaintext rejectio
 Run `cargo audit` and `cargo deny check` in the root and fuzz workspace; Bun audit
 for dependency/UI changes. Use relevant seeded sanitizer fuzz targets separately
 from load/benchmark work. Install cargo-fuzz/nightly if missing; record any gap.
-The Linux collector has focused Python proc/HTTP/storage/deadline regressions in
+The Linux collector has focused Python proc/HTTP/TLS/storage/deadline regressions in
 scripts/tests/test_soak_collect.py. Bound seeded parser mutations separately and
 record their method; Python byte mutations do not establish sanitizer or
 coverage-guided fuzzing results. Actual complete sample-to-driver handoff remains
@@ -93,7 +93,7 @@ policy checks, cache/stale, service records, SafeSearch/catalogs, schedules,
 credentials, identity and inventory. Seed the affected target from fuzz/seeds/
 and keep discriminator bytes intact.
 `soak_record` covers the strict example run record, frozen Hickory templates and
-collector envelopes without filesystem/network operations; seed from its two JSON
+collector envelopes without filesystem/network operations; seed from its JSON and raw DNS
 fixtures, with `-max_len=262144` and the same bounded sanitizer command above.
 A short run is supplementary evidence, not a
 security audit or proof of parser safety. Preserve crashing inputs locally.

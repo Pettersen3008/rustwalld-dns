@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import ssl
 import stat
 import sys
 import time
@@ -187,18 +188,75 @@ def endpoint(url):
     require(len(url) <= 256 and all(33 <= ord(char) <= 126 for char in url),
             "invalid API URL")
     parsed = urlsplit(url)
-    require(parsed.scheme == "http" and not parsed.username and not parsed.password
+    require(parsed.scheme in ("http", "https") and not parsed.username and not parsed.password
             and not parsed.path and not parsed.query and not parsed.fragment
             and "@" not in parsed.netloc and "%" not in parsed.netloc,
-            "API URL must be plain loopback HTTP without extra components")
+            "API URL must be loopback HTTP or HTTPS without extra components")
     address = ipaddress.ip_address(parsed.hostname or "")
     require(address.is_loopback and parsed.port is not None and parsed.port > 0,
             "API URL must identify a numeric loopback port")
     return address, parsed.port
 
 
-def fetch(address, port, path, deadline):
-    connection = http.client.HTTPConnection(str(address), port, timeout=deadline.remaining())
+def tls_identity(text):
+    require(isinstance(text, str) and 1 <= len(text) <= 253 and text.isascii()
+            and "%" not in text,
+            "invalid TLS identity")
+    try:
+        return str(ipaddress.ip_address(text))
+    except ValueError:
+        require(not re.fullmatch(r"[0-9.]+", text), "invalid numeric TLS identity")
+        require(all(re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label)
+                    for label in text.split(".")), "invalid DNS TLS identity")
+        return text
+
+
+def tls_settings(args):
+    ca_file = getattr(args, "tls_ca_file", None)
+    identity = getattr(args, "tls_server_name", None)
+    if urlsplit(args.api_url).scheme == "http":
+        require(ca_file is None and identity is None, "TLS options require HTTPS")
+        return None
+    require(ca_file is not None and identity is not None, "HTTPS requires explicit CA and identity")
+    identity = tls_identity(identity)
+    require(ca_file.is_absolute() and len(str(ca_file)) <= 4096 and ".." not in ca_file.parts,
+            "CA file must be an absolute bounded path")
+    directory = open_directory(ca_file.parent)
+    try:
+        pem = read_regular(ca_file.name, 65536, directory)
+    finally:
+        os.close(directory)
+    require(pem and pem.isascii(), "invalid CA PEM")
+    # Explicit construction ignores SSLKEYLOGFILE and environment/system trust.
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.verify_mode = ssl.CERT_REQUIRED
+    context.check_hostname = True
+    context.hostname_checks_common_name = False
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.load_verify_locations(cadata=pem)
+    context.set_alpn_protocols(["http/1.1"])
+    return context, identity
+
+
+class VerifiedTLSConnection(http.client.HTTPConnection):
+    def __init__(self, address, port, deadline, settings):
+        super().__init__(str(address), port, timeout=deadline.remaining())
+        self.deadline = deadline
+        self.context, self.identity = settings
+
+    def connect(self):
+        try:
+            super().connect()  # self.host remains the numeric loopback address.
+            self.sock.settimeout(self.deadline.remaining())
+            self.sock = self.context.wrap_socket(self.sock, server_hostname=self.identity)
+        except BaseException:
+            self.close()
+            raise
+
+
+def fetch(address, port, path, deadline, tls=None):
+    connection = (VerifiedTLSConnection(address, port, deadline, tls) if tls is not None
+                  else http.client.HTTPConnection(str(address), port, timeout=deadline.remaining()))
     try:
         connection.request("GET", path, headers={"Connection": "close", "Accept-Encoding": "identity"})
         response = connection.getresponse()
@@ -305,6 +363,7 @@ def storage_bytes(path):
 def collect(args, deadline):
     timestamp = u64(time.time_ns() // 1000000)
     address, port = endpoint(args.api_url)
+    tls = tls_settings(args)
     directory = os.open(f"/proc/{args.pid}", DIRECTORY_FLAGS)
     try:
         def verify_process():
@@ -317,10 +376,10 @@ def collect(args, deadline):
         fd_count, sockets = owned_fds(directory)
         ownership = verify_listener(directory, sockets, address, port)
         rss, threads = process_resources(read_regular("status", PROC_BYTES, directory))
-        generation, cache, inflight = status_values(fetch(address, port, "/api/v1/status", deadline))
-        counters = metric_values(fetch(address, port, "/metrics", deadline))
+        generation, cache, inflight = status_values(fetch(address, port, "/api/v1/status", deadline, tls))
+        counters = metric_values(fetch(address, port, "/metrics", deadline, tls))
         storage = storage_bytes(args.storage_directory)
-        require(status_values(fetch(address, port, "/api/v1/status", deadline))[0] == generation,
+        require(status_values(fetch(address, port, "/api/v1/status", deadline, tls))[0] == generation,
                 "generation changed during collection")
         verify_process()
         _, sockets = owned_fds(directory)
@@ -342,6 +401,8 @@ def arguments(argv):
     for name in ("pid", "start-ticks", "sequence"):
         parser.add_argument(f"--{name}", type=decimal, required=True)
     parser.add_argument("--storage-directory", type=Path, required=True)
+    parser.add_argument("--tls-ca-file", type=Path, help="explicit HTTPS CA PEM, read without symlinks")
+    parser.add_argument("--tls-server-name", help="HTTPS certificate DNS or IP identity; never resolved")
     parser.add_argument("--deadline-ms", type=int, default=750)
     args = parser.parse_args(argv)
     for value in (args.run_id, args.target_id):

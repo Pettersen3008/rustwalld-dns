@@ -15,6 +15,7 @@ import threading
 import time
 import unittest
 from unittest import mock
+from soak_tls_fixture import Certificates
 
 SCRIPT = Path(__file__).resolve().parents[1] / "soak-collect.py"
 spec = importlib.util.spec_from_file_location("soak_collect", SCRIPT)
@@ -39,12 +40,14 @@ def tcp_table(*rows):
 
 
 @contextlib.contextmanager
-def api_fixture(family=socket.AF_INET, behavior=None):
-    state = {"status": STATUS, "metrics": METRICS, "requests": [], "behavior": behavior}
+def api_fixture(family=socket.AF_INET, behavior=None, tls=None):
+    state = {"status": STATUS, "metrics": METRICS, "requests": [], "behavior": behavior, "alpn": []}
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             state["requests"].append(self.path)
+            if tls is not None:
+                state["alpn"].append(self.connection.selected_alpn_protocol())
             if state["behavior"]:
                 code, body = state["behavior"](self.path)
             else:
@@ -53,7 +56,8 @@ def api_fixture(family=socket.AF_INET, behavior=None):
             if isinstance(body, str):
                 body = body.encode()
             self.send_response(code)
-            self.send_header("Content-Length", str(len(body)))
+            for name, value in state.get("headers", [("Content-Length", str(len(body)))]):
+                self.send_header(name, value)
             self.end_headers()
             with contextlib.suppress(BrokenPipeError, ConnectionResetError):
                 self.wfile.write(body)
@@ -67,11 +71,14 @@ def api_fixture(family=socket.AF_INET, behavior=None):
 
     host = "127.0.0.1" if family == socket.AF_INET else "::1"
     server = Server((host, 0), Handler)
+    if tls is not None:
+        server.socket = tls.wrap_socket(server.socket, server_side=True)
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": .01}, daemon=True)
     thread.start()
     try:
         port = server.server_address[1]
-        state["url"] = f"http://{host}:{port}" if family == socket.AF_INET else f"http://[{host}]:{port}"
+        scheme = "https" if tls is not None else "http"
+        state["url"] = f"{scheme}://{host}:{port}" if family == socket.AF_INET else f"{scheme}://[{host}]:{port}"
         yield state
     finally:
         server.shutdown()
@@ -129,7 +136,8 @@ class Parsers(unittest.TestCase):
         self.assertEqual(collector.endpoint("http://127.0.0.1:80"),
                          (ipaddress.ip_address("127.0.0.1"), 80))
         self.assertEqual(collector.endpoint("http://[::1]:1234")[1], 1234)
-        for url in ("https://127.0.0.1:80", "http://localhost:80", "http://8.8.8.8:80",
+        self.assertEqual(collector.endpoint("https://127.0.0.1:8443")[1], 8443)
+        for url in ("ftp://127.0.0.1:80", "http://localhost:80", "http://8.8.8.8:80",
                     "http://127.0.0.1", "http://127.0.0.1:0", "http://127.0.0.1:65536",
                     "http://127.0.0.1:80/", "http://127.0.0.1:80?a=b",
                     "http://127.0.0.1:80#fragment", "http://u:p@127.0.0.1:80",
@@ -398,6 +406,127 @@ class Cli(unittest.TestCase):
         self.assertEqual(errors.getvalue(),
                          "soak collection failed; no complete successful observation\n")
         self.assertNotIn("untrusted-marker", errors.getvalue())
+
+
+class Https(unittest.TestCase):
+    command = Cli.command
+    invoke = Cli.invoke
+    assert_failure = Cli.assert_failure
+
+    @classmethod
+    def setUpClass(cls):
+        cls.temporary = tempfile.TemporaryDirectory()
+        cls.certificates = Certificates(Path(cls.temporary.name) / "trusted")
+        cls.other = Certificates(Path(cls.temporary.name) / "other")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temporary.cleanup()
+
+    def options(self, identity="collector.test", ca=None):
+        return ["--tls-ca-file", str(ca or self.certificates.ca), "--tls-server-name", identity]
+
+    def test_trusted_dns_and_ip_san_use_explicit_identity_and_http11(self):
+        context = self.certificates.context()
+        names = []
+        context.set_servername_callback(lambda _socket, name, _context: names.append(name))
+        with tempfile.TemporaryDirectory() as temporary, api_fixture(tls=context) as api:
+            for identity in ("collector.test", "127.0.0.1", "::1"):
+                result = self.invoke(api, Path(temporary), *self.options(identity))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout)["generation"], 7)
+            self.assertEqual(api["alpn"], ["http/1.1"] * 9)
+            self.assertEqual(names, ["collector.test"] * 3 + [None] * 6)
+
+    def test_wrong_ca_name_and_cn_only_fail_before_http(self):
+        with tempfile.TemporaryDirectory() as temporary, api_fixture(tls=self.certificates.context()) as api:
+            self.assert_failure(self.invoke(api, Path(temporary), *self.options("wrong.test")))
+            self.assert_failure(self.invoke(api, Path(temporary), *self.options(ca=self.other.ca)))
+            self.assertEqual(api["requests"], [])
+        with tempfile.TemporaryDirectory() as temporary, api_fixture(
+                tls=self.certificates.context("cn-only")) as api:
+            self.assert_failure(self.invoke(api, Path(temporary), *self.options()))
+            self.assertEqual(api["requests"], [])
+
+    def test_missing_mixed_and_invalid_identity_options_fail(self):
+        with tempfile.TemporaryDirectory() as temporary, api_fixture(tls=self.certificates.context()) as api:
+            for options in ([], ["--tls-ca-file", str(self.certificates.ca)],
+                            ["--tls-server-name", "collector.test"]):
+                self.assert_failure(self.invoke(api, Path(temporary), *options))
+            self.assertEqual(api["requests"], [])
+        with tempfile.TemporaryDirectory() as temporary, api_fixture() as api:
+            for options in (self.options(), ["--tls-ca-file", str(self.certificates.ca)],
+                            ["--tls-server-name", "collector.test"]):
+                self.assert_failure(self.invoke(api, Path(temporary), *options))
+            self.assertEqual(api["requests"], [])
+        for identity in ("", "a.", "*.test", "a..test", "a/b", "a:80", "[::1]",
+                         "a_b.test", "-bad.test", "bad-.test", "café.test", "127.0.0.999",
+                         "a" * 64 + ".test", "a\ntest", "::1%lo"):
+            with self.subTest(identity=identity), self.assertRaises(collector.CollectionError):
+                collector.tls_identity(identity)
+
+    def test_ca_reads_are_bounded_regular_absolute_and_no_follow(self):
+        with tempfile.TemporaryDirectory() as temporary, api_fixture(tls=self.certificates.context()) as api:
+            root = Path(temporary)
+            for name, content in (("invalid", b"not PEM"), ("empty", b""),
+                                  ("oversized", b"x" * 65537), ("nonascii", b"\xff")):
+                (root / name).write_bytes(content)
+            (root / "leaf").symlink_to(self.certificates.ca)
+            (root / "parent").symlink_to(self.certificates.root, target_is_directory=True)
+            os.mkfifo(root / "fifo")
+            for ca in [root / name for name in ("invalid", "empty", "oversized", "nonascii", "leaf", "fifo")
+                       ] + [root / "parent" / "ca.pem", Path("relative.pem")]:
+                with self.subTest(ca=ca):
+                    self.assert_failure(self.invoke(api, root, *self.options(ca=ca)))
+            self.assertEqual(api["requests"], [])
+
+    def test_hostile_environment_never_changes_trust_proxy_or_creates_keylog(self):
+        with tempfile.TemporaryDirectory() as temporary, api_fixture(tls=self.certificates.context()) as api:
+            root = Path(temporary)
+            keylog = root / "keys.log"
+            environment = dict(os.environ, SSLKEYLOGFILE=str(keylog),
+                               SSL_CERT_FILE=str(self.other.ca), SSL_CERT_DIR=str(root),
+                               HTTPS_PROXY="http://127.0.0.1:1", ALL_PROXY="http://127.0.0.1:1",
+                               https_proxy="http://127.0.0.1:1", NO_PROXY="")
+            result = self.invoke(api, root, *self.options(), env=environment)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            environment["SSL_CERT_FILE"] = str(self.certificates.ca)
+            self.assert_failure(self.invoke(api, root, *self.options(ca=self.other.ca), env=environment))
+            self.assertFalse(keylog.exists())
+
+    def test_plaintext_and_stalled_handshake_never_downgrade(self):
+        with tempfile.TemporaryDirectory() as temporary, api_fixture() as api:
+            api["url"] = api["url"].replace("http:", "https:")
+            self.assert_failure(self.invoke(api, Path(temporary), *self.options()))
+            self.assertEqual(api["requests"], [])
+        with tempfile.TemporaryDirectory() as temporary, socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            listener.settimeout(2)
+
+            def stall():
+                with listener.accept()[0] as connection:
+                    connection.recv(4096)
+                    time.sleep(.3)
+
+            thread = threading.Thread(target=stall, daemon=True)
+            thread.start()
+            try:
+                api = {"url": f"https://127.0.0.1:{listener.getsockname()[1]}"}
+                start = time.monotonic()
+                self.assert_failure(self.invoke(api, Path(temporary), *self.options(), "--deadline-ms", "100"))
+                self.assertLess(time.monotonic() - start, 1)
+            finally:
+                thread.join(timeout=3)
+            self.assertFalse(thread.is_alive())
+
+    def test_strict_http_framing_is_preserved_over_tls(self):
+        with tempfile.TemporaryDirectory() as temporary, api_fixture(tls=self.certificates.context()) as api:
+            for headers in ([("Content-Length", str(len(STATUS) + 5))],
+                            [("Content-Length", str(len(STATUS)))] * 2,
+                            [("Content-Length", str(len(STATUS))), ("Transfer-Encoding", "gzip")]):
+                api["headers"] = headers
+                self.assert_failure(self.invoke(api, Path(temporary), *self.options()))
 
 
 if __name__ == "__main__":

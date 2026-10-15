@@ -1,7 +1,7 @@
 #![no_main]
 //! The synchronous query path: parsing, validation, policy, local answers and
 //! reply encoding. Cache misses are returned for forwarding, never sent.
-use hickory_proto::op::{Message, MessageType};
+use hickory_proto::{op::{Message, MessageType}, serialize::binary::{BinDecodable, BinDecoder}};
 use libfuzzer_sys::fuzz_target;
 use rustwalld_dns_core::{
     Engine, EngineConfig, ListInput, PolicyConfigSet, PolicySnapshot, Prepared, Rewrite,
@@ -41,6 +41,11 @@ fn engine() -> &'static Engine {
             addresses: vec!["192.0.2.1".parse().unwrap(), "2001:db8::1".parse().unwrap()],
             ttl: 60,
         }];
+        config.policies[0].rewrites.push(Rewrite {
+            domain: "large.test".into(),
+            addresses: (64..96).map(|last| std::net::Ipv4Addr::new(192, 0, 2, last).into()).collect(),
+            ttl: 60,
+        });
         config.policies[0].dns_records = vec![
             rustwalld_dns_policy::LocalRecord { domain: "local.test".into(), ttl: 60, data: rustwalld_dns_policy::LocalData::Passthrough { family: rustwalld_dns_policy::AddressFamily::Aaaa } },
             rustwalld_dns_policy::LocalRecord { domain: "passthrough.test".into(), ttl: 60, data: rustwalld_dns_policy::LocalData::Passthrough { family: rustwalld_dns_policy::AddressFamily::A } },
@@ -97,12 +102,14 @@ fuzz_target!(|bytes: &[u8]| {
         };
         // Only parsed queries are answered, and every reply is well formed.
         let request = Message::from_vec(bytes).expect("reply to an unparseable request");
-        let response = Message::from_vec(&reply).expect("engine reply does not parse");
+        let mut decoder = BinDecoder::new(&reply);
+        let response = Message::read(&mut decoder).expect("engine reply does not parse");
+        assert!(decoder.is_empty(), "engine reply contains uncommitted bytes");
         assert_eq!(response.metadata.id, request.metadata.id);
         assert_eq!(response.metadata.message_type, MessageType::Response);
         assert!(response.queries.len() <= 1);
         if transport == Transport::Udp {
-            assert!(reply.len() <= 1232);
+            assert!(reply.len() <= usize::from(request.max_payload().clamp(512, 1232)));
         }
     }
 });

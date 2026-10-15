@@ -81,7 +81,8 @@ inspect the two full revisions for their detailed contents.
 - Random upstream IDs and connected ephemeral UDP sockets; match ID, QR, opcode
   and question. Truncated or oversized UDP upstream replies retry TCP; truncated
   TCP/TLS replies are rejected. Client UDP replies respect 512 bytes without EDNS
-  and a capped advertised size of 1,232 with EDNS.
+  and a capped advertised size of 1,232 with EDNS. Serialization returns only
+  Hickory’s committed byte prefix, excluding partial records rolled back on truncation.
 - Separate bounded decision/response caches. Decisions partition by policy
   generation and policy. Responses partition by upstream identity (ordered
   addresses plus transport trust/identity settings, not timeouts or pool sizes),

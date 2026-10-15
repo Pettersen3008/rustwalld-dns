@@ -1,5 +1,9 @@
 //! Strict, bounded controller input. Descriptions document authority; they do not grant it.
-use hickory_proto::{op::Message, rr::DNSClass};
+use hickory_proto::{
+    op::Message,
+    rr::DNSClass,
+    serialize::binary::{BinDecodable, BinDecoder},
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
@@ -154,6 +158,18 @@ pub fn private(ip: IpAddr) -> bool {
         IpAddr::V6(v) => v.is_loopback() || v.is_unique_local() || v.is_unicast_link_local(),
     }
 }
+pub fn complete_message(bytes: &[u8]) -> io::Result<Message> {
+    // This strict tooling profile compares zero-Z references; Hickory discards Z.
+    if !(12..=65535).contains(&bytes.len()) || bytes[3] & 0x40 != 0 {
+        return Err(invalid("DNS packet length or reserved header bit"));
+    }
+    let mut decoder = BinDecoder::new(bytes);
+    let message = Message::read(&mut decoder).map_err(|_| invalid("DNS packet parse"))?;
+    if !decoder.is_empty() {
+        return Err(invalid("trailing DNS packet bytes"));
+    }
+    Ok(message)
+}
 pub fn decode(hex: &str) -> io::Result<Message> {
     if hex.len() < 24 || hex.len() > 8192 || !hex.len().is_multiple_of(2) || !hex.is_ascii() {
         return Err(invalid("reference DNS packet length/encoding"));
@@ -172,7 +188,7 @@ pub fn decode(hex: &str) -> io::Result<Message> {
             Ok((digit(pair[0])? * 16 + digit(pair[1])?) as u8)
         })
         .collect::<io::Result<Vec<_>>>()?;
-    Message::from_vec(&bytes).map_err(|_| invalid("reference DNS parse"))
+    complete_message(&bytes)
 }
 impl Prepared {
     pub fn load(path: &std::path::Path) -> io::Result<Self> {
@@ -296,6 +312,7 @@ impl Prepared {
                         .chain(&m.additionals)
                         .any(|rr| rr.ttl < lane.ttl_floor)
                     || m.queries != messages[0].queries
+                    || m.metadata.checking_disabled != messages[0].metadata.checking_disabled
                 {
                     return Err(invalid("unsafe/inconsistent reference DNS message"));
                 }

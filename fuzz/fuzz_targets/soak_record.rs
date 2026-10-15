@@ -18,6 +18,9 @@ fuzz_target!(|bytes: &[u8]| {
     if bytes.len() > 256 * 1024 {
         return;
     }
+    if bytes.len() <= 65535 {
+        let _ = soak_record::complete_message(bytes);
+    }
     if let Ok(prepared) = soak_record::Prepared::parse(bytes.to_vec()) {
         assert!(prepared.templates.len() <= 32);
         if let Ok(encoded) = serde_json::to_vec(&prepared.record) {

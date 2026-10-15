@@ -17,7 +17,8 @@ implementation. Preserve the reusable libraries and keep management out of DNS.
 Do not copy router-project CI, kernel lab requirements or feature plans here.
 
 The [backlog](planning/backlog.md) owns story priority/status and acceptance;
-[Sprint 07](planning/sprints/sprint-07.md) delivers the bounded collector and
-isolated Docker VM qualification;
-its [review](reviews/sprint-07.md) retains the remaining representative qualification.
+[Sprint 08](planning/sprints/sprint-08.md) repairs truncated wire output, strengthens
+secure collection and qualifies large-reply/live-cancellation coverage. Its
+[review](reviews/sprint-08.md) retains the remaining representative qualification;
+offline evidence reconciliation is the current executable prerequisite.
 At closeout, update milestones using delivered evidence and the retrospective.

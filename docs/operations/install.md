@@ -58,8 +58,8 @@ Default DNS is loopback UDP/TCP5353, management loopback8080. Do not point clien
 at the appliance until you have verified local resolution. Configure explicit
 admitted CIDRs before exposing DNS to a subnet. Administration defaults to
 loopback/SSH. Explicit HTTPS enables LAN administration; configure certificates
-and writable private identity state as described in administration-design.md.
-Incoming DoT/DoH listeners are independently opt-in (encrypted-ingress.md). Port53 requires an explicit unit drop-in granting only
+and writable private identity state as described in [administration](../architecture/security.md).
+Incoming DoT/DoH listeners are independently opt-in; see the same security contract. Port53 requires an explicit unit drop-in granting only
 `CAP_NET_BIND_SERVICE` in CapabilityBoundingSet and AmbientCapabilities. Adjust
 `dns_listen` explicitly; installation grants no capabilities by default.
 
@@ -68,6 +68,124 @@ tmp/devices, no privileges/capabilities by default and kernel/syscall protection
 `TimeoutStopSec=15` covers bounded graceful shutdown. Verify actual sandbox
 activation on the deployment host; unit validation and a non-root container smoke
 check do not prove every host kernel/systemd protection was activated.
+
+## Native host acceptance proposal
+
+The initial verified target was a disposable x86_64 Debian 13/KVM guest, with systemd as PID1,
+Python 3.11+, `useradd`, private writable persistent storage and GLIBC at least the
+bundle's `glibc_required`. [Sprint 04](../reviews/sprint-04.md) records its tested
+scope. A different deployment needs its own identified authorized target.
+AArch64 needs a native build and separate hardware acceptance.
+Record hostname, OS/kernel, architecture, systemd/GLIBC versions, manifest and
+available disk space/inodes. The current development workstation is not selected.
+
+The bounded first acceptance run installs the account/files/unit, starts and stops
+only `rustwalld-dns`, exercises restart/backup/restore/reversal, and leaves it
+stopped and disabled on a fresh guest. It uses loopback UDP/TCP5353 and HTTP8080;
+no boot enablement, port53 capability, LAN listeners, incoming TLS, router DNS,
+firewall or DHCP changes. Confirm the target and this authority before executing
+the privileged steps. Existing installations need their original active/enabled
+state and verified backups recorded, with an explicit restoration plan.
+
+1. Inspect the trusted archive and compare its manifest hashes to the intended
+   build. Confirm compatible GLIBC and that `ss -lntup` shows the chosen ports
+   free. Do not displace an existing listener. Save prior `current`, config,
+   service environment, identity/TLS files and unit/drop-ins privately if present.
+   Take and verify a database backup before upgrade; record expected active/shadow
+   generations. Keep originals outside the release tree and preserve ownership.
+2. Install using the commands above, omitting `enable --now`. On a fresh guest,
+   before the first start, replace the sample public upstream addresses with
+   `127.0.0.1:15453` (confirm unused) and `timeout_ms = 100`. Add an offline block
+   list and local record to the sample policy:
+
+   ```toml
+   lists = [{ name = "acceptance", action = "block", rules = "blocked.test" }]
+   dns_records = [{ domain = "acceptance.home.arpa", ttl = 60, data = { type = "A", address = "192.0.2.10" } }]
+   ```
+
+   These replace/add fields in `[[policy.policies]]`, not at TOML root. Keep the
+   loopback admission/default listeners and disabled stale default. Validate as
+   the service user. Existing database policy takes precedence over file policy;
+   use reviewed API publication or a fresh guest instead of overwriting live state.
+3. Check config directory root:service-group0750, config root:service-group0640,
+   environment root:root0600, state service-user:service-group0750, executable
+   root-owned0755 and unit root-owned0644. As the service user, read config and
+   create/remove a private scratch file in state; config/release/unit writes and
+   environment-file reads must fail. Backups are private0600. Authentication
+   identity, when configured, must be writable within StateDirectory; `/etc` is
+   read-only in the service sandbox.
+4. Run `systemd-analyze verify` and `systemctl daemon-reload`, then
+   `sudo systemctl start rustwalld-dns`. Record `systemctl show rustwalld-dns`
+   including MainPID, User/Group, ActiveState/SubState, NoNewPrivileges,
+   CapabilityBoundingSet/AmbientCapabilities, ProtectSystem/Home, PrivateTmp/Devices,
+   kernel/control-group protections, RestrictAddressFamilies and SystemCallFilter.
+   Compare with the bundled unit; warnings or unsupported protections are failures
+   to investigate. Inspect `/proc/PID/status`: non-root UID/GID, `NoNewPrivs: 1`,
+   zero `CapEff` and `Seccomp: 2` are expected. Inspect the process mount namespace to confirm
+   read-only config/release mounts, writable state and private tmp/devices. Retain
+   `systemd-analyze security rustwalld-dns.service` and journal output as supporting
+   evidence; a score or configured property alone does not prove enforcement.
+5. Verify `/healthz`, authenticated status/config and the installed console. Keep
+   the credential out of command arguments, URLs and evidence. With a local DNS
+   client such as `dig`, use `@127.0.0.1 -p 5353` for UDP and `+tcp`: local A must
+   be 192.0.2.10, blocked.test NXDOMAIN and a fresh unlisted.test SERVFAIL within a
+   bounded client timeout (for example two seconds). No public resolver is contacted. A later
+   forwarding run requires an explicitly selected local mock/resolver endpoint;
+   this closed-port phase proves failure behavior, not successful forwarding.
+6. Back up the running database with the commands below, verify schema and
+   active/shadow IDs, and check private permissions. Restart and compare DNS/API
+   results. For upgrade rehearsal, retain the old release and preserve config,
+   credentials and database. For recovery, stop first, move main/WAL/SHM/journal
+   together to a protected directory, restore into an absent destination, then
+   restart and compare generations, policy and DNS results. Preserve failed state.
+7. Reversal: stop the service; verify the saved release. When its binary supports
+   the stored schema **and policy content**, create a sibling temporary symlink to
+   that retained release and atomically rename it over `current`; validate, start
+   and repeat the checks. With incompatible content/schema, restore a verified
+   compatible pre-upgrade backup into a new database destination and restore its
+   matching configuration before starting. Never edit schema IDs. Retain the
+   replaced database and both releases until verified. Stop the fresh-guest service
+   at the end and confirm no listener and inactive/disabled state; do not remove
+   saved recovery material. Existing targets restore their agreed prior state.
+
+Acceptance requires the named host, observations and actual outcomes for each
+phase. The isolated package fixture also rehearses switching back/forward, but
+uses the same binary in two differently identified bundles. Neither that fixture
+nor a closed-port native run establishes older-binary compatibility, complete
+kernel sandbox enforcement, representative-network soak or release readiness.
+
+### Automated fresh-VM rehearsal
+
+Only in a new disposable VM authorized for destructive acceptance, unpack the
+trusted package at `/bundle` and copy the matching source files `packaging/smoke.py`,
+`packaging/native_service.py` and `packaging/native_probe.py` into one guest directory.
+The guest needs Python 3.11+, the maintained Python `h2` fixture package and its
+dependencies, systemd, `systemd-analyze`, `useradd` and ordinary Linux tools.
+Prepare dependencies before isolating the test network, or copy offline fixture
+dependencies. No public DNS/upstream is needed by the test.
+
+Run as root **inside that guest**, from the copied fixture directory:
+
+```sh
+python3 smoke.py --native-systemd
+```
+
+The mode refuses non-VMs, containers, unprivileged execution and pre-existing
+managed paths before installation. It installs test policy/state, starts/stops
+the actual unit and runs the existing UDP/TCP, encrypted local mocks, publication,
+same-binary upgrade/reversal and backup/restore checks. A temporary ExecStartPost
+probe exercises the unit's effective mount/identity/socket protections; a security
+score alone is not treated as proof. Python imports do not modify the verified
+bundle. No production unit protection is relaxed for the probe.
+
+Successful completion leaves the unit inactive/disabled and removes the probe
+drop-in/markers. Reports are `native-*.json`/`native-*.txt` under the guest's private
+`/var/lib/rustwalld-dns`; collect them and the guest identity/journal before powering
+off. On an ordinary Python failure, an exit handler stops/disables the unit and
+retains failed state/probes for diagnosis. A controller must still shut down the
+disposable VM after timeout, forced termination or lost connectivity. Never reuse
+this destructive fixture against an existing installation. The default Docker
+smoke mode remains a direct-process test without native systemd activation.
 
 ## Upgrade or roll back the executable
 
@@ -170,7 +288,10 @@ cargo run -p rustwalld-dns --release --example encrypted_resilience --locked -- 
 The smoke container is isolated with `--network none`, has only a read-only bundle
 mount and does not activate the host service manager. The unit is validated with
 systemd-analyze, and the actual installed process runs as the service user. It
-also tests upgrade preservation, online WAL backup and recovery followed by boot.
+also tests installed ownership/service-user access, upgrade preservation,
+same-binary release reversal, online WAL backup and recovery followed by boot.
+The reversal uses two differently identified bundles of the same executable;
+older-binary/schema/content compatibility needs separate evidence.
 The smoke enables serve-stale only in its isolated config and checks expired-cache
 TTL-30 answers over UDP/TCP, the stale metric and uncached outage SERVFAIL.
 The packaged default remains disabled. Use the [measurement procedure](../engineering/performance.md) for current evidence.
@@ -270,7 +391,8 @@ the publisher is offline. Failed refreshes never replace active content. URL
 query tokens, if configured, are secrets in policy content/backups; explicit
 bootstrap IPs and optional private trust also travel with revisions.
 
-Schema remains 2, but binaries predating `filter_sources` cannot decode revisions
+Downloaded-source introduction kept schema 2; the current schema is 6.
+Binaries predating `filter_sources` cannot decode revisions
 that contain the new field. Binary downgrade needs a compatible pre-feature
 backup even when both binaries support schema 2. Removing a source through
 reviewed promotion leaves its current list text; remove the list separately to
@@ -360,7 +482,7 @@ V4 filtering adds typed assertions and schema 6 response-type provenance. Existi
 schema-5 CNAME subjects are labeled type 5 during migration; new address/HTTPS
 subjects preserve their actual type separately from the original question type.
 Backup verification rejects missing/invalid response-type columns and orphaned
-provenance. New AdGuard imports use V4. Stored Native/AdGuard/V2/V3 policies remain
+provenance. New AdGuard imports now use V6. Stored Native/AdGuard/V2/V3 policies remain
 frozen; type selectors require an explicit switch to V4. A previous binary cannot
 open schema 6 or V4 policy content: downgrade using a verified compatible
 pre-upgrade backup in a fresh destination, never by editing `user_version`.

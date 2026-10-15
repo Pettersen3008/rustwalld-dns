@@ -1,4 +1,5 @@
 """Real non-root installed process, unit validation, upgrade and WAL recovery."""
+import argparse
 import hashlib
 import zipfile
 import importlib.util
@@ -16,20 +17,62 @@ import h2.connection
 import h2.events
 import threading
 import subprocess
+import sys
 import time
 import tomllib
 import urllib.error
 import urllib.request
 
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--native-systemd', action='store_true', help='destructive acceptance only inside a fresh disposable VM')
+args = parser.parse_args()
+native = None
+if args.native_systemd:
+    from native_service import NativeService
+    native = NativeService()  # Refuse unsafe targets before installer writes.
 bundle = Path('/bundle')
 spec = importlib.util.spec_from_file_location('install', bundle / 'install.py')
 installer = importlib.util.module_from_spec(spec)
+sys.dont_write_bytecode = True  # Import must not alter the verified bundle.
 spec.loader.exec_module(installer)
 initial_release = installer.install(bundle, Path('/'))
+if native is not None:
+    native.prepare()
 account = pwd.getpwnam('rustwalld-dns')
 assert 0 < account.pw_uid < 1000
 subprocess.run(['systemd-analyze', 'verify', '/usr/lib/systemd/system/rustwalld-dns.service'], check=True)
 config = Path('/etc/rustwalld-dns/config.toml')
+for path, owner, group, mode in (
+    (config, 0, account.pw_gid, 0o640),
+    (config.parent, 0, account.pw_gid, 0o750),
+    (Path('/etc/rustwalld-dns/service.env'), 0, 0, 0o600),
+    (Path('/var/lib/rustwalld-dns'), account.pw_uid, account.pw_gid, 0o750),
+    (Path('/usr/lib/systemd/system/rustwalld-dns.service'), 0, 0, 0o644),
+):
+    metadata = path.stat()
+    assert (metadata.st_uid, metadata.st_gid, metadata.st_mode & 0o777) == (owner, group, mode)
+subprocess.run(['python3', '-c', '''
+from pathlib import Path
+import os
+import tempfile
+config = Path('/etc/rustwalld-dns/config.toml')
+assert config.read_text()
+assert os.access('/opt/rustwalld-dns/current/bin/rustwalld-dns', os.X_OK)
+for name in (str(config), '/usr/lib/systemd/system/rustwalld-dns.service',
+             '/opt/rustwalld-dns/current/bin/rustwalld-dns'):
+    try:
+        with open(name, 'r+b'):
+            raise AssertionError('service account can modify ' + name)
+    except PermissionError:
+        pass
+try:
+    Path('/etc/rustwalld-dns/service.env').read_bytes()
+    raise AssertionError('service account can read the root credential file')
+except PermissionError:
+    pass
+with tempfile.TemporaryFile(dir='/var/lib/rustwalld-dns') as stream:
+    stream.write(b'private state access probe')
+'''], user=account.pw_uid, group=account.pw_gid, extra_groups=[], check=True, timeout=5)
 assert tomllib.loads(config.read_text())['serve_stale_max_staleness_secs'] == 0
 # Enable only this isolated smoke appliance; shipped defaults stay disabled.
 config.write_text(config.read_text()
@@ -148,12 +191,12 @@ def configuration_tag():
 
 
 def start():
-    child = subprocess.Popen([binary, '--config', str(config)], cwd='/var/lib/rustwalld-dns',
+    child = native.start() if native is not None else subprocess.Popen([binary, '--config', str(config)], cwd='/var/lib/rustwalld-dns',
                              env={**os.environ, 'RUSTWALLD_API_TOKEN': token}, user=account.pw_uid,
                              group=account.pw_gid, extra_groups=[], stdout=subprocess.DEVNULL)
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
-        assert child.poll() is None
+        assert native.running(child) if native is not None else child.poll() is None
         try:
             api('/healthz')
             break
@@ -161,12 +204,16 @@ def start():
             time.sleep(.02)
     else:
         raise AssertionError('installed service did not become ready')
-    assert Path(f'/proc/{child.pid}').stat().st_uid == account.pw_uid
+    pid = child if native is not None else child.pid
+    assert Path(f'/proc/{pid}').stat().st_uid == account.pw_uid
     assert b'rustwall' in api('/').lower()
     return child
 
 
 def stop(child):
+    if native is not None:
+        native.stop(child)
+        return
     child.terminate()
     assert child.wait(timeout=10) == 0
 
@@ -210,12 +257,14 @@ def dns(domain, tcp=False, answer=False, ttl=None, cname=None, ttl_max=None, qty
             connection.send(packet)
             response = connection.recv(1232)
     assert response[:2] == packet[:2]
+    # Scheduled replies floor the remaining minute to seconds; the last
+    # fraction legitimately has TTL zero, including unrelated local records.
     if expected_data is not None:
         assert response[3]&15==0 and int.from_bytes(response[6:8],'big')==1
         owner,offset=dns_name(response,len(packet))
         assert owner==domain
         kind,rrclass,lifetime,length=struct.unpack_from('!HHIH',response,offset)
-        assert kind==qtype and rrclass==1 and 0<lifetime<=expected_ttl
+        assert kind==qtype and rrclass==1 and 0<=lifetime<=expected_ttl, (domain,kind,rrclass,lifetime,expected_ttl)
         start=offset+10;end=start+length
         if kind==16:
             text=expected_data[0].encode('ascii')
@@ -245,7 +294,7 @@ def dns(domain, tcp=False, answer=False, ttl=None, cname=None, ttl_max=None, qty
             owner,offset=dns_name(response,offset)
             assert owner==domain
             kind,rrclass,lifetime,length=struct.unpack_from('!HHIH',response,offset)
-            assert kind==qtype and rrclass==1 and 0<lifetime<=expected_ttl
+            assert kind==qtype and rrclass==1 and 0<=lifetime<=expected_ttl, (domain,kind,rrclass,lifetime,expected_ttl)
             found.append(socket.inet_ntop(socket.AF_INET if qtype==1 else socket.AF_INET6,response[offset+10:offset+10+length]))
             offset+=10+length
         assert sorted(found)==sorted(rrset_addresses)
@@ -254,7 +303,7 @@ def dns(domain, tcp=False, answer=False, ttl=None, cname=None, ttl_max=None, qty
         owner, offset = dns_name(response, len(packet))
         assert owner == domain
         kind, rrclass, lifetime, length = struct.unpack_from('!HHIH', response, offset)
-        assert kind == qtype and rrclass == 1 and 0 < lifetime <= expected_ttl
+        assert kind == qtype and rrclass == 1 and 0 <= lifetime <= expected_ttl, (domain, kind, rrclass, lifetime, expected_ttl)
         assert response[offset+10:offset+10+length] == socket.inet_pton(socket.AF_INET if qtype == 1 else socket.AF_INET6, wildcard_address)
     if answer:
         assert int.from_bytes(response[6:8], 'big') == 1 and response[-4:] == bytes([192, 0, 2, 1])
@@ -689,6 +738,35 @@ try:
     assert dns('cancelled.test', answer=True) == 0
 finally:
     stop(process)
+# Rehearse switching back and forward while preserving the durable database.
+# Both fixture releases contain the same executable: this is not an old-binary
+# schema/content compatibility test, nor native systemd sandbox activation.
+current = Path('/opt/rustwalld-dns/current')
+for release in (initial_release, final_release):
+    installer.verify(release)
+    replacement = current.with_name('.reversal-current')
+    try:
+        replacement.symlink_to(release.relative_to(current.parent))
+        replacement.replace(current)
+    finally:
+        replacement.unlink(missing_ok=True)
+    assert current.resolve() == release
+    assert config.read_bytes() == original_config
+    assert Path('/etc/rustwalld-dns/service.env').read_bytes() == secret
+    subprocess.run([binary, '--config', str(config), '--check-config'],
+                   user=account.pw_uid, group=account.pw_gid, extra_groups=[],
+                   check=True, timeout=5)
+    process = start()
+    try:
+        assert api('/api/v1/status')['generation'] == 5
+        assert api('/api/v1/shadow')['generation'] == 6
+        assert dns('installed.test') == 3
+        assert dns('upgrade.test', tcp=True) == 3
+        assert dns('cli-active.home.arpa', wildcard_address='192.0.2.10') == 0
+        assert dns('reversal-forward.test', tcp=True, answer=True) == 0
+        assert api('/api/v1/filter-sources')['sources'][0]['download']['sha256'] == fingerprint
+    finally:
+        stop(process)
 # Restore only after removing the original DB and all associated sidecars as a set.
 recovery = Path('/var/lib/rustwalld-dns/recovery')
 recovery.mkdir(mode=0o700)
@@ -770,4 +848,6 @@ try:
     assert api('/api/v1/filter-sources')['sources'][0]['download']['sha256'] == candidate_fingerprint
 finally:
     stop(process)
-print('PASS: service binding and typed suffix pattern record import/recovery, bundled rewrite feed import/recovery, exact address set/exception import/recovery, literal pattern address import/recovery and filtering-disabled rewrite state, wildcard address import/recovery, global rewrite switch and historical DNS-container recovery, exact family passthrough and rewrite activation import/recovery, V6 tag scope and V5 client scope and typed assertions recovery, V4 typed assertions and active/shadow restart/upgrade/backup recovery, V3 per-rule exclusions and badfilter CLI and active/shadow restart/upgrade/backup recovery, installed non-root per-client migration CLI with DS parent routing, identical-profile sharing and preserved config, clean non-root installation, UDP/TCP clients, authenticated warm DoT/HTTP2 DoH, opt-in stale outage fallback with TTL at most 30 under the weekly minute cap over UDP/TCP with metric reconciliation and uncached SERVFAIL, reviewed HTTPS lists with offline-publisher recovery, conditional 200/304/restart retrieval, scheduled shadow backup/upgrade/recovery with offline publisher and explicit promotion, binding annotations, temporary allows and permanent assertions, unit validation, upgrade preservation, schema-4 migration with retained null states, schema-6 WAL snapshot, catalog-v2 weekly service-domain and SafeSearch active/shadow recovery over UDP/TCP and DS parent mode plus expired-exception recovery; native sandbox activation not exercised')
+if native is not None:
+    native.close()
+print('PASS: installed ownership/access restrictions and same-binary release reversal, service binding and typed suffix pattern record import/recovery, bundled rewrite feed import/recovery, exact address set/exception import/recovery, literal pattern address import/recovery and filtering-disabled rewrite state, wildcard address import/recovery, global rewrite switch and historical DNS-container recovery, exact family passthrough and rewrite activation import/recovery, V6 tag scope and V5 client scope and typed assertions recovery, V4 typed assertions and active/shadow restart/upgrade/backup recovery, V3 per-rule exclusions and badfilter CLI and active/shadow restart/upgrade/backup recovery, installed non-root per-client migration CLI with DS parent routing, identical-profile sharing and preserved config, clean non-root installation, UDP/TCP clients, authenticated warm DoT/HTTP2 DoH, opt-in stale outage fallback with TTL at most 30 under the weekly minute cap over UDP/TCP with metric reconciliation and uncached SERVFAIL, reviewed HTTPS lists with offline-publisher recovery, conditional 200/304/restart retrieval, scheduled shadow backup/upgrade/recovery with offline publisher and explicit promotion, binding annotations, temporary allows and permanent assertions, unit validation, upgrade preservation, schema-4 migration with retained null states, schema-6 WAL snapshot, catalog-v2 weekly service-domain and SafeSearch active/shadow recovery over UDP/TCP and DS parent mode plus expired-exception recovery' + ('; native systemd sandbox and lifecycle exercised' if native is not None else '; native sandbox activation not exercised'))

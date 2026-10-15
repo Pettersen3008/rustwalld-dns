@@ -121,11 +121,22 @@ concern), DNS-017 (confirmed version-copy defect). No UI source was changed.
 
 ### DNS-008 Prepare native deployment-host acceptance — E4 — M
 
-Status: Backlog. Priority: 6. Dependencies: DNS-004. Sprint: 04 proposed.
+Status: Done. Priority: 6. Dependencies: DNS-004. Sprint: 04.
 Acceptance: current package/recovery fixtures pass; prepare explicit host prerequisites,
 sandbox/port/permission/backup/recovery assertions and reversal plan; identify the
 authorized target. Mark host tests pending until actually run with permission.
 No workstation DNS/firewall/DHCP or service activation as a side effect.
+Spec: [native acceptance](../specs/DNS-008-native-acceptance.md), self-reviewed
+against current packaging and recovery code. The user authorized the prepared
+run in a separate disposable VM. Debian 13 x86_64/KVM, systemd 257 and GLIBC 2.41
+passed the full native service/DNS/upgrade/reversal/WAL recovery fixture and
+effective sandbox probes. Seven unit starts; final inactive/disabled state,
+removed probe drop-in and powered-off guest verified. Repeat-installed/non-VM/
+unprivileged refusals and injected-failure cleanup passed. Default container smoke,
+16 Python tests and required checks (458 Rust tests) pass. Evidence:
+target/review/sprint-04/native-vm/; [review](../reviews/sprint-04.md).
+Real older-binary compatibility, other hosts/ARM and representative soak remain
+unverified. Same-binary reversal does not establish downgrade compatibility.
 
 ### DNS-009 Run representative network soak — E4 — L
 
@@ -134,6 +145,8 @@ Refine into setup/measurement/analysis stories. Acceptance: 24–72-hour represe
 query mix, promotion/restart/storage/upstream failures, latency/resource/telemetry
 observations and recovery; retain faults and explicit workload limits. A loopback
 fixture cannot satisfy representative-network acceptance.
+Define the protocol first in DNS-018; activation and the long run need a separately
+authorized representative target and execution window.
 
 ### DNS-010 Scope independent security review — E4 — S
 
@@ -252,6 +265,16 @@ daemon browser flows cover Native/legacy rejection, V2–V6 validation, fresh V6
 import and V2 promotion/provenance. Both themes/layouts were visually inspected.
 Seven frozen-cancellation Rust regressions and final console format/lint/build/
 audit plus both HTTPS flows pass. Self-review; [Sprint 02 review](../reviews/sprint-02.md).
+
+### DNS-018 Define representative soak protocol — E4 — S
+
+Status: Backlog. Priority: 7 (DNS-009 prerequisite). Dependencies: DNS-008. Sprint: 05 proposed.
+Outcome: turn DNS-009's large soak into executable setup, measurement and analysis
+slices before starting a long run. Acceptance: grounded query/client mix, correctness
+and resource/latency observations, promotion/restart/storage/upstream failure matrix,
+backup/recovery, duration/stop criteria and evidence schema; identify missing target
+and execution authority explicitly. Create bounded follow-up stories from that
+protocol. Excludes activation, router changes and starting/scheduling a soak.
 
 ## Deferred ideas
 

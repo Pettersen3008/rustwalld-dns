@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Add an explicit fresh-VM systemd mode to the package smoke, with effective
+  sandbox probes, unsafe-target refusal and failure cleanup. Verify native
+  service/DNS/recovery on Debian 13/KVM; leave the service disabled and guest off.
+
+- Extend isolated package smoke checks with service-user permissions and
+  same-binary release reversal; prepare bounded native-host acceptance/recovery.
+- Correct package-fixture TTL checks to accept the documented zero-TTL schedule
+  boundary while retaining typed record content and source TTL bounds.
+
 - Bring the Local DNS Add action into the first phone viewport, identify its
   selected policy, and focus newly added records across paging. Compact policy
   publication controls while retaining guidance, review and draft safeguards.

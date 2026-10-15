@@ -17,8 +17,8 @@ implementation. Preserve the reusable libraries and keep management out of DNS.
 Do not copy router-project CI, kernel lab requirements or feature plans here.
 
 The [backlog](planning/backlog.md) owns story priority/status and acceptance;
-[Sprint 08](planning/sprints/sprint-08.md) repairs truncated wire output, strengthens
-secure collection and qualifies large-reply/live-cancellation coverage. Its
-[review](reviews/sprint-08.md) retains the remaining representative qualification;
-offline evidence reconciliation is the current executable prerequisite.
+[Sprint 08 review](reviews/sprint-08.md) accepts truncation repair, secure
+collection, large-reply/live-cancellation and offline evidence handling.
+[Sprint 09](planning/sprints/sprint-09.md) prepares the remaining representative
+qualification; readiness and external gates remain explicit.
 At closeout, update milestones using delivered evidence and the retrospective.

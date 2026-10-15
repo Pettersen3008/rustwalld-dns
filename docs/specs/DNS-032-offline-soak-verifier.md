@@ -1,6 +1,6 @@
 # DNS-032 Reconcile saved driver evidence offline
 
-Status: Ready. Story: DNS-032 in the [backlog](../planning/backlog.md).
+Status: Implemented. Story: DNS-032 in the [backlog](../planning/backlog.md).
 Author: Codex coordinator, 2026-10-15; separate design review accepted by /root/review_sprint06, 2026-10-15.
 Authority: user's two-hour M2 engineering goal, repository-only analysis.
 
@@ -74,5 +74,13 @@ malformed-input mutations. No query-path performance or UI impact.
 
 ## Decisions and outcome
 
-Design accepted; implementation pending; resource/pass rules must follow current recorder, not
+Implemented and accepted; resource/pass rules must follow current recorder, not
 plausible invented semantics. Keep limitations visible in the operator contract.
+
+## Outcome
+
+Accepted after separate source/evidence review and required local, compatibility
+and security checks. [Sprint 08 review](../reviews/sprint-08.md) records results,
+review corrections and limits; current behavior is in the
+[driver contract](../operations/soak-runner.md). Raw successful/failed fixtures and
+identities stay under ignored target/review/sprint-08/.

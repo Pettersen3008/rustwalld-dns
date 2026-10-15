@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add bounded offline reconciliation of saved soak reports, distinguishing passing,
+  failed and incomplete evidence while retaining provenance/coverage limits.
+- Open native soak run/sample leaves without following symlinks or waiting for FIFO
+  writers; preserve atomic handoff and document trusted-parent/filesystem limits.
+- Initialize entering-phase metadata before sampling so rejected observations
+  retain accurate failed-run timing and prior completion origins.
+
 - Return only committed Hickory bytes after response truncation, removing partial
   record tails while preserving transport limits and complete fitting replies.
 - Verify target-local HTTPS collection with explicit bounded CA/SAN trust; reject

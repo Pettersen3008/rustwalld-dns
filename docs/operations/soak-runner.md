@@ -17,6 +17,15 @@ owned traffic and preserves failure evidence. Controller death may leave partial
 the external controller owns fault reversal/service state and must detect that death.
 Keep the recorder outside fault volumes. Target service state is never changed here.
 
+Native run/sample input parents must be trusted private directories on a local
+filesystem. Leaf opens use no-follow/nonblocking flags and descriptor regular-file
+checks before capped reads; ordinary atomic sample replacement remains supported.
+This does not reject symlink ancestors or bound stalled regular-filesystem I/O.
+The controller must keep an external whole-process watchdog, including validation.
+A failed phase-entry sample retains failure and the last known observation; its
+window uses the entering phase's planned interval, with old completion origins
+recorded separately and no new dispatch before successful sample validation.
+
 ## Frozen version 1 record
 
 Exact strict types: [soak_record.rs](../../crates/app/examples/support/soak_record.rs).
@@ -161,3 +170,38 @@ limits: 900 offered seconds qualification, 72 offered hours soak. Multiple load-
 aggregation, encrypted ingress, collector transport, authenticated explanations,
 fault/recovery execution and representative whole-window analysis remain external
 lab duties. A short local pass cannot close DNS-009.
+
+## Offline report consistency
+
+```sh
+python3 scripts/verify-soak.py --directory /absolute/SAVED_DRIVER_OUTPUT
+```
+
+This read-only tool opens exactly run.json, summary.json, aggregate.json and
+windows.ndjson through no-follow directory/file access. It never follows a
+recorded path, resolves a hostname, executes a command or opens a network socket.
+Caps: 256 KiB input, 64 KiB summary, 16 MiB aggregate, streamed 16 KiB window rows,
+4320 window groups and 128 MiB selected files; stricter frozen budgets apply.
+Unknown fields, duplicate keys, excessive nesting, special/symlink/partial files
+and unsigned overflow fail closed with a bounded sanitized JSON error.
+
+Exit 0 means implemented consistency checks passed for a recorded passing driver;
+exit 2 means they passed for a recorded failed driver; exit 1 means invalid or
+incomplete evidence. The JSON separates evidence_consistent, driver_passed,
+completed, resource_windows_complete and external_checks_unverified. A cancelled
+run remains failed. Zero-query failures may retain initial resource samples with
+no window rows; failed runs may also retain a final sampled-only interval.
+
+Checks reconcile phase/lane/client counts, deterministic weighted offers, inflight
+continuity, outcome origins, aggregate histogram bins/quantiles and derivable
+window/resource values. Repeated lane resource copies count once per window.
+Global initial/two-sample transitions and no-reset endpoint deltas are derivable;
+window counter deltas may include their previous boundary. Reset events and
+numbers of affected counters are different quantities.
+
+Limits remain explicit in every result: aggregate.json has no run/source binding;
+windows lack bins, preventing exact reconstruction of their distributions; mixed
+completion origins do not identify timeout origins. Longer hidden reset histories
+cannot be replayed from endpoints. This is not full native run/DNS validation,
+provenance authentication, operational authority, fault-matrix review or
+representative/long-soak acceptance. Verify those externally under the protocol.

@@ -81,10 +81,13 @@ Sprint 05 prepares `target/review/sprint-05/security-packet/` locally:
 - `scope.md` freezes this brief. `checks.json` and `security-scans.json` record
   actual commands/exits; raw test/scan logs remain in the parent evidence directory.
 
-DNS-020 adds example run/collector intake, oracle/scheduling/recording and fuzz
-coverage after this Sprint 05 packet. Include that new diff in the actual review
-target; the older packet alone does not represent it. No production DNS/API or
-credential behavior changed in that slice.
+Subsequent work adds the remote driver, target-local HTTP/verified HTTPS collector,
+offline report consistency checks and failure/cancellation coverage. Sprint 08 also
+repairs production truncated-response encoding, plus example oracle/file/phase
+boundaries. Include every later diff and the current locked dependencies in the
+actual review target; the historical Sprint 05 packet does not represent them.
+Current verification evidence is under target/review/sprint-08/. Neither engineering
+peer review nor the offline checker satisfies independent security acceptance.
 
 Verify every extracted file against the manifest before review/build, and compare
 the changed files to the base revision. A checksum detects mismatch, not source

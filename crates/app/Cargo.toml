@@ -66,6 +66,9 @@ rcgen = "0.14"
 h2 = "0.4"
 http = "1"
 
+[target.'cfg(unix)'.dev-dependencies]
+rustix = { version = "1", features = ["fs"] }
+
 [[example]]
 name = "encrypted_resilience"
 test = true

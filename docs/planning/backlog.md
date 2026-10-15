@@ -327,7 +327,9 @@ No representative/remote-collector/long-window acceptance is claimed.
 ### DNS-021 Qualify representative soak lab — E4 — M
 
 Status: Backlog. Priority: 7. Dependencies: DNS-020, DNS-025, DNS-026 and named representative lab.
-Sprint: carried from 07; not Ready without target/workload/budget/authority prerequisites.
+Sprint: carried from 07; candidate 09, not Ready without target/workload/budget/authority prerequisites.
+Draft: [representative lab](../specs/DNS-021-representative-lab.md), selected reference
+profile and concrete readiness/qualification steps; no representative claim.
 The [two-VM exercise](../operations/soak-lab.md) passed synthetic mechanics under
 DNS-026 and is stopped; it does not establish the operator's representative
 routed/storage workload.
@@ -482,7 +484,7 @@ Shared review/evidence: [Sprint 08](../reviews/sprint-08.md), ignored target/rev
 
 ### DNS-032 Reconcile saved driver evidence offline — E4 — M
 
-Status: In progress. Priority: 7. Dependencies: DNS-020. Sprint: 08.
+Status: Done. Priority: 7. Dependencies: DNS-020. Sprint: 08.
 Split mechanical analysis from DNS-023, whose actual long-run acceptance remains
 blocked on DNS-022. Outcome: safely validate consistency of the four bounded native
 report files without opening recorded paths or exercising any network/service.
@@ -491,10 +493,14 @@ explicit passing versus consistent failed runs, incomplete/tampered/special-file
 refusal; actual Sprint 07/08 fixtures and targeted malformed-input checks.
 Spec: [offline evidence verifier](../specs/DNS-032-offline-soak-verifier.md), separate agent design review accepted.
 No provenance, authority, representative-path, fault-matrix or long-run claim.
+Accepted: 19 focused tests; 15 real/native CLI classifications retain passing versus
+failed states and unchanged input files. Eight confirmed malformed-consistency
+variants reject; 4864 bounded structured mutations have only supported outcomes.
+Separate source/evidence review and final gates pass; see [Sprint 08 review](../reviews/sprint-08.md).
 
 ### DNS-033 Review native driver input replacement races — E4 — S
 
-Status: Backlog. Priority: 7. Dependencies: DNS-020. Type: spike.
+Status: Done. Priority: 7. Dependencies: DNS-020. Type: spike.
 Observed during DNS-032 exploration: soak_record::bounded_file checks path metadata
 before File::open, then follows the path again. A replacement between those calls
 may bypass the initial symlink/special-file refusal or block opening a FIFO; the
@@ -504,6 +510,41 @@ opening and identity checks without weakening caps or adding a production parser
 Acceptance: decide supported platform/dependency tradeoffs, bounded owned-file
 regressions and an implementable spec or evidence that existing constraints suffice.
 Do not treat the Python verifier's safer reader as fixing this separate native path.
+
+Spike accepted: source/caller and dependency review recommends safe locked rustix
+NOFOLLOW/NONBLOCK opening with descriptor validation. Parent-directory trust and
+external filesystem watchdog remain explicit. Implementation is DNS-034, separately
+specified/reviewed; the spike itself performed no exploit test or source changes.
+
+### DNS-034 Harden native driver regular-file admission — E4 — S
+
+Status: Done. Priority: 6. Dependencies: DNS-033. Sprint: 08 rework reserve.
+Outcome: remove the metadata/open leaf replacement gap for run/sample reads while
+preserving atomic regular-file handoff and existing caps/identity checks.
+Acceptance: safe no-follow/nonblocking open, descriptor type check, cap boundaries,
+owned FIFO/symlink/atomic replacement regressions and actual CLI refusal/handoff;
+explicit trusted-parent/local-filesystem/watchdog boundary. No production API change.
+Spec: [native file admission](../specs/DNS-034-native-soak-file-open.md), separate agent design review accepted.
+Accepted: safe descriptor admission and four regressions; 19 actual CLI checks
+plus six collector/atomic-handoff checks pass. Owned child/controller stop cleanly.
+Only existing rustix dependency edges changed; required/compatibility/security gates pass.
+Separate source/evidence review and final gates pass; see [Sprint 08 review](../reviews/sprint-08.md).
+
+### DNS-035 Preserve phase metadata on entry-sample failure — E4 — S
+
+Status: Done. Priority: 6. Dependencies: DNS-020. Sprint: 08 rework reserve.
+Confirmed native deterministic failure: with prior work pending, rejecting the
+next phase's sample creates a window with the new label but old planned interval.
+Scalar accounting still reconciles; complete failure evidence is contradictory.
+Acceptance: establish entering phase metadata before fallible sampling; retain
+failure, old completion origins/last observation, zero new dispatch and cancellation
+accounting. Both native variants must classify consistent failed offline, not pass.
+Spec: [failed phase evidence](../specs/DNS-035-failed-phase-evidence.md), separate design review accepted.
+Reproducer: ignored target/review/sprint-08/phase-sample-repro-02/.
+Accepted: both actual offer_phase regressions fail before and pass after; saved
+current-source native cancellation/late-completion outputs classify consistent
+failed (exit 2), preserve old observations/origins and dispatch no new requests.
+Separate source/evidence review and final gates pass; see [Sprint 08 review](../reviews/sprint-08.md).
 
 ## Deferred ideas
 

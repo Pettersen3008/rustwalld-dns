@@ -61,7 +61,9 @@ for dependency/UI changes. Use relevant seeded sanitizer fuzz targets separately
 from load/benchmark work. Install cargo-fuzz/nightly if missing; record any gap.
 The Linux collector has focused Python proc/HTTP/TLS/storage/deadline regressions in
 scripts/tests/test_soak_collect.py. Bound seeded parser mutations separately and
-record their method; Python byte mutations do not establish sanitizer or
+record their method. The offline verifier has focused bounded schema/filesystem/
+accounting tests in scripts/tests/test_verify_soak.py; retain real native reports
+for differential CLI acceptance. Python byte mutations do not establish sanitizer or
 coverage-guided fuzzing results. Actual complete sample-to-driver handoff remains
 necessary alongside parser tests.
 

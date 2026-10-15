@@ -83,12 +83,12 @@ async fn offer_phase(
 ) -> io::Result<()> {
     let start = schedule.start;
     let phase = &prepared.record.phases[origin];
-    recorder.sample(phase)?;
     let phase_start = start + Duration::from_secs(schedule.seconds_base);
     recorder.begin_phase(
         phase_start.duration_since(start).as_millis() as u64,
         phase.seconds,
     );
+    recorder.sample(phase)?;
     let end = phase_start + Duration::from_secs(phase.seconds);
     let mut samples = interval_at(phase_start + Duration::from_secs(1), Duration::from_secs(1));
     let mut windows = interval_at(

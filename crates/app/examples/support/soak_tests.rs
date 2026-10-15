@@ -667,3 +667,9 @@ fn recorder_enforces_clipping_window_aggregate_and_total_caps() {
 
 #[path = "soak_envelope_tests.rs"]
 mod envelope;
+
+#[path = "soak_file_tests.rs"]
+mod files;
+
+#[path = "soak_phase_failure_tests.rs"]
+mod phase_failure;

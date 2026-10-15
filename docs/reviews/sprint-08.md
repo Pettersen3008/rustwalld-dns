@@ -2,8 +2,8 @@
 
 2026-10-15, within the user's bounded two-hour M2 session. Personal context;
 repository planning, no Jira. Scope is defensive owned-code/fixture testing.
-DNS-027–031 are accepted; DNS-032 offline analysis remains in progress before
-sprint closeout.
+Closed: DNS-027–035 selected engineering work and the grounded file-admission
+spike are accepted. Remaining representative/long-run/independent gates carry forward.
 
 ## Delivered and demonstrated
 
@@ -50,17 +50,45 @@ and -1.34% rewrite; measured fixture allocation counts/bytes are unchanged. This
 is a short before/after observation, not a general no-regression, improvement,
 large-reply capacity or latency SLO claim. Raw results stay under target/.
 
+The offline verifier now reconciles bounded native counts, weighted dispatch,
+inflight, bins/quantiles and derivable resource summaries without following recorded
+paths or using network access. Fifteen real/native CLI cases retain their passing
+or failed classification; eight confirmed contradictory reports fail closed. The
+checker explicitly retains provenance, hidden-distribution and timeout-origin limits.
+
+The DNS-033 spike identified a pathname metadata/open replacement gap. DNS-034 uses
+safe locked rustix no-follow/nonblocking leaf opens, descriptor checks and existing
+caps. Nineteen CLI refusals/cap/atomic-replacement cases and an actual collector
+handoff with six success/failure checks pass. This retains trusted local parents
+and an external filesystem watchdog requirement; no ancestor-security claim.
+
+Failure evidence review then found entering-phase labels paired with the previous
+interval when the initial sample fails. DNS-035 initializes phase metadata before
+sampling. Two actual control-flow regressions and saved native outputs preserve
+correct intervals, zero new dispatch, old completion origins or cancellation, old
+last-known generation and explicit failure. Offline exit 2 confirms consistency;
+it does not turn these failures into acceptance.
+
 ## Verification and retrospective
 
-Required fmt, strict all-target/all-feature Clippy, 486 default workspace tests,
-499 all-feature tests, 36 focused example tests and 41 Python tests pass. Root/fuzz
+Required fmt, strict all-target/all-feature Clippy, 492 default workspace tests,
+505 all-feature tests, 42 focused example tests and 60 Python tests pass. Root/fuzz
 audit and deny pass with existing duplicate/license warnings retained. MSRV check/
 tests, benchmark compilation, strict rustdoc, five library archives and three
 independent consumers pass. Fresh seeded ASAN runs completed 5,020,499 engine and
 6,570,124 record/wire iterations, each 181 seconds; 90,000 deterministic collector
 parser mutations completed without unexpected exceptions. Short mutation/sanitizer
-runs supplement regressions and do not establish parser safety or security audit. Evidence lives under ignored
+runs supplement regressions and do not establish parser safety or security audit. After the native file-admission dependency edge, another seeded
+record smoke completed 6,454,042 iterations in 181 seconds. Evidence lives under ignored
 target/review/sprint-08/, including unsuccessful attempts and teardown.
+
+Verifier review required three correction rounds covering eight reproducible
+false-consistency cases: phase timing; quantile bucket representation/occupancy;
+global initial/two-sample/no-reset transitions and reset-event cardinality; and
+phase-local new observations. Before/after regressions preserve true reset and
+empty failed-window behavior. A malformed scratch mutation encoder and a cached
+Clap variant selection interrupted supplementary harnesses; corrected attempts
+are retained separately and are not product defects.
 
 Two driver defects were reproduced during exploration. New complete-wire tests
 then found a real escaped production bug that prefix-only parsing had hidden.
@@ -85,5 +113,7 @@ independent isolated routed client and initially synthetic 20/100 QPS UDP80/TCP2
 Current actual lab remains private L2; the choice is not measured acceptance.
 DNS-022 needs the actual separately authorized long interval; DNS-024 needs an
 independent reviewer. No long run, scheduler, physical network change, release or
-external reviewer contact occurred. DNS-032 prepares offline mechanical evidence
-analysis; aggregate provenance and window-bin limitations must stay explicit.
+external reviewer contact occurred. DNS-032 supplies offline mechanical evidence analysis; aggregate provenance and
+window-bin limitations stay explicit. [Sprint 09](../planning/sprints/sprint-09.md)
+prepares representative readiness against its draft qualification spec. No Ready
+representative run is invented from the profile recommendation.

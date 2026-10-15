@@ -4,6 +4,7 @@ use hickory_proto::{
     rr::DNSClass,
     serialize::binary::{BinDecodable, BinDecoder},
 };
+use rustix::fs::{Mode as FileMode, OFlags, open};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
@@ -17,13 +18,12 @@ pub fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 pub fn bounded_file(path: &std::path::Path, cap: u64) -> io::Result<Vec<u8>> {
-    // Reject special inputs before opening: opening a FIFO for reading can block.
-    if !std::fs::symlink_metadata(path)?.is_file() {
-        return Err(invalid(
-            "input must be a regular file, not a symlink/device",
-        ));
-    }
-    let file = File::open(path)?;
+    // Trusted local parents; never follow the leaf or wait for a FIFO writer.
+    let file = File::from(open(
+        path,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+        FileMode::empty(),
+    )?);
     if !file.metadata()?.is_file() {
         return Err(invalid("input must be a regular file"));
     }

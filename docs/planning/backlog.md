@@ -326,10 +326,11 @@ No representative/remote-collector/long-window acceptance is claimed.
 
 ### DNS-021 Qualify representative soak lab — E4 — M
 
-Status: Backlog. Priority: 7. Dependencies: DNS-020, DNS-025 and named authorized lab.
+Status: Backlog. Priority: 7. Dependencies: DNS-020, DNS-025, DNS-026 and named representative lab.
 Sprint: 07 proposed; not Ready without target/workload/budget/authority prerequisites.
-The [two-VM proposal](../operations/soak-lab.md) is prepared, not activated or
-accepted as the operator's representative routed/storage workload.
+The [two-VM exercise](../operations/soak-lab.md) passed synthetic mechanics under
+DNS-026 and is stopped; it does not establish the operator's representative
+routed/storage workload.
 Acceptance: independent clients and representative routed/storage path, private
 fixtures, observed workload basis, numeric load/latency/resource/recovery budgets,
 verified backup and reversal, and at most 15-minute qualification including a
@@ -383,7 +384,26 @@ prove valid samples/30 UDP-TCP replies, PID/listener refusal, wrong-answer failu
 and stale collection failure with complete accounting/cleanup. A bounded 70000-case
 seeded Python parser mutation run completed without unexpected exceptions; no
 sanitizer/coverage-guided claim. Root/fuzz audit/deny pass with retained warnings.
-Evidence: target/review/sprint-07/; qualification/DNS-021 remains unready.
+Evidence: target/review/sprint-07/; representative qualification/DNS-021 remains open.
+
+### DNS-026 Execute disposable Docker lab qualification — E4 — M
+
+Status: Done. Priority: 7. Dependencies: DNS-020, DNS-025. Sprint: 07.
+Split synthetic lab mechanics from DNS-021's representative acceptance. User's
+separate-VM approval and continuation after the concrete proposal authorize two
+new isolated guests and the bounded exercise; no workstation takeover/long soak.
+Acceptance: freeze real artifact/topology/clock/config/oracle/budget identities;
+run Docker appliance plus independent client with private Hickory fixtures;
+demonstrate steady/burst, deliberate wrong answer, sampler loss, cancellation,
+SQLite backup/restore and verified owned-container/VM teardown. Preserve failures.
+Review code and evidence separately and pass required local checks.
+Spec: [disposable lab](../specs/DNS-026-disposable-lab.md).
+Evidence: ignored target/review/sprint-07/lab/. Separate agent design/code/evidence
+review accepted. Pilot 500, steady/burst 3400 and 500 correct queries after a cold-cache restart; exact after-drain request accounting. Wrong-answer, sample-loss and SIGINT
+fail as intended; SIGINT had no outstanding exchanges. All owned guests/services
+stopped, restart disabled and listeners absent. Required local checks pass.
+Physical representative paths/workloads and DNS-021 remain open.
+
 
 ## Deferred ideas
 

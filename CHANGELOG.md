@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Extend the private DNS fixture with explicit private IPv4 binding and fixed
+  Hickory reference exports; qualify collector/driver, failure handling and Docker
+  backup/restore across two isolated disposable VMs with verified teardown.
+
 - Add a bounded target-local Linux soak collector with PID/API ownership checks,
   real resource/counter samples and fail-closed HTTP/storage/deadline validation.
 

@@ -12,6 +12,7 @@ use serde_json::json;
 use std::{
     error::Error,
     io::{self, BufRead, Read, Write},
+    net::SocketAddrV4,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -27,6 +28,8 @@ use tokio::{
 };
 #[path = "support/histogram.rs"]
 mod histogram;
+#[path = "support/wire_fixture.rs"]
+mod wire_fixture;
 use histogram::Histogram;
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 fn invalid(message: &str) -> io::Error {
@@ -42,7 +45,10 @@ enum Command {
     Serve {
         #[arg(long)]
         inject_wrong_answer: bool,
+        #[arg(long, default_value = "127.0.0.1:1053", value_parser = wire_fixture::listen_address)]
+        listen: SocketAddrV4,
     },
+    References,
     Check {
         #[arg(long, default_value_t = 100000)]
         rules: u32,
@@ -378,10 +384,10 @@ impl Connection {
         Ok(response)
     }
 }
-async fn serve(corrupt: bool) -> Result<()> {
-    let udp = Arc::new(UdpSocket::bind("127.0.0.1:1053").await?);
+async fn serve(corrupt: bool, listen: SocketAddrV4) -> Result<()> {
+    let udp = Arc::new(UdpSocket::bind(listen).await?);
     let control = UdpSocket::bind("127.0.0.1:1054").await?;
-    let tcp = TcpListener::bind("127.0.0.1:1053").await?;
+    let tcp = TcpListener::bind(listen).await?;
     let count = Arc::new(AtomicU64::new(0));
     let limits = Arc::new(Semaphore::new(256));
     let mut tasks = JoinSet::new();
@@ -677,7 +683,12 @@ async fn main() -> Result<()> {
     match Args::parse().command {
         Command::Serve {
             inject_wrong_answer,
-        } => serve(inject_wrong_answer).await,
+            listen,
+        } => serve(inject_wrong_answer, listen).await,
+        Command::References => {
+            println!("{}", serde_json::to_string(&wire_fixture::references()?)?);
+            Ok(())
+        }
         Command::Check { rules } if (1..=1_000_000).contains(&rules) => check(rules).await,
         Command::Run {
             scenario,

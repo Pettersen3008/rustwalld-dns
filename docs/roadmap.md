@@ -17,6 +17,6 @@ implementation. Preserve the reusable libraries and keep management out of DNS.
 Do not copy router-project CI, kernel lab requirements or feature plans here.
 
 The [backlog](planning/backlog.md) owns story priority/status and acceptance;
-[Sprint 07](planning/sprints/sprint-07.md) proposes representative lab qualification;
-[Sprint 06 review](reviews/sprint-06.md) records verified driver support and open gates.
+[Sprint 07](planning/sprints/sprint-07.md) delivers bounded collector preparation;
+its [review](reviews/sprint-07.md) retains the unready representative qualification.
 At closeout, update milestones using delivered evidence and the retrospective.

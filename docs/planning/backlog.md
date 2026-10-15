@@ -326,8 +326,10 @@ No representative/remote-collector/long-window acceptance is claimed.
 
 ### DNS-021 Qualify representative soak lab — E4 — M
 
-Status: Backlog. Priority: 7. Dependencies: DNS-020 and named authorized lab.
+Status: Backlog. Priority: 7. Dependencies: DNS-020, DNS-025 and named authorized lab.
 Sprint: 07 proposed; not Ready without target/workload/budget/authority prerequisites.
+The [two-VM proposal](../operations/soak-lab.md) is prepared, not activated or
+accepted as the operator's representative routed/storage workload.
 Acceptance: independent clients and representative routed/storage path, private
 fixtures, observed workload basis, numeric load/latency/resource/recovery budgets,
 verified backup and reversal, and at most 15-minute qualification including a
@@ -362,6 +364,26 @@ coverage/exclusions, private reproducible findings and severity/confidence;
 maintainer triage, regression-backed resolutions and explicit unresolved gaps.
 New relevant code needs review of its new diff. A self-review or passing scans
 cannot satisfy this gate. No delegation/contact/upload authority is inferred.
+
+### DNS-025 Implement bounded target-local soak collector — E4 — M
+
+Status: Done. Priority: 7. Dependencies: DNS-020. Sprint: 07.
+Split from DNS-021's concrete collector prerequisite; does not close qualification.
+Outcome: replace ignored scratch sampling with a reusable one-shot Linux collector.
+Acceptance: real PID/start/namespace/API ownership, proc/storage/status/metric values,
+strict numeric/identity parsing, bounded files/enumeration/HTTP/deadline/output,
+no redirects/proxies, no sample on collection failure and no target mutation. Trusted
+controller owns sequence/atomic handoff/remote transport; HTTPS remains unsupported.
+Verify local fault fixtures plus actual daemon-to-driver handoff and required gates.
+Spec: [bounded collector](../specs/DNS-025-soak-collector.md); separate agent design review accepted.
+No VM/service activation, real lab selection, long run or independent security claim.
+Accepted: separate agent design/code review; 18 collector regressions, all 34 Python
+tests, 473 workspace tests and required gates pass. Actual owned-daemon CLI checks
+prove valid samples/30 UDP-TCP replies, PID/listener refusal, wrong-answer failure
+and stale collection failure with complete accounting/cleanup. A bounded 70000-case
+seeded Python parser mutation run completed without unexpected exceptions; no
+sanitizer/coverage-guided claim. Root/fuzz audit/deny pass with retained warnings.
+Evidence: target/review/sprint-07/; qualification/DNS-021 remains unready.
 
 ## Deferred ideas
 

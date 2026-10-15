@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add a bounded target-local Linux soak collector with PID/API ownership checks,
+  real resource/counter samples and fail-closed HTTP/storage/deadline validation.
+
 - Add a bounded remote soak example with strict run records, UDP/TCP answer
   oracles, explicit load/cancellation accounting, resource collector input and
   capped window/bin evidence; preserve existing local rehearsals.

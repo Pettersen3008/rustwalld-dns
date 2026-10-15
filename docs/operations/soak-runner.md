@@ -55,6 +55,35 @@ Weights repeat deterministically; tiny intervals may not cover the whole mix.
 
 ## Collector boundary
 
+The target-local [one-shot collector](../../scripts/soak-collect.py) emits the
+existing envelope from actual Linux proc/status/metrics observations:
+
+```sh
+python3 scripts/soak-collect.py --run-id qualification-demo --target-id appliance \
+  --pid 1234 --start-ticks 56789 --api-url http://127.0.0.1:8080 \
+  --storage-directory /srv/rustwalld-soak/state --sequence 0 --deadline-ms 750
+```
+
+Replace PID/start ticks and all identity/scope values with the controller's actual
+target. The collector and target must share the network namespace; owned listening
+socket inodes must match the numeric loopback HTTP endpoint before and after the
+observation. It refuses another/reused PID, ambiguous ownership or changed generation.
+No redirects, proxies, credentials or HTTPS fallback. HTTP responses need exactly
+one explicit bounded Content-Length and no Transfer-Encoding; unsupported framing
+or incomplete data fails. HTTPS/password-mode targets need additional collector
+support before qualification. Changing/disappearing FDs fail conservatively.
+
+The tool bounds ordinary proc input to 64 KiB, TCP tables to 1 MiB, HTTP bodies
+to 64 KiB, FD/storage entries to 4096, storage depth to eight and JSON to 16 KiB.
+Storage sums regular-file logical sizes via descriptor-relative no-follow access,
+including sidecars inside the declared directory; it is not allocated disk usage
+or an atomic filesystem snapshot. Missing/special/changed entries fail, never zero-fill.
+The 100–2000 ms collection watchdog timestamps observation start and ends before
+stdout. Controller must additionally bound the whole invocation/output, require
+successful exit and complete validated JSON, then atomically publish a private
+temporary capture. Never stream stdout directly into the live sample file.
+Keep controller sequence monotonic; the collector never installs files or loops.
+
 An operator collector atomically replaces a local regular file at least once a
 second. Actual remote collection, authenticated transport and aligned clocks are
 lab prerequisites; a file path does not prove provenance. Example envelope:

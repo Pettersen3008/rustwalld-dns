@@ -107,3 +107,6 @@ network stack and router DNS/DHCP unchanged unless explicitly authorized.
 Native systemd activation, target ARM hardware, independent security review and a
 24–72-hour representative-network soak are separate [release gates](../product/scope.md).
 Do not mark those Done using local/container evidence.
+
+[Soak protocol](soak.md) and [security review scope](security-review.md) distinguish
+future lab/reviewer acceptance from prepared local fixtures and source packets.

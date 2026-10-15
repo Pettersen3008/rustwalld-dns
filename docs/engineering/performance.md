@@ -61,6 +61,13 @@ instrumentation. scripts/compare-appliances.py runs pinned competitors with loca
 mocks and requires Linux cgroup v2, Docker and distinct physical cores. A
 closed-loop comparison is not a maximum-capacity or universal product-speed claim.
 
+The [representative soak protocol](soak.md) defines the distinct long-run target,
+workload/oracle, fault windows, recorder bounds and acceptance prerequisites. Existing
+short examples spawn local fixtures; they are not a remote representative-soak runner.
+Their shared histogram uses a 2-second cap and 21,001 bins, retains uncapped maximum
+and clipped counts, and excludes timeouts from reply quantiles. Preserve counts and
+precision when comparing reports; a clipped or empty tail is not a latency pass.
+
 ## Retained design choices
 
 Current code uses shared immutable filter strings, borrowed decision lookups,

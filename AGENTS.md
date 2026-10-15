@@ -13,7 +13,7 @@ under ignored `target/ponytail-loop/`, not in a second tracker.
 
 1. Read [docs/README.md](docs/README.md), [architecture](docs/architecture.md),
    [workflow](docs/engineering/workflow.md) and [standards](docs/engineering/standards.md).
-2. Read the [current sprint](docs/planning/sprints/sprint-05.md), then select the
+2. Read the [current sprint](docs/planning/sprints/sprint-06.md), then select the
    highest-priority ready story in [backlog](docs/planning/backlog.md). Follow a
    direct user request first; create/update its story as part of the work.
 3. Inspect the affected code, tests and linked contracts. Repository facts beat

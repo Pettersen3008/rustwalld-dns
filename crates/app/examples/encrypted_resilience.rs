@@ -975,7 +975,7 @@ async fn main() {
                 .to_owned()
         })
         .unwrap_or_default();
-    let report = json!({"hardware":std::fs::read_to_string("/proc/cpuinfo").unwrap().lines().find(|l|l.starts_with("model name")).unwrap_or("unknown"),"os":output("uname","-srmo"),"rustc":output("rustc","--version"),"binary":args.binary,"binary_sha256":hash,"duration_ms_per_phase":args.duration_ms,"clients_per_lane":args.clients,"https_streams_per_connection":args.https_streams,"upstream_timeout_ms":80,"connections_per_address":2,"histogram":"exact us through 1 ms; 100 us upper-bound buckets thereafter; 1 s cap","tls":tls,"https":https});
+    let report = json!({"hardware":std::fs::read_to_string("/proc/cpuinfo").unwrap().lines().find(|l|l.starts_with("model name")).unwrap_or("unknown"),"os":output("uname","-srmo"),"rustc":output("rustc","--version"),"binary":args.binary,"binary_sha256":hash,"duration_ms_per_phase":args.duration_ms,"clients_per_lane":args.clients,"https_streams_per_connection":args.https_streams,"upstream_timeout_ms":80,"connections_per_address":2,"histogram":"exact us through 1 ms, 100 us upper bounds thereafter, 2 s cap; fixed 21001 bins per client","tls":tls,"https":https});
     let text = serde_json::to_string_pretty(&report).unwrap() + "\n";
     if let Some(path) = &args.output {
         std::fs::write(path, &text).unwrap();

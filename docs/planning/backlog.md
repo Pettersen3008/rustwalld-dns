@@ -147,13 +147,21 @@ observations and recovery; retain faults and explicit workload limits. A loopbac
 fixture cannot satisfy representative-network acceptance.
 Define the protocol first in DNS-018; activation and the long run need a separately
 authorized representative target and execution window.
+Delivery split: DNS-020 runner, DNS-021 lab qualification, DNS-022 long window,
+DNS-023 analysis. All four and the original acceptance must hold before DNS-009 Done.
 
 ### DNS-010 Scope independent security review — E4 — S
 
-Status: Backlog. Priority: 8. Dependencies: DNS-004.
+Status: Done. Priority: 8. Dependencies: DNS-004. Sprint: 05.
 Acceptance: threat surfaces, reviewable source identity, parser/admission/publication/
 auth scope, known limits and reproducible local checks prepared. Actual independent
 review needs an identified independent reviewer; self-review does not meet that gate.
+Accepted: [grounded review brief](../engineering/security-review.md) maps trust
+surfaces/invariants/tests, known limits and fuzz gaps. Local source packet includes
+base plus diff/status, complete source hashes/modes and current check records;
+extracted source verifies and passes fmt/docs. Root/fuzz audit and deny pass with
+retained deny warnings. No reviewer contact, upload or independent review occurred.
+Evidence: target/review/sprint-05/security-packet/; DNS-024 tracks actual review.
 
 ### DNS-011 Validate target ARM hardware — E4 — M
 
@@ -268,13 +276,83 @@ audit plus both HTTPS flows pass. Self-review; [Sprint 02 review](../reviews/spr
 
 ### DNS-018 Define representative soak protocol — E4 — S
 
-Status: Backlog. Priority: 7 (DNS-009 prerequisite). Dependencies: DNS-008. Sprint: 05 proposed.
+Status: Done. Priority: 7 (DNS-009 prerequisite). Dependencies: DNS-008. Sprint: 05.
 Outcome: turn DNS-009's large soak into executable setup, measurement and analysis
 slices before starting a long run. Acceptance: grounded query/client mix, correctness
 and resource/latency observations, promotion/restart/storage/upstream failure matrix,
 backup/recovery, duration/stop criteria and evidence schema; identify missing target
 and execution authority explicitly. Create bounded follow-up stories from that
 protocol. Excludes activation, router changes and starting/scheduling a soak.
+Protocol: [representative soak](../engineering/soak.md), self-reviewed against
+current examples, histogram/resources and durable API/recovery contracts.
+Accepted: workload/oracle, target/run-record prerequisites, numeric-budget gate,
+fault/undo matrix, duration/stop/evidence bounds and DNS-020–023 delivery split are
+defined. Missing representative lab/window authority remains explicit; no long
+run started. Existing short CLI rehearsal and histogram checks ground the limits;
+they do not establish representative performance. Self-reviewed; docs checks pass.
+
+### DNS-019 Correct rehearsal histogram metadata — E4 — S
+
+Status: Done. Priority: 6 (acceptance defect). Dependencies: DNS-008. Sprint: 05 rework.
+Confirmed: shared histogram bins cap at 2,000,000 us with 21,001 bins, while
+control_soak describes 1 s/11,001 bins and encrypted_resilience describes 1 s.
+Acceptance: both emitted descriptions match the existing 2 s/21,001-bin helper;
+preserve sampling, quantiles, clipping, workloads and correctness assertions.
+Verify actual report output and existing >1 s/clipping regressions. Tiny fixture
+metadata correction needs no standalone design; no runtime/performance change.
+Accepted: fresh before/after CLI reports prove the correction; all nine example
+regressions pass, including eight shared histogram tests. Source comparison confirms
+only two strings changed, with byte-identical daemon and histogram helper. Required
+workspace gates pass. Evidence: target/review/sprint-05/; self-reviewed.
+
+### DNS-020 Implement bounded remote soak runner — E4 — M
+
+Status: Backlog. Priority: 7. Dependencies: DNS-018. Sprint: 06 proposed.
+Outcome: exercise an independently hosted appliance without respawning/resetting
+it per cycle. Acceptance: validate the protocol's run record, bounded offered-rate
+driver/oracle, explicit load skips/cancellations, fixed resource/histogram windows,
+counter resets and output limits; reject wrong answers, missing budgets, clipping
+and unsafe/unbounded inputs. Preserve existing short local modes. Verify with
+local mocks, injected wrong answers, recorder limits and cleanup. No external
+activation or long run; ground a short spec before implementation.
+
+### DNS-021 Qualify representative soak lab — E4 — M
+
+Status: Backlog. Priority: 7. Dependencies: DNS-020 and named authorized lab.
+Acceptance: independent clients and representative routed/storage path, private
+fixtures, observed workload basis, numeric load/latency/resource/recovery budgets,
+verified backup and reversal, and at most 15-minute qualification including a
+wrong-answer sentinel. Freeze the run record and exact long-window authority.
+No workstation/router takeover or automatic long-run start. Missing target,
+representativeness or authority keeps this story unready.
+
+### DNS-022 Execute representative soak window — E4 — M
+
+Status: Backlog. Priority: 7. Dependencies: DNS-021 and authorized 24–72-hour window.
+Acceptance: complete the protocol's continuous workload and planned fault/recovery
+matrix with bounded complete evidence, stop on declared failure, and restore the
+agreed service state. Retain failed/incomplete attempts with new IDs for retries.
+Scheduling/background execution needs explicit authority; native VM acceptance
+alone does not authorize this run. Measurement results feed DNS-023.
+
+### DNS-023 Analyze soak and reconcile reliability gate — E4 — S
+
+Status: Backlog. Priority: 7. Dependencies: DNS-022.
+Acceptance: verify source/topology/load/duration, reconcile request and metric
+counts, merge histogram bins, review latency/resource tails, failures and recovery,
+and triage every defect/gap without dropping adverse windows. Close DNS-009 only
+when its full interval, representative workload and phase criteria hold; an
+incomplete/failed run remains open with a specific next action.
+
+### DNS-024 Perform independent security review — E4 — L
+
+Status: Backlog. Priority: 8. Dependencies: DNS-010 and identified independent reviewer.
+Refine/split with the reviewer before Ready: agree exact source, surfaces, method,
+access and execution limits. Acceptance: independent reviewer identity/date,
+coverage/exclusions, private reproducible findings and severity/confidence;
+maintainer triage, regression-backed resolutions and explicit unresolved gaps.
+New relevant code needs review of its new diff. A self-review or passing scans
+cannot satisfy this gate. No delegation/contact/upload authority is inferred.
 
 ## Deferred ideas
 

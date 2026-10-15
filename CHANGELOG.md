@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Correct control/encrypted rehearsal report descriptions to the shared
+  2-second, 21,001-bin histogram; sampling and query behavior are unchanged.
+
 - Add an explicit fresh-VM systemd mode to the package smoke, with effective
   sandbox probes, unsafe-target refusal and failure cleanup. Verify native
   service/DNS/recovery on Debian 13/KVM; leave the service disabled and guest off.

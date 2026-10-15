@@ -97,6 +97,13 @@ and keep discriminator bytes intact.
 `soak_record` covers the strict example run record, frozen Hickory templates and
 collector envelopes without filesystem/network operations; seed from its JSON and raw DNS
 fixtures, with `-max_len=262144` and the same bounded sanitizer command above.
+`lease_inventory` has small synthetic DHCPv4 seeds in fuzz/seeds/lease_inventory/.
+Replay tests assert parser fields, intended rejection categories and exact 1-MiB/
+4096-line boundaries. Copy those seeds to a fresh ignored corpus after separately
+building the target; use `-max_len=1048577`, RSS <=1024 MiB, per-input timeout 5s
+and a whole-process deadline. It exercises pure parsing with fixed time, not file
+intake, discovery or operational inventory. Identity and server-TLS seed preparation
+remain [draft follow-ups](../planning/sprints/sprint-09.md).
 A short run is supplementary evidence, not a
 security audit or proof of parser safety. Preserve crashing inputs locally.
 

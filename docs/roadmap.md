@@ -19,6 +19,7 @@ Do not copy router-project CI, kernel lab requirements or feature plans here.
 The [backlog](planning/backlog.md) owns story priority/status and acceptance;
 [Sprint 08 review](reviews/sprint-08.md) accepts truncation repair, secure
 collection, large-reply/live-cancellation and offline evidence handling.
-[Sprint 09](planning/sprints/sprint-09.md) prepares the remaining representative
-qualification; readiness and external gates remain explicit.
+[Sprint 09](planning/sprints/sprint-09.md) closes bounded parser-fixture gaps and
+prepares the remaining representative qualification; readiness and external gates
+remain explicit.
 At closeout, update milestones using delivered evidence and the retrospective.

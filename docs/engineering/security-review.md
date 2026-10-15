@@ -86,7 +86,11 @@ offline report consistency checks and failure/cancellation coverage. Sprint 08 a
 repairs production truncated-response encoding, plus example oracle/file/phase
 boundaries. Include every later diff and the current locked dependencies in the
 actual review target; the historical Sprint 05 packet does not represent them.
-Current verification evidence is under target/review/sprint-08/. Neither engineering
+Current verification evidence is under target/review/sprint-08/ and sprint-09/.
+For the actual review, prepare a fresh local packet from an explicitly selected
+clean commit, retain exact file hashes/modes and command records, and verify the
+extracted source before running checks. The later lease corpus is synthetic parser
+coverage; it does not represent an operational device inventory. Neither engineering
 peer review nor the offline checker satisfies independent security acceptance.
 
 Verify every extracted file against the manifest before review/build, and compare
@@ -110,10 +114,12 @@ cargo deny check
 ```
 
 Use the seeded sanitizer procedure in verification.md for affected parsers, plus
-the appropriate table targets. `identity`, `server_tls` and `lease_inventory`
+the appropriate table targets. `identity` and `server_tls`
 currently have no checked-in seed directory: prepare bounded public valid/invalid
 fixtures before claiming seeded mutation coverage. Target presence alone is not
 fuzz evidence. Build a cold fuzz target separately; timeout means incomplete.
+`lease_inventory` now has ten synthetic valid/invalid seeds and five actual-parser
+replay/boundary tests; see [DNS-036](../specs/DNS-036-lease-parser-seeds.md).
 Console changes need Bun audit and real-daemon HTTP/HTTPS browser/role checks.
 Native destructive fixtures require their explicitly authorized fresh VM; ordinary
 test permission does not authorize production activation or live-data fault tests.

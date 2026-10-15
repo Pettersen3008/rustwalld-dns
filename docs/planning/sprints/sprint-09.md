@@ -1,12 +1,59 @@
 # Sprint 09 Qualify representative reliability prerequisites
 
 Planning window: 2026-10-19–25; dates do not schedule execution.
-Status: Proposed; no Ready execution story yet. Goal: turn the selected reference
-profile into grounded representative qualification, preserving all M2 gates.
+Status: Active preparation. Goal: close runnable security-review fixture gaps and
+prepare grounded representative qualification, preserving all M2 gates.
+DNS-036 executes in the remaining 2026-10-15 two-hour window; dates above are a
+planning horizon, not a scheduled run or velocity estimate.
 Personal context; repository planning, no Jira. Capacity is unknown until actual
 target/workload/access evidence exists; reserve roughly 20% for defects/rework.
 
-## Candidate order
+## Selected engineering slice
+
+DNS-036 (S,1 point): seed/replay the existing pure lease parser; one isolated worker,
+coordinator integration/acceptance and separate read-only review. No runtime,
+network, dependency or operational inventory changes. Other missing parser corpora
+remain explicit later refinement; stop at the existing hard limit.
+
+- [x] Inspect target, refine and separately review the bounded seed spec.
+- [x] Implement tiny synthetic corpus and actual-parser replay/boundary regressions.
+- [x] Review source, rebuild/replay seeded ASAN and run required local checks.
+- [x] Reconcile acceptance, retrospective and next readiness checkpoint.
+
+## Bounded-run review and retrospective
+
+2026-10-15: DNS-036 accepted within the existing two-hour session. One isolated
+worker delivered ten synthetic seeds and five actual-parser regressions; coordinator
+verified exact integration and a separate read-only agent reviewed design/source/
+evidence. Valid/invalid semantics, full fields and exact 1-MiB/4096-line boundaries
+pass. Fresh rebuilt seeded ASAN completed 51,323,664 iterations in 901 seconds,
+exit 0; no finding observed. This is supplementary local coverage, not parser
+safety proof or DNS-024 independent review. No runtime/dependency/UI change.
+
+Required fmt, strict Clippy, 497 default/510 all-feature Rust tests, 42 focused
+example tests, 60 Python tests, docs and root/fuzz audit/deny pass; warnings remain
+in logs. MSRV, benchmark compilation, strict rustdoc, consumers and archives pass.
+Raw evidence and failed helper attempts stay under target/review/sprint-09/.
+Performance and UI checks were not needed for this fixture-only slice; no new
+architectural decision required an ADR. Agent cost/velocity remains unknown.
+
+Separate review of the ignored local packet helper caught an overbroad public
+template refusal and incomplete descendant cleanup; both were corrected before
+snapshot execution. Process experiment: DNS-037/038 owners must prove at least one
+valid corpus input reaches the real API before mutation, then assert exact bounds
+in deterministic tests. Measure successful branch replay, not campaign iteration
+count as coverage. Those stories remain drafts for the next bounded session;
+representative qualification and sprint closeout are still pending.
+
+## Next refinement
+
+DNS-037 and DNS-038 are grounded draft corpus slices for the other two review-brief
+gaps. Public dummy identity data and a deliberately public TLS fixture pair need
+separate readiness review. They are not selected for implementation before the
+current hard stop; reserve verification/closeout time rather than starting a packet
+that cannot be accepted within the window.
+
+## Later candidate order
 
 | Order | Story | Readiness |
 | --- | --- | --- |

@@ -546,6 +546,38 @@ current-source native cancellation/late-completion outputs classify consistent
 failed (exit 2), preserve old observations/origins and dispatch no new requests.
 Separate source/evidence review and final gates pass; see [Sprint 08 review](../reviews/sprint-08.md).
 
+### DNS-036 Seed bounded lease-parser review coverage — E4 — S
+
+Status: Done. Priority: 7. Dependencies: DNS-010. Sprint: 09.
+Grounding: the review brief names missing lease_inventory seeds; target is pure
+UTF-8 parsing with fixed now=100, not network discovery or operational inventory.
+Acceptance: small synthetic valid/invalid corpus, actual-parser replay/field/boundary
+assertions and rebuilt bounded seeded ASAN; required local checks and separate
+review. No runtime behavior, dependencies or independent security approval changes.
+Spec: [lease-parser corpus](../specs/DNS-036-lease-parser-seeds.md), separate design review accepted.
+Accepted: ten synthetic seeds, five full-field/rejection/exact-boundary regressions,
+separate source/evidence review and all required/compatibility checks pass. Fresh
+seeded ASAN completed 51,323,664 iterations/901 seconds, exit 0; no safety or
+independent-review claim. Evidence: target/review/sprint-09/.
+
+### DNS-037 Seed pure identity-document review coverage — E4 — M
+
+Status: Backlog. Priority: 7. Dependencies: DNS-010. Candidate: Sprint 09 follow-up.
+Outcome: public synthetic corpus reaches valid/invalid validate_document branches
+without password hashing, file load/save, provisioning or actual credentials.
+Acceptance: reviewed dummy PHC/TOTP/token fixture policy, semantic and boundary
+replay, rebuilt bounded seeded ASAN and required checks; no auth behavior changes.
+Draft: [identity-parser corpus](../specs/DNS-037-identity-parser-seeds.md).
+
+### DNS-038 Seed pure TLS-configuration review coverage — E4 — M
+
+Status: Backlog. Priority: 7. Dependencies: DNS-010. Candidate: Sprint 09 follow-up.
+Outcome: explicitly public matching fixture pair reaches both packed server_tls
+modes and meaningful parser/configuration errors, without handshakes or live keys.
+Acceptance: reviewed public-pair construction, exact discriminator/separator replay,
+PEM/chain/boundary tests and rebuilt bounded seeded ASAN; no TLS/trust changes.
+Draft: [TLS-parser corpus](../specs/DNS-038-tls-parser-seeds.md).
+
 ## Deferred ideas
 
 DoQ/DNSCrypt, automatic HA, external identity and firewall bypass prevention are

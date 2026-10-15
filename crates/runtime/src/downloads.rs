@@ -479,6 +479,7 @@ mod tests {
     fn config() -> PolicyConfigSet {
         let mut config = PolicyConfigSet::default();
         config.policies[0].lists = vec![rustwalld_dns_filter::ListInput {
+            syntax: Default::default(),
             name: "remote".into(),
             action: rustwalld_dns_filter::Action::Block,
             rules: "ads.test\n".into(),

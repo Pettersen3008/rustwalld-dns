@@ -45,11 +45,13 @@ async fn binary_restart_keeps_absolute_exception_expiry_and_permanent_assertions
     }
     config.policy.upstreams[0].addresses = vec![upstream_addr];
     config.policy.policies[0].lists = vec![rustwalld_dns_filter::ListInput {
+        syntax: Default::default(),
         name: "deny".into(),
         action: rustwalld_dns_filter::Action::Block,
         rules: "repair.test".into(),
     }];
     config.policy.assertions = vec![rustwalld_dns_policy::Assertion {
+        qtype: 1,
         client: "127.0.0.1".parse().unwrap(),
         domain: "repair.test".into(),
         expected: rustwalld_dns_filter::Action::Block,
@@ -93,6 +95,8 @@ async fn binary_restart_keeps_absolute_exception_expiry_and_permanent_assertions
             let mut candidate = config.policy.clone();
             candidate.policies[0].temporary_exceptions.push(
                 rustwalld_dns_policy::TemporaryException {
+                    clients: vec![],
+                    include_subdomains: false,
                     name: "repair".into(),
                     domain: "repair.test".into(),
                     expires_at,
@@ -210,7 +214,7 @@ async fn binary_restores_revision_and_handles_sigterm() {
     let base = format!("http://{}", config.api_listen);
     let client = reqwest::Client::new();
     let token = "process-test-token-with-16-bytes";
-    for round in 0..2 {
+    for round in 0..3 {
         let mut process = Process(
             Command::new(env!("CARGO_BIN_EXE_rustwalld-dns"))
                 .arg("--config")
@@ -238,14 +242,24 @@ async fn binary_restores_revision_and_handles_sigterm() {
         .await
         .unwrap();
         if round == 0 {
-            let mut policy = config.policy.clone();
-            policy.policies[0]
-                .lists
-                .push(rustwalld_dns_filter::ListInput {
-                    name: "lifecycle".into(),
-                    action: rustwalld_dns_filter::Action::Block,
-                    rules: "lifecycle.test".into(),
-                });
+            let source = dir.path().join("AdGuardHome.yaml");
+            std::fs::write(&source,"dns: {upstream_dns: ['127.0.0.1:15401']}\nclients: {persistent: [{name: Work, ids: [127.0.0.1], use_global_settings: true, upstreams: ['127.0.0.1:15402', '[/delegation.test/]127.0.0.1:15403']}]}\nuser_rules: [lifecycle.test]\n").unwrap();
+            let preview = Command::new(env!("CARGO_BIN_EXE_rustwalld-dns"))
+                .args(["migrate", "--source", "adguard", "--input"])
+                .arg(&source)
+                .arg("--base-config")
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert!(
+                preview.status.success(),
+                "{}",
+                String::from_utf8_lossy(&preview.stderr)
+            );
+            let report: Value = serde_json::from_slice(&preview.stdout).unwrap();
+            assert_eq!(report["ready"], true);
+            let policy: rustwalld_dns_policy::PolicyConfigSet =
+                serde_json::from_value(report["config"].clone()).unwrap();
             let tag = etag(&client, &base, token).await;
             let response = client
                 .put(format!("{base}/api/v1/config"))
@@ -259,12 +273,61 @@ async fn binary_restores_revision_and_handles_sigterm() {
         } else {
             assert_eq!(status["generation"], 2);
         }
+        let explanation: Value = client
+            .get(format!(
+                "{base}/api/v1/explain?client=127.0.0.1&domain=resolver.test"
+            ))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            explanation["upstream"],
+            "adguard/client-0/upstreams/default"
+        );
+        assert_eq!(explanation["client_name"], "Work");
+        let active: Value = client
+            .get(format!("{base}/api/v1/config"))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(active["upstreams"][2]["addresses"][0], "127.0.0.1:15402");
+        assert_eq!(active["policies"][1]["ds_routing"], "parent");
+        for (kind, upstream) in [
+            (1, "adguard/client-0/upstreams/route-0"),
+            (43, "adguard/client-0/upstreams/default"),
+        ] {
+            let trace: Value = client
+                .get(format!(
+                    "{base}/api/v1/explain?client=127.0.0.1&domain=delegation.test&qtype={kind}"
+                ))
+                .bearer_auth(token)
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            assert_eq!(trace["upstream"], upstream);
+        }
+
         // A real packet must hit the restored/updated filter, without upstream I/O.
         let mut request = hickory_proto::op::Message::query();
         request.metadata.recursion_desired = true;
         request.add_query(hickory_proto::op::Query::query(
             hickory_proto::rr::Name::from_ascii("lifecycle.test.").unwrap(),
-            hickory_proto::rr::RecordType::A,
+            if round == 2 {
+                hickory_proto::rr::RecordType::DS
+            } else {
+                hickory_proto::rr::RecordType::A
+            },
         ));
         let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
         socket
@@ -302,6 +365,37 @@ async fn binary_restores_revision_and_handles_sigterm() {
         .await
         .unwrap();
         assert!(status.success());
+        if round == 0 {
+            let result = Command::new(env!("CARGO_BIN_EXE_rustwalld-dns"))
+                .arg("backup")
+                .arg("--database")
+                .arg(&config.database)
+                .arg("--output")
+                .arg(dir.path().join("backup.sqlite"))
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        } else if round == 1 {
+            config.database = dir.path().join("restored.sqlite");
+            let result = Command::new(env!("CARGO_BIN_EXE_rustwalld-dns"))
+                .arg("restore")
+                .arg("--backup")
+                .arg(dir.path().join("backup.sqlite"))
+                .arg("--database")
+                .arg(&config.database)
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            std::fs::write(&path, toml::to_string(&config).unwrap()).unwrap();
+        }
     }
 }
 
@@ -317,4 +411,36 @@ async fn etag(client: &reqwest::Client, base: &str, token: &str) -> String {
         .to_str()
         .unwrap()
         .to_owned()
+}
+
+#[test]
+fn malformed_config_errors_never_dump_input_values_or_unknown_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    for source in [
+        "dns_listen=\"private-fixture-secret-value\"\n",
+        "\"private-fixture-secret-key\"=\"private-fixture-secret-value\"\n",
+        "# private-fixture-secret-comment ø\napi_listen = [\n",
+    ] {
+        std::fs::write(&path, source).unwrap();
+        let error = rustwalld_dns::config::Config::read(&path).unwrap_err();
+        for text in [error.to_string(), format!("{error:?}")] {
+            assert!(text.contains("invalid TOML configuration"));
+            assert!(!text.contains("private-fixture-secret"));
+        }
+        let output = Command::new(env!("CARGO_BIN_EXE_rustwalld-dns"))
+            .arg("--config")
+            .arg(&path)
+            .arg("--check-config")
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(text.contains("invalid TOML configuration"));
+        assert!(!text.contains("private-fixture-secret"));
+    }
 }

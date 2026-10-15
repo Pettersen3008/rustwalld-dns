@@ -1,8 +1,8 @@
 # Support and feedback
 
 Rustwall is a public alpha for Linux homelab testing. Start with the
-[README](README.md), [alpha scope](docs/public-alpha.md) and
-[installation and recovery guide](docs/operations.md).
+[README](README.md), [alpha scope](docs/product/scope.md) and
+[installation and recovery guide](docs/operations/install.md).
 
 For questions, installation problems, feature requests and usability feedback,
 open a [GitHub issue](https://github.com/Pettersen3008/rustwalld-dns/issues/new).

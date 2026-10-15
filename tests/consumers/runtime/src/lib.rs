@@ -45,6 +45,7 @@ mod tests {
         config.policy.upstreams[0].addresses = vec!["127.0.0.1:9".parse().unwrap()];
         if workers != 0 {
             config.policy.policies[0].lists.push(ListInput {
+                syntax: Default::default(),
                 name: "large".into(),
                 action: Action::Block,
                 rules: (0..40000).map(|i| format!("=rule{i}.test\n")).collect(),
@@ -56,6 +57,7 @@ mod tests {
         if workers != 0 {
             let mut bad = config.policy.clone();
             bad.assertions.push(rustwalld_dns_core::Assertion {
+                qtype: 1,
                 client: "127.0.0.1".parse().unwrap(),
                 domain: "allowed.test".into(),
                 expected: Action::Block,
@@ -101,6 +103,7 @@ mod tests {
         database.execute_batch("BEGIN IMMEDIATE").unwrap();
         let mut candidate = control.engine().snapshot().config().clone();
         candidate.policies[0].lists.push(ListInput {
+            syntax: Default::default(),
             name: "test".into(),
             action: Action::Block,
             rules: "ads.test".into(),
@@ -161,6 +164,7 @@ mod tests {
         };
         config.policy.upstreams[0].addresses = vec!["127.0.0.1:9".parse().unwrap()];
         config.policy.policies[0].lists.push(ListInput {
+            syntax: Default::default(),
             name: "base".into(),
             action: Action::Block,
             rules: (0..40000).map(|i| format!("=rule{i}.test\n")).collect(),
@@ -175,6 +179,7 @@ mod tests {
         let control = runtime.control().clone();
         let mut failed = config.policy.clone();
         failed.assertions.push(rustwalld_dns_core::Assertion {
+            qtype: 1,
             client: "127.0.0.1".parse().unwrap(),
             domain: "allowed.test".into(),
             expected: Action::Block,
@@ -195,6 +200,7 @@ mod tests {
         assert_eq!(control.next_generation(), 3);
         let mut shadow = config.policy.clone();
         shadow.policies[0].lists.push(ListInput {
+            syntax: Default::default(),
             name: "shadow".into(),
             action: Action::Block,
             rules: "shadow.test".into(),

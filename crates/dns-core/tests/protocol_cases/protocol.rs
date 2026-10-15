@@ -169,6 +169,7 @@ async fn escaped_dot_in_dns_label_does_not_false_block_suffix() {
     config.policies[0]
         .lists
         .push(rustwalld_dns_filter::ListInput {
+            syntax: Default::default(),
             name: "deny".into(),
             action: rustwalld_dns_filter::Action::Block,
             rules: "example.com".into(),
@@ -236,6 +237,7 @@ async fn slow_upstream_server(
     policy.upstreams[0].addresses = vec![silent.local_addr().unwrap()];
     policy.upstreams[0].timeout_ms = 1500;
     policy.policies[0].lists = vec![rustwalld_dns_filter::ListInput {
+        syntax: Default::default(),
         name: "deny".into(),
         action: rustwalld_dns_filter::Action::Block,
         rules: "blocked.example".into(),

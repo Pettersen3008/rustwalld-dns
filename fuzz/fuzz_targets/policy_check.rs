@@ -18,12 +18,12 @@ fuzz_target!(|input: &str| {
     let mut config = PolicyConfigSet::default();
     config.upstreams[0].addresses = vec![SocketAddr::new(local, 9)];
     config.policies[0].lists = vec![
-        ListInput {
+        ListInput { syntax: Default::default(),
             name: "deny".into(),
             action: Action::Block,
             rules: "ads.test\nnas.test\n=bücher.test\n".repeat(20),
         },
-        ListInput {
+        ListInput { syntax: Default::default(),
             name: "allow".into(),
             action: Action::Allow,
             rules: "=safe.ads.test".into(),
@@ -62,6 +62,7 @@ fuzz_target!(|input: &str| {
         },
     }];
     config.policies[0].temporary_exceptions = vec![TemporaryException {
+        clients: vec![], include_subdomains: false,
         name: "repair".into(),
         domain: if mode == 5 {
             input.split('\n').next().unwrap_or("").into()

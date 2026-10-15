@@ -524,11 +524,13 @@ async fn run(args: &Args, https: bool) -> Value {
     config.policy.upstreams[0].addresses = vec![endpoints[0].address(), endpoints[1].address()];
     config.policy.upstreams[0].timeout_ms = 80;
     config.policy.policies[0].lists = vec![rustwalld_dns_filter::ListInput {
+        syntax: Default::default(),
         name: "base".into(),
         action: rustwalld_dns_filter::Action::Block,
         rules: "blocked.test".into(),
     }];
     config.policy.assertions = vec![Assertion {
+        qtype: 1,
         client: "127.0.0.1".parse().unwrap(),
         domain: "blocked.test".into(),
         expected: rustwalld_dns_filter::Action::Block,

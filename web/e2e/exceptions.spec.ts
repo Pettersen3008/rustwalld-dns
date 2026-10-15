@@ -1,5 +1,6 @@
+import { revisionHeaders } from "./helpers";
 import { test, expect } from "@playwright/test";
-import type { Configuration, TemporaryState } from "../src/api";
+import type { Configuration, TemporaryState } from "../src/lib/api";
 import { authorization, baseline, dns, login, reset } from "./helpers";
 test.beforeEach(async ({ request }) => {
   await reset(request);
@@ -11,20 +12,14 @@ test("temporary allow validates permanent policy, shadows, promotes, explains an
 }, info) => {
   await login(page);
   await page.getByRole("link", { name: "Policies", exact: true }).click();
-  await page
-    .getByRole("tab", { name: "Temporary exceptions", exact: true })
-    .click();
+  await page.getByRole("tab", { name: "Temporary exceptions", exact: true }).click();
   await page.getByLabel("Exception name").fill("TV repair");
   await page.getByLabel("Exact domain").fill("ads.test");
   await page.getByLabel("Allow for").selectOption("900");
-  await page
-    .getByRole("button", { name: "Add temporary allow to draft" })
-    .click();
+  await page.getByRole("button", { name: "Add temporary allow to draft" }).click();
   await expect(page.locator(".exception-row")).toContainText("TV repair");
   expect(await dns("ads.test")).toBe(3);
-  await page
-    .getByRole("button", { name: "Validate draft", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Validate draft", exact: true }).click();
   await expect(page.getByRole("status")).toContainText("Validation passed");
   await page.getByRole("button", { name: "Stage in shadow" }).click();
   expect(await dns("ads.test")).toBe(3);
@@ -67,40 +62,28 @@ test("temporary allow validates permanent policy, shadows, promotes, explains an
     .getByRole("button", { name: "ads.test", exact: true })
     .first()
     .click();
-  await page
-    .getByRole("button", { name: "Explain with current policy" })
-    .click();
-  await expect(page.getByRole("dialog")).toContainText(
-    "Temporary allow: TV repair",
-  );
+  await page.getByRole("button", { name: "Explain with current policy" }).click();
+  await expect(page.getByRole("dialog")).toContainText("Temporary allow: TV repair");
   await expect(page.getByRole("dialog")).toContainText("Exception 1");
   await page.keyboard.press("Escape");
   await page.getByRole("link", { name: "Policies", exact: true }).click();
-  await page
-    .getByRole("tab", { name: "Temporary exceptions", exact: true })
-    .click();
+  await page.getByRole("tab", { name: "Temporary exceptions", exact: true }).click();
   await expect(page.locator(".exception-row")).toContainText("ACTIVE");
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({
     path: info.outputPath("temporary-allow.png"),
     fullPage: true,
   });
-  await page
-    .getByRole("button", { name: "Remove exception TV repair from draft" })
-    .click();
+  await page.getByRole("button", { name: "Remove exception TV repair from draft" }).click();
   expect(await dns("ads.test")).toBe(0);
-  await page
-    .getByRole("button", { name: "Validate draft", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Validate draft", exact: true }).click();
   await expect(page.getByRole("status")).toContainText("Validation passed");
   await page.getByRole("button", { name: "Stage in shadow" }).click();
   await page.getByRole("button", { name: "Review promotion" }).click();
   await page.getByRole("button", { name: "Promote this candidate" }).click();
   await expect(page.getByRole("status")).toContainText("now active");
   expect(await dns("ads.test")).toBe(3);
-  await expect(
-    page.getByText("ACTIVE CONFIGURATION", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("ACTIVE CONFIGURATION", { exact: true })).toBeVisible();
   const revisions = (await (
     await request.get("/api/v1/revisions", { headers: authorization })
   ).json()) as { id: number }[];
@@ -109,9 +92,7 @@ test("temporary allow validates permanent policy, shadows, promotes, explains an
       headers: authorization,
     })
   ).json()) as { config: Configuration };
-  expect(live.config.policies[0]?.temporary_exceptions?.[0]?.expires_at).toBe(
-    expiry,
-  );
+  expect(live.config.policies[0]?.temporary_exceptions?.[0]?.expires_at).toBe(expiry);
   expect(revisions[0]!.id).toBeGreaterThan(active.generation);
 });
 
@@ -126,7 +107,7 @@ test("unicode active labels and automatic expiry work without another revision",
     { name: "Unicode repair", domain: "BÜCHER.TEST.", expires_at: expiry },
   ];
   const promotion = await request.put("/api/v1/config", {
-    headers: authorization,
+    headers: await revisionHeaders(request),
     data: draft,
   });
   expect(promotion.ok()).toBeTruthy();
@@ -134,13 +115,9 @@ test("unicode active labels and automatic expiry work without another revision",
   expect(await dns("xn--bcher-kva.test")).toBe(0);
   await login(page);
   await page.getByRole("link", { name: "Policies", exact: true }).click();
-  await page
-    .getByRole("tab", { name: "Temporary exceptions", exact: true })
-    .click();
+  await page.getByRole("tab", { name: "Temporary exceptions", exact: true }).click();
   await expect(page.locator(".exception-row")).toContainText("ACTIVE");
-  await expect
-    .poll(async () => await dns("xn--bcher-kva.test"), { timeout: 7000 })
-    .toBe(3);
+  await expect.poll(async () => await dns("xn--bcher-kva.test"), { timeout: 7000 }).toBe(3);
   await expect(page.locator(".exception-row")).toContainText("EXPIRED");
   const live = (await (
     await request.get("/api/v1/temporary-exceptions", {
@@ -151,8 +128,6 @@ test("unicode active labels and automatic expiry work without another revision",
   expect(live.exceptions[0]?.expires_at).toBe(expiry);
   expect(live.exceptions[0]?.active).toBe(false);
   expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= window.innerWidth,
-    ),
+    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
   ).toBeTruthy();
 });

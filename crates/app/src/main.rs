@@ -19,6 +19,20 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Initialize local password/2FA administration without starting services.
+    Auth {
+        #[command(subcommand)]
+        command: AuthCommand,
+    },
+    /// Preview a Pi-hole/AdGuard migration without publishing or starting services.
+    Migrate {
+        #[arg(long, value_enum)]
+        source: rustwalld_dns::migration::Source,
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long)]
+        base_config: Option<PathBuf>,
+    },
     /// Inspect all required policy assertions without starting the appliance.
     Policy {
         #[command(subcommand)]
@@ -45,6 +59,19 @@ enum Command {
     },
 }
 #[derive(Subcommand)]
+enum AuthCommand {
+    Init {
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long, default_value = "admin")]
+        username: String,
+        #[arg(long, required = true)]
+        password_stdin: bool,
+        #[arg(long)]
+        disable_totp: bool,
+    },
+}
+#[derive(Subcommand)]
 enum PolicyCommand {
     /// Compile a configuration and report every required assertion and its trace.
     Test {
@@ -58,6 +85,57 @@ fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
     let args = Args::parse();
     if let Some(command) = args.command {
         let report = match command {
+            Command::Auth {
+                command:
+                    AuthCommand::Init {
+                        output,
+                        username,
+                        password_stdin: _,
+                        disable_totp,
+                    },
+            } => {
+                use std::io::Read;
+                let mut password = zeroize::Zeroizing::new(Vec::new());
+                std::io::stdin().take(1027).read_to_end(&mut password)?;
+                if password.last() == Some(&b'\n') {
+                    password.pop();
+                    if password.last() == Some(&b'\r') {
+                        password.pop();
+                    }
+                }
+                std::str::from_utf8(&password).map_err(|_| "Password input must be UTF-8")?;
+                let provision =
+                    rustwalld_dns::auth::initialize(output, username, &password, !disable_totp)?;
+                println!(
+                    "{}",
+                    serde_json::json!({"initialized":true,"totp_provisioning_uri":provision.as_ref().map(|uri|uri.as_str())})
+                );
+                return Ok(ExitCode::SUCCESS);
+            }
+            Command::Migrate {
+                source,
+                input,
+                base_config,
+            } => {
+                use std::io::Read;
+                let mut bytes = Vec::new();
+                std::fs::File::open(input)?
+                    .take(rustwalld_dns::migration::MAX_INPUT_BYTES as u64 + 1)
+                    .read_to_end(&mut bytes)?;
+                let base = base_config
+                    .map(|path| Config::read(&path))
+                    .transpose()?
+                    .unwrap_or_default();
+                let mut report = rustwalld_dns::migration::preview(source, &bytes, base.policy)?;
+                report.validate_listener(base.dns_listen);
+                let code = if report.ready {
+                    ExitCode::SUCCESS
+                } else {
+                    ExitCode::from(1)
+                };
+                println!("{}", serde_json::to_string_pretty(&report)?);
+                return Ok(code);
+            }
             Command::Policy {
                 command: PolicyCommand::Test { config, format },
             } => {
@@ -97,8 +175,22 @@ fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
         println!("configuration and required assertions passed");
         return Ok(ExitCode::SUCCESS);
     }
-    let token = std::env::var("RUSTWALLD_API_TOKEN")
-        .map_err(|_| "set RUSTWALLD_API_TOKEN (16..1024 bytes) to protect management endpoints")?;
+    let token = match (
+        std::env::var_os("RUSTWALLD_API_TOKEN_FILE"),
+        std::env::var("RUSTWALLD_API_TOKEN").ok(),
+    ) {
+        (Some(_), Some(_)) => {
+            return Err("Set only one of RUSTWALLD_API_TOKEN_FILE or RUSTWALLD_API_TOKEN".into());
+        }
+        (Some(path), None) => {
+            rustwalld_dns::auth::master_token(std::path::Path::new(&path))?.to_string()
+        }
+        (None, Some(token)) => token,
+        (None, None) => return Err(
+            "Set RUSTWALLD_API_TOKEN_FILE or RUSTWALLD_API_TOKEN to protect management endpoints"
+                .into(),
+        ),
+    };
     // Standalone commands keep stdout exclusively for their report.
     tracing_subscriber::fmt()
         .with_env_filter(

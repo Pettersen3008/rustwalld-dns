@@ -44,11 +44,14 @@ fn temporary_config(mock: &Mock, expiry: u64) -> PolicyConfigSet {
     config.upstreams[0].addresses = vec![mock.addr];
     config.upstreams[0].timeout_ms = 5000;
     config.policies[0].lists = vec![rustwalld_dns_filter::ListInput {
+        syntax: Default::default(),
         name: "deny".into(),
         action: rustwalld_dns_filter::Action::Block,
         rules: "example".into(),
     }];
     config.policies[0].temporary_exceptions = vec![TemporaryException {
+        clients: vec![],
+        include_subdomains: false,
         name: "repair".into(),
         domain: "test.example".into(),
         expires_at: expiry,
@@ -158,15 +161,26 @@ async fn server(
         256,
         telemetry,
     ));
-    let server = Server::bind(
-        ServerConfig {
-            listen: "127.0.0.1:0".parse().unwrap(),
-            ..Default::default()
-        },
-        engine.handle(),
-    )
-    .await
-    .unwrap();
+    // TCP port 0 reserves only TCP: another fixture can already own UDP at
+    // that number. Retry only this ephemeral-port collision, never other errors.
+    let mut attempts = 0;
+    let server = loop {
+        match Server::bind(
+            ServerConfig {
+                listen: "127.0.0.1:0".parse().unwrap(),
+                ..Default::default()
+            },
+            engine.handle(),
+        )
+        .await
+        {
+            Ok(server) => break server,
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse && attempts < 8 => {
+                attempts += 1;
+            }
+            Err(error) => panic!("protocol fixture bind failed: {error}"),
+        }
+    };
     let addr = server.local_addr().unwrap();
     let cancel = CancellationToken::new();
     let task = tokio::spawn(server.run(cancel.clone()));

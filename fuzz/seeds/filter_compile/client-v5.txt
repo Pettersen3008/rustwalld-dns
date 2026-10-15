@@ -1,0 +1,6 @@
+{ V5
+||test^$client=192.0.2.0/24|Kids|~2001:db8::/32,dnstype=AAAA,denyallow=safe.test
+@@||safe.test^$client='Frank\'s laptop'|name\,comma|name\|pipe|dollar\$name
+/^192\.0\.2\.10$/$client=Kids,dnstype=A
+||test^$client=~Kids
+||test^$client=,dnstype=AAAA

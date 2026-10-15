@@ -604,17 +604,20 @@ async fn main() {
     );
     config.policy.upstreams[0].addresses = vec![upstream_addr];
     config.policy.policies[0].lists = vec![rustwalld_dns_filter::ListInput {
+        syntax: Default::default(),
         name: "base".into(),
         action: rustwalld_dns_filter::Action::Block,
         rules: base_rules.clone(),
     }];
     config.policy.assertions = vec![
         Assertion {
+            qtype: 1,
             client: "127.0.0.1".parse().unwrap(),
             domain: "blocked.test".into(),
             expected: rustwalld_dns_filter::Action::Block,
         },
         Assertion {
+            qtype: 1,
             client: "127.0.0.1".parse().unwrap(),
             domain: "cached.test".into(),
             expected: rustwalld_dns_filter::Action::Allow,

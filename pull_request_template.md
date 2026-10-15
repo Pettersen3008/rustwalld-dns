@@ -1,3 +1,5 @@
+Story: DNS-NNN (link to backlog). Spec/ADR: link or why unnecessary.
+
 Describe the concrete problem, resulting behavior and any related issue.
 
 Explain the change and material risks or compatibility effects.

@@ -207,6 +207,7 @@ async fn raw_client_requests_keep_flag_type_and_upstream_identity_cache_partitio
         name: "second client".into(),
         network: "127.0.0.2/32".parse().unwrap(),
         policy: "second".into(),
+        filter_tags: Vec::new(),
         metadata: None,
     });
     let (telemetry, mut events) = Telemetry::channel(32);
@@ -311,6 +312,7 @@ async fn normalized_event_names_preserve_wire_questions_and_all_decision_paths()
     let mut config = PolicyConfigSet::default();
     config.upstreams[0].addresses = vec![mock.addr];
     config.policies[0].lists.push(ListInput {
+        syntax: Default::default(),
         name: "deny".into(),
         action: Action::Block,
         rules: "blocked.test\ntemporary.test".into(),
@@ -325,6 +327,8 @@ async fn normalized_event_names_preserve_wire_questions_and_all_decision_paths()
     config.policies[0]
         .temporary_exceptions
         .push(TemporaryException {
+            clients: vec![],
+            include_subdomains: false,
             name: "temporary".into(),
             domain: "temporary.test".into(),
             expires_at: exception_expiry(3600),
@@ -533,6 +537,7 @@ async fn full_and_closed_event_queues_preserve_replies_and_drop_accounting() {
     config.policies[0]
         .lists
         .push(rustwalld_dns_filter::ListInput {
+            syntax: Default::default(),
             name: "deny".into(),
             action: rustwalld_dns_filter::Action::Block,
             rules: "example".into(),
@@ -655,6 +660,7 @@ async fn tls_forwarding_filter_cache_generation_and_retirement() {
     config.policies[0]
         .lists
         .push(rustwalld_dns_filter::ListInput {
+            syntax: Default::default(),
             name: "fixture".into(),
             action: rustwalld_dns_filter::Action::Block,
             rules: "blocked.test".into(),
@@ -759,6 +765,7 @@ async fn https_filter_cache_coalescing_generation_and_shutdown() {
     config.policies[0]
         .lists
         .push(rustwalld_dns_filter::ListInput {
+            syntax: Default::default(),
             name: "fixture".into(),
             action: rustwalld_dns_filter::Action::Block,
             rules: "blocked.test".into(),

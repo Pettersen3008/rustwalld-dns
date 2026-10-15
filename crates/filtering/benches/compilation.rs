@@ -19,6 +19,12 @@ fn bench(c: &mut Criterion) {
     for workload in workloads.split(',') {
         for size in sizes.split(',').map(|s| s.parse::<usize>().unwrap()) {
             let lists = support::fixture(size, workload).unwrap();
+            let raw_budget = lists
+                .iter()
+                .map(|list| list.rules.lines().count())
+                .sum::<usize>()
+                .max(size)
+                + 1;
             for &workers in &workers {
                 let compiler = (workers != 0).then(|| ParallelCompiler::new(workers).unwrap());
                 group.bench_function(
@@ -29,10 +35,10 @@ fn bench(c: &mut Criterion) {
                             for _ in 0..iterations {
                                 let start = Instant::now();
                                 let snapshot = match &compiler {
-                                    None => FilterSnapshot::compile(&lists, size + 1, usize::MAX)
+                                    None => FilterSnapshot::compile(&lists, raw_budget, usize::MAX)
                                         .unwrap(),
                                     Some(compiler) => {
-                                        compiler.compile(&lists, size + 1, usize::MAX).unwrap()
+                                        compiler.compile(&lists, raw_budget, usize::MAX).unwrap()
                                     }
                                 };
                                 total += start.elapsed();

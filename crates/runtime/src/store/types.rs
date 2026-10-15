@@ -79,8 +79,14 @@ pub struct HistoryEntry {
     pub timestamp: String,
     /// Client address.
     pub client: String,
+    /// Source identity was intentionally omitted by the logging preference.
+    pub client_masked: bool,
     /// Normalized query name.
     pub domain: String,
+    /// Reachable alias target responsible for a block, if present.
+    pub matched_domain: Option<String>,
+    /// Record type of the matched response subject; original qtype is separate.
+    pub matched_type: Option<u16>,
     /// Query type code.
     pub qtype: u16,
     /// Deciding generation.
@@ -103,11 +109,19 @@ pub struct HistoryEntry {
     pub shadow: Option<Value>,
     /// Temporary exception index, if one allowed the query.
     pub temporary_exception: Option<u16>,
+    /// Actual final scheduled filter state, not database insertion time.
+    pub service_schedule: Option<rustwalld_dns_policy::ServiceScheduleState>,
 }
 /// Bounded store admission and worker failures; never returned by DNS queries.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum StoreError {
+    /// Preference bounds are invalid; the current mode remains in place.
+    #[error("invalid privacy preferences: {0}")]
+    InvalidPrivacy(String),
+    /// Preference revision changed before durable mutation.
+    #[error("privacy preferences changed")]
+    StalePrivacy,
     /// The bounded command queue is full or closed.
     #[error("database command queue unavailable")]
     QueueUnavailable,

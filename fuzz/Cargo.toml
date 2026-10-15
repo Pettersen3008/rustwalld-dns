@@ -3,6 +3,7 @@ name = "rustwalld-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2024"
+license = "MIT OR Apache-2.0"
 
 [package.metadata]
 cargo-fuzz = true
@@ -13,13 +14,42 @@ members = ["."]
 [dependencies]
 libfuzzer-sys = "0.4"
 hickory-proto = "0.26.3"
-rustwalld-dns-filter = { path = "../crates/filtering", features = ["parallel"] }
-rustwalld-dns-resolver = { path = "../crates/resolver" }
-rustwalld-dns-policy = { path = "../crates/policy" }
-rustwalld-dns-runtime = { path = "../crates/runtime" }
-rustwalld-dns-core = { path = "../crates/dns-core" }
+rustwalld-dns-filter = { path = "../crates/filtering",version="0.1", features = ["parallel"] }
+rustwalld-dns-resolver = { path = "../crates/resolver",version="0.1" }
+rustwalld-dns-policy = { path = "../crates/policy",version="0.1" }
+rustwalld-dns-runtime = { path = "../crates/runtime",version="0.1" }
+rustwalld-dns-core = { path = "../crates/dns-core",version="0.1" }
+rustwalld-dns = { path = "../crates/app",version="0.1" }
 http = "1"
 serde_json = "1"
+
+[[bin]]
+name = "safe_search"
+path = "fuzz_targets/safe_search.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "migration"
+path = "fuzz_targets/migration.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "server_tls"
+path = "fuzz_targets/server_tls.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "identity"
+path = "fuzz_targets/identity.rs"
+test = false
+doc = false
+bench = false
 
 [[bin]]
 name = "download_config"
@@ -87,6 +117,34 @@ bench = false
 [[bin]]
 name = "serve_stale"
 path = "fuzz_targets/serve_stale.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lease_inventory"
+path = "fuzz_targets/lease_inventory.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "services"
+path = "fuzz_targets/services.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "schedules"
+path = "fuzz_targets/schedules.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "service_records"
+path = "fuzz_targets/service_records.rs"
 test = false
 doc = false
 bench = false

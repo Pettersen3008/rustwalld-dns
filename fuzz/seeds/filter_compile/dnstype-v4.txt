@@ -1,0 +1,8 @@
+w V4
+||test^$dnstype=AAAA,denyallow=safe.test
+@@||safe.test^$dnstype=A
+/^192\.0\.2\.1$/$dnstype=A
+/^2001:db8::1$/$dnstype=AAAA
+||cancel.test^
+||cancel.test^$badfilter
+||invalid.test^$dnstype=UNKNOWN

@@ -1,0 +1,1 @@
+\0{"user_rules": ["||typed.test^$dnsrewrite=NOERROR;TXT;kept", "@@|child.typed.test^$dnsrewrite"]}

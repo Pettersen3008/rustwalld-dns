@@ -122,12 +122,16 @@ class Deployment(unittest.TestCase):
             self.assertEqual(manifest['target'], 'x86_64-unknown-linux-gnu' if os.uname().machine == 'x86_64' else 'aarch64-unknown-linux-gnu')
             self.assertTrue((bundle / 'bin/rustwalld-dns').stat().st_mode & 0o111)
             self.assertEqual(manifest['features'], [])
-            for name in ('engine-split', 'cache-eviction', 'filter-matching', 'doh-latency',
-                         'dot-pipelining', 'serve-stale', 'property-tests', 'runtime-modules',
-                         'release-rebuild', 'public-alpha'):
-                self.assertIn(f'docs/{name}.md', manifest['files'])
-                self.assertTrue((bundle / f'docs/{name}.md').is_file())
-            for name in ('SUPPORT.md', 'CODE_OF_CONDUCT.md', 'CODEOWNERS',
+            for name in ('README.md', 'architecture.md', 'roadmap.md',
+                         'operations/install.md', 'operations/container.md',
+                         'architecture/upstreams.md', 'architecture/local-dns.md',
+                         'product/scope.md', 'engineering/verification.md'):
+                self.assertIn(f'docs/{name}', manifest['files'])
+                self.assertTrue((bundle / f'docs/{name}').is_file())
+            expected_docs = {str(path.relative_to(ROOT)) for path in (ROOT / 'docs').rglob('*.md')}
+            bundled_docs = {name for name in manifest['files'] if name.startswith('docs/')}
+            self.assertEqual(bundled_docs, expected_docs)
+            for name in ('AGENTS.md', 'CLAUDE.md', 'SUPPORT.md', 'CODE_OF_CONDUCT.md', 'CODEOWNERS',
                          'pull_request_template.md'):
                 self.assertIn(name, manifest['files'])
                 self.assertTrue((bundle / name).is_file())

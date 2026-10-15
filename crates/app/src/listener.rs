@@ -24,8 +24,15 @@ use tokio::{
 /// Requests a connection is currently processing. While any are, the idle
 /// timeout is suspended: a long compile or commit is not an idle client.
 #[derive(Clone, Debug, Default)]
-pub struct Activity(Arc<AtomicUsize>);
+pub struct Activity(Arc<AtomicUsize>, Option<SocketAddr>, bool);
 impl Activity {
+    pub fn secure(&self) -> bool {
+        self.2
+    }
+    pub fn peer(&self) -> Option<SocketAddr> {
+        self.1
+    }
+
     /// Mark one request as processing until the guard drops.
     pub fn enter(&self) -> Busy {
         self.0.fetch_add(1, Ordering::AcqRel);
@@ -74,13 +81,7 @@ impl Listener for ManagementListener {
             match self.inner.accept().await {
                 Ok((stream, address)) => {
                     return (
-                        ManagedStream {
-                            stream,
-                            _permit: permit,
-                            idle: self.idle,
-                            timer: Box::pin(tokio::time::sleep(self.idle)),
-                            activity: Activity::default(),
-                        },
+                        ManagedStream::new(stream, permit, self.idle, address),
                         address,
                     );
                 }
@@ -95,15 +96,45 @@ impl Listener for ManagementListener {
         self.inner.local_addr()
     }
 }
-pub struct ManagedStream {
-    stream: TcpStream,
+pub struct ManagedStream<S = TcpStream> {
+    stream: S,
     _permit: OwnedSemaphorePermit,
     idle: Duration,
     timer: Pin<Box<Sleep>>,
     activity: Activity,
+    lifetime: Pin<Box<Sleep>>,
 }
-impl ManagedStream {
+impl<S> ManagedStream<S> {
+    pub(crate) fn new(
+        stream: S,
+        permit: OwnedSemaphorePermit,
+        idle: Duration,
+        peer: SocketAddr,
+    ) -> Self {
+        Self {
+            stream,
+            _permit: permit,
+            idle,
+            timer: Box::pin(tokio::time::sleep(idle)),
+            activity: Activity(Arc::new(AtomicUsize::new(0)), Some(peer), false),
+            lifetime: Box::pin(tokio::time::sleep(Duration::from_secs(600))),
+        }
+    }
+    pub fn activity(&self) -> &Activity {
+        &self.activity
+    }
+    pub(crate) fn secured(mut self) -> Self {
+        self.activity.2 = true;
+        self
+    }
+
     fn poll_idle(&mut self, cx: &mut Context<'_>) -> io::Result<()> {
+        if self.lifetime.as_mut().poll(cx).is_ready() {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "connection lifetime exceeded",
+            ));
+        }
         if self.activity.busy() {
             // The window restarts when processing ends.
             self.progress();
@@ -122,7 +153,7 @@ impl ManagedStream {
         self.timer.as_mut().reset(Instant::now() + self.idle);
     }
 }
-impl AsyncRead for ManagedStream {
+impl<S: AsyncRead + Unpin> AsyncRead for ManagedStream<S> {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -140,7 +171,7 @@ impl AsyncRead for ManagedStream {
         result
     }
 }
-impl AsyncWrite for ManagedStream {
+impl<S: AsyncWrite + Unpin> AsyncWrite for ManagedStream<S> {
     fn poll_write(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,

@@ -36,6 +36,19 @@ async fn static_console_is_optional_hardened_and_keeps_api_misses_as_errors() {
     );
     assert!(response.text().await.unwrap().contains("Local console"));
     for path in [
+        "/overview",
+        "/queries",
+        "/policies",
+        "/clients",
+        "/filters",
+        "/upstreams",
+        "/history",
+    ] {
+        let response = client.get(format!("{base}{path}")).send().await.unwrap();
+        assert_eq!(response.status(), 200, "{path}");
+        assert!(response.text().await.unwrap().contains("Local console"));
+    }
+    for path in [
         "/missing.js",
         "/api/v1/unknown",
         "/%2e%2e/private.txt",

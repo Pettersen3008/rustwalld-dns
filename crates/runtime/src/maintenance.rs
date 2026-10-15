@@ -58,7 +58,12 @@ pub fn verify(path: &Path) -> Result<Report> {
         stmt.query_map([], |row| row.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?
     };
-    if tables != ["queries", "revisions", "runtime"] {
+    let expected: Vec<&str> = if version >= 4 {
+        vec!["privacy", "queries", "revisions", "runtime"]
+    } else {
+        vec!["queries", "revisions", "runtime"]
+    };
+    if tables.iter().map(String::as_str).collect::<Vec<_>>() != expected {
         return Err("unrecognized database tables".into());
     }
     let executable: i64 = tx.query_row(
@@ -74,6 +79,53 @@ pub fn verify(path: &Path) -> Result<Report> {
     tx.prepare("SELECT id,created,client,domain,qtype,generation,policy,action,rule,decision_cached,rcode,source,latency_us,shadow FROM queries LIMIT 0")?;
     if version >= 2 {
         tx.prepare("SELECT temporary_exception FROM queries LIMIT 0")?;
+    }
+    if version >= 3 {
+        tx.prepare("SELECT matched_domain FROM queries LIMIT 0")?;
+    }
+    if version >= 5 {
+        tx.prepare("SELECT service_schedule FROM queries LIMIT 0")?;
+        let invalid: i64 = tx.query_row("SELECT COUNT(*) FROM queries WHERE service_schedule IS NOT NULL AND (typeof(service_schedule)!='integer' OR service_schedule NOT IN (0,1,2))", [], |row| row.get(0))?;
+        if invalid != 0 {
+            return Err("invalid scheduled history state in backup".into());
+        }
+    }
+    if version >= 6 {
+        tx.prepare("SELECT matched_type FROM queries LIMIT 0")?;
+        let invalid:i64=tx.query_row("SELECT COUNT(*) FROM queries WHERE matched_type IS NOT NULL AND (typeof(matched_type)!='integer' OR matched_type NOT BETWEEN 1 AND 65535 OR matched_domain IS NULL)",[],|row|row.get(0))?;
+        if invalid != 0 {
+            return Err("invalid response type provenance in backup".into());
+        }
+    }
+    if version >= 4 {
+        let privacy = tx.query_row(
+            "SELECT revision,mode,retention_rows,next_query_id FROM privacy WHERE id=1",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, u8>(1)?,
+                    row.get::<_, u32>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            },
+        )?;
+        let rows: i64 = tx.query_row("SELECT count(*) FROM privacy", [], |row| row.get(0))?;
+        if rows != 1
+            || privacy.0 <= 0
+            || privacy.1 > 2
+            || privacy.2 > 1000000
+            || (privacy.2 == 0 && privacy.1 != 2)
+            || privacy.3 <= 0
+        {
+            return Err("invalid privacy preferences in backup".into());
+        }
+        let maximum: i64 = tx.query_row("SELECT COALESCE(MAX(id),0) FROM queries", [], |row| {
+            row.get(0)
+        })?;
+        if privacy.3 <= maximum {
+            return Err("query ID sequence is behind retained history".into());
+        }
     }
     let mut active = None;
     let mut shadow = None;

@@ -46,13 +46,13 @@ struct ShadowBody {
     config: Option<SnapshotConfig>,
 }
 /// The live active/shadow snapshots together with the version that names them.
-struct Pinned {
-    version: PolicyVersion,
-    active: Arc<PolicySnapshot>,
-    shadow: Option<Arc<PolicySnapshot>>,
+pub(super) struct Pinned {
+    pub(super) version: PolicyVersion,
+    pub(super) active: Arc<PolicySnapshot>,
+    pub(super) shadow: Option<Arc<PolicySnapshot>>,
 }
 /// Read a consistent pair; a publication between the reads is retried.
-fn pinned(state: &AppState) -> Result<Pinned, ApiError> {
+pub(super) fn pinned(state: &AppState) -> Result<Pinned, ApiError> {
     for _ in 0..3 {
         let version = state.control.version();
         let active = state.control.engine().snapshot();
@@ -80,6 +80,7 @@ pub(super) async fn config(State(state): State<Arc<AppState>>) -> Result<Respons
         StatusCode::OK,
         Some(revision_tag(pinned.version)),
         SnapshotConfig(pinned.active),
+        Some(_heavy),
     )
     .await
 }
@@ -95,6 +96,7 @@ pub(super) async fn shadow_config(
             generation: pinned.version.shadow,
             config: pinned.shadow.map(SnapshotConfig),
         },
+        Some(_heavy),
     )
     .await
 }
@@ -106,7 +108,7 @@ pub(super) async fn test(
     let _heavy = state.heavy()?;
     let report = state.control.test(config).await?;
     if report.valid {
-        json_body(StatusCode::OK, None, report).await
+        json_body(StatusCode::OK, None, report, Some(_heavy)).await
     } else {
         #[derive(Serialize)]
         struct Failed {
@@ -121,6 +123,7 @@ pub(super) async fn test(
             StatusCode::UNPROCESSABLE_ENTITY,
             None,
             Failed { error, report },
+            Some(_heavy),
         )
         .await
     }
@@ -155,6 +158,17 @@ pub(super) async fn stage(
 ) -> Result<Response, ApiError> {
     let expected = required_version(headers)?;
     let _heavy = state.heavy()?;
+    stage_admitted(state, candidate, expected, shadow, actor, _heavy).await
+}
+/// Admission must precede loading/parsing a stored rollback configuration too.
+pub(super) async fn stage_admitted(
+    state: Arc<AppState>,
+    candidate: Candidate,
+    expected: PolicyVersion,
+    shadow: bool,
+    actor: &'static str,
+    _heavy: tokio::sync::OwnedSemaphorePermit,
+) -> Result<Response, ApiError> {
     let target = if shadow {
         PublicationTarget::Shadow
     } else {
@@ -164,7 +178,13 @@ pub(super) async fn stage(
         .control
         .stage(candidate, Some(expected), target, actor)
         .await?;
-    json_body(StatusCode::OK, Some(current_tag(&state)), result).await
+    json_body(
+        StatusCode::OK,
+        Some(current_tag(&state)),
+        result,
+        Some(_heavy),
+    )
+    .await
 }
 pub(super) async fn promote_shadow(
     State(state): State<Arc<AppState>>,
@@ -178,7 +198,7 @@ pub(super) async fn clear_shadow(
 ) -> Result<Response, ApiError> {
     let expected = required_version(&headers)?;
     let result = state.control.clear_shadow(Some(expected)).await?;
-    json_body(StatusCode::OK, Some(current_tag(&state)), result).await
+    json_body(StatusCode::OK, Some(current_tag(&state)), result, None).await
 }
 pub(super) async fn revisions(
     State(state): State<Arc<AppState>>,
@@ -191,26 +211,29 @@ pub(super) async fn revision(
 ) -> Result<Response, ApiError> {
     let _heavy = state.heavy()?;
     let revision: Revision = state.control.revision(id).await?;
-    json_body(StatusCode::OK, None, revision).await
+    json_body(StatusCode::OK, None, revision, Some(_heavy)).await
 }
 pub(super) async fn rollback(
     State(state): State<Arc<AppState>>,
     ApiPath(id): ApiPath<u64>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    required_version(&headers)?;
+    let expected = required_version(&headers)?;
+    let heavy = state.heavy()?;
     let revision = state.control.revision(id).await?;
-    let config = tokio::task::spawn_blocking(move || {
-        serde_json::from_value::<PolicyConfigSet>(revision.config).map_err(invalid)
+    let (config, heavy) = tokio::task::spawn_blocking(move || {
+        let config = serde_json::from_value::<PolicyConfigSet>(revision.config).map_err(invalid)?;
+        Ok::<_, ApiError>((config, heavy))
     })
     .await
     .map_err(super::unavailable)??;
-    stage(
+    stage_admitted(
         state,
         Candidate::Config(config),
-        &headers,
+        expected,
         false,
         "rollback",
+        heavy,
     )
     .await
 }

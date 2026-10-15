@@ -246,6 +246,7 @@ async fn stale_data_cannot_bypass_new_blocks_rewrites_or_upstream_identity() {
     );
     seed_expired(&engine);
     config.policies[0].lists.push(ListInput {
+        syntax: Default::default(),
         name: "block".into(),
         action: Action::Block,
         rules: "stale.test".into(),
@@ -320,6 +321,7 @@ async fn stale_ttl_is_capped_by_exception_and_pending_answer_cannot_cross_expiry
     mock.mode.store(1, Ordering::Relaxed);
     let mut config = policy(vec![mock.address]);
     config.policies[0].lists.push(ListInput {
+        syntax: Default::default(),
         name: "block".into(),
         action: Action::Block,
         rules: "stale.test".into(),
@@ -332,6 +334,8 @@ async fn stale_ttl_is_capped_by_exception_and_pending_answer_cannot_cross_expiry
     config.policies[0]
         .temporary_exceptions
         .push(TemporaryException {
+            clients: vec![],
+            include_subdomains: false,
             name: "repair".into(),
             domain: "stale.test".into(),
             expires_at: expiry,

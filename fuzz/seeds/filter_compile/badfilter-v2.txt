@@ -1,0 +1,11 @@
+k.test
+@@||safe.test^$badfilter
+||ads.test^
+@@||safe.test^
+||ads.test^$badfilter
+/^dollar\$badfilter$/
+/^ads[0-9]+\.test$/
+||absent.test^$badfilter
+/^ads[0-9]+\.test$/$badfilter
+||ads.test^$important,badfilter
+||ads\$badfilter

@@ -75,11 +75,13 @@ mod tests {
         config.upstreams[0].addresses = vec![upstream_address];
         config.policies[0].lists = vec![
             ListInput {
+                syntax: Default::default(),
                 name: "blocks".into(),
                 action: Action::Block,
                 rules: "ads.test".into(),
             },
             ListInput {
+                syntax: Default::default(),
                 name: "allows".into(),
                 action: Action::Allow,
                 rules: "=safe.ads.test".into(),

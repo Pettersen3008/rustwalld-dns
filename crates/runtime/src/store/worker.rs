@@ -2,7 +2,7 @@
 use super::{
     Bootstrap, ClearShadowReport, CommitReport, HISTORY_BATCH, HISTORY_FLUSH, HistoryEntry,
     Revision, RevisionMode, RevisionSummary, StoreError, StoreMetrics,
-    history::{History, queries},
+    history::{History, queries, query},
     revisions::{bootstrap, commit, pointers, revision, revisions},
     schema::durable,
 };
@@ -13,6 +13,14 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 pub(super) enum Operation {
+    Privacy,
+    ChangePrivacy {
+        expected: u64,
+        change: super::PrivacyChange,
+    },
+    Query {
+        id: u64,
+    },
     Load,
     Bootstrap {
         config: String,
@@ -34,6 +42,8 @@ pub(super) enum Operation {
     ClearShadow,
 }
 pub(super) enum Reply {
+    Privacy(super::Privacy),
+    Query(Option<HistoryEntry>),
     Load(Option<Bootstrap>),
     Bootstrap(Bootstrap),
     Queries(Vec<HistoryEntry>),
@@ -51,6 +61,7 @@ pub(super) struct Worker {
     pub(super) connection: Connection,
     pub(super) history: History,
     pub(super) counts: Arc<StoreMetrics>,
+    pub(super) privacy: super::Privacy,
 }
 impl Worker {
     /// Block on commands and events instead of polling. Commands take priority;
@@ -69,7 +80,9 @@ impl Worker {
             tokio::select! {
                 biased;
                 _ = cancel.cancelled() => break,
-                Some(command) = commands.recv() => self.serve(command),
+                Some(command) = commands.recv() => {
+                    if self.serve(command) {batch.clear();let queued=events.len();for _ in 0..queued {if events.try_recv().is_err(){break;}}}
+                },
                 Some(event) = events.recv(), if batch.len() < HISTORY_BATCH => {
                     if batch.is_empty() {
                         flush.as_mut().reset(tokio::time::Instant::now() + HISTORY_FLUSH);
@@ -84,7 +97,15 @@ impl Worker {
             }
         }
         while let Ok(command) = commands.try_recv() {
-            self.serve(command);
+            if self.serve(command) {
+                batch.clear();
+                let queued = events.len();
+                for _ in 0..queued {
+                    if events.try_recv().is_err() {
+                        break;
+                    }
+                }
+            }
         }
         loop {
             while batch.len() < HISTORY_BATCH {
@@ -99,18 +120,47 @@ impl Worker {
             self.persist(&mut batch);
         }
     }
-    fn serve(&mut self, command: Command) {
-        let _ = command
-            .reply
-            .send(execute(&mut self.connection, command.operation));
+    fn serve(&mut self, command: Command) -> bool {
+        let clears = matches!(&command.operation,Operation::ChangePrivacy{change,..} if change.clear_history || change.retention_rows==0);
+        let result = match command.operation {
+            Operation::Privacy => {
+                let mut value = self.privacy.clone();
+                value.retained_rows = self.history.rows;
+                Ok(Reply::Privacy(value))
+            }
+            Operation::ChangePrivacy { expected, change } => {
+                if expected != self.privacy.revision {
+                    Err(StoreError::StalePrivacy)
+                } else if let Err(error) = change.validate() {
+                    Err(StoreError::InvalidPrivacy(error))
+                } else {
+                    super::privacy::change(&mut self.connection, &self.privacy, &change).map(
+                        |value| {
+                            self.history.limit =
+                                u64::try_from(value.retention_rows).unwrap_or(1000000);
+                            self.history.mode = value.mode;
+                            self.history.rows = value.retained_rows;
+                            self.privacy = value.clone();
+                            Reply::Privacy(value)
+                        },
+                    )
+                }
+            }
+            operation => execute(&mut self.connection, operation),
+        };
+        let cleared = clears && result.is_ok();
+        let _ = command.reply.send(result);
+        cleared
     }
     fn persist(&mut self, batch: &mut Vec<QueryEvent>) {
         let count = u64::try_from(batch.len()).unwrap_or(u64::MAX);
         match self.history.write(&mut self.connection, batch) {
             Ok(()) => {
-                self.counts
-                    .persisted_events
-                    .fetch_add(count, Ordering::Relaxed);
+                if self.history.mode != super::HistoryMode::Disabled {
+                    self.counts
+                        .persisted_events
+                        .fetch_add(count, Ordering::Relaxed);
+                }
             }
             Err(error) => {
                 self.counts
@@ -128,6 +178,7 @@ pub(super) fn execute(
     operation: Operation,
 ) -> Result<Reply, StoreError> {
     match operation {
+        Operation::Privacy | Operation::ChangePrivacy { .. } => Err(StoreError::Response),
         Operation::Load => {
             let tx = connection.transaction()?;
             let pointers = pointers(&tx)?;
@@ -138,6 +189,7 @@ pub(super) fn execute(
             durable(connection, |connection| bootstrap(connection, config)).map(Reply::Bootstrap)
         }
         Operation::Queries { limit } => queries(connection, limit).map(Reply::Queries),
+        Operation::Query { id } => query(connection, id).map(Reply::Query),
         Operation::Revisions => revisions(connection).map(Reply::Revisions),
         Operation::Revision { id } => revision(connection, id).map(Reply::Revision),
         Operation::Commit {

@@ -87,6 +87,7 @@ async fn main() {
     let mut config = PolicyConfigSet::default();
     config.upstreams[0].addresses = vec![address];
     config.policies[0].lists.push(ListInput {
+        syntax: Default::default(),
         name: "bench".into(),
         action: Action::Block,
         rules: "blocked.test".into(),

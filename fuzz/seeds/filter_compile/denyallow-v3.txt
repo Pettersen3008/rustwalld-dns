@@ -1,0 +1,14 @@
+o
+! allow placeholder
+||test^$denyallow=safe.test|other.test
+@@||test^$denyallow=ads.safe.test
+/^.*\.test$/$denyallow=safe.test
+@@/^safe\.test$/$denyallow=ads.safe.test
+||ads.safe.test^
+! allow placeholder
+||test^$denyallow=safe.test,badfilter
+! allow placeholder
+||cancel.test^
+! allow placeholder
+||cancel.test^$badfilter
+! allow placeholder

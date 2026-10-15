@@ -24,6 +24,7 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         let mut policy = PolicyConfigSet::default();
         policy.upstreams[0].addresses = vec![upstream];
         policy.policies[0].lists.push(ListInput {
+            syntax: Default::default(),
             name: "example".into(),
             action: Action::Block,
             rules: "ads.test".into(),

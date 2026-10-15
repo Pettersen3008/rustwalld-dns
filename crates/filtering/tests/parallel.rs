@@ -18,6 +18,14 @@ fn compare(lists: &[ListInput], max_rules: usize, max_bytes: usize) {
                     serde_json::to_value(&expected.stats).unwrap(),
                     serde_json::to_value(&actual.stats).unwrap()
                 );
+                assert_eq!(
+                    expected.cancellation_targets(),
+                    actual.cancellation_targets()
+                );
+                assert_eq!(
+                    serde_json::to_value(expected.cancellations()).unwrap(),
+                    serde_json::to_value(actual.cancellations()).unwrap()
+                );
                 assert_eq!(expected.payload_bytes(), actual.payload_bytes());
                 assert_eq!(expected.effective_rules(), actual.effective_rules());
                 for rule in expected.rules() {
@@ -58,11 +66,13 @@ fn ordering_sources_hosts_idna_and_cross_batch_redundancy() {
     rules.push_str("@@safe.example\n=CHILD0.example.\n# tail\n");
     let lists = [
         ListInput {
+            syntax: Default::default(),
             name: "first".into(),
             action: Action::Block,
             rules,
         },
         ListInput {
+            syntax: Default::default(),
             name: "second".into(),
             action: Action::Allow,
             rules: "=safe.example\n@@safe.example\n@@EXAMPLE.".into(),
@@ -98,6 +108,7 @@ fn raw_expanded_byte_and_list_name_limits_keep_legacy_results() {
         "a.example\nA.EXAMPLE.\n@@a.example\n",
     ] {
         let list = ListInput {
+            syntax: Default::default(),
             name: "fixture".into(),
             action: Action::Block,
             rules: rules.into(),
@@ -117,6 +128,7 @@ fn raw_expanded_byte_and_list_name_limits_keep_legacy_results() {
     for max_rules in [0, 1, 8191, 8192, 8193, 9999, 10000, 10001] {
         compare(
             &[ListInput {
+                syntax: Default::default(),
                 name: "batch".into(),
                 action: Action::Block,
                 rules: rules.clone(),
@@ -127,6 +139,7 @@ fn raw_expanded_byte_and_list_name_limits_keep_legacy_results() {
     }
     for names in [["", "other"], ["duplicate", "duplicate"]] {
         let lists = names.map(|name| ListInput {
+            syntax: Default::default(),
             name: name.into(),
             action: Action::Block,
             rules: "example".into(),
@@ -145,6 +158,7 @@ fn oversized_hosts_line_and_worker_bounds() {
         write!(rules, " long-host-{i}.example").unwrap();
     }
     let list = ListInput {
+        syntax: Default::default(),
         name: "oversized".into(),
         action: Action::Block,
         rules,
@@ -152,4 +166,67 @@ fn oversized_hosts_line_and_worker_bounds() {
     compare(std::slice::from_ref(&list), 0, usize::MAX);
     compare(std::slice::from_ref(&list), 10, usize::MAX);
     compare(&[list], 100000, usize::MAX);
+}
+
+#[test]
+fn v2_cancellations_cross_batches_and_lists_without_changing_order() {
+    use rustwalld_dns_filter::RuleSyntax;
+    let mut rules = String::new();
+    let mut directives = String::new();
+    for i in 0..40_000 {
+        writeln!(rules, "||ads{i}.test^").unwrap();
+        if i % 200 == 0 {
+            writeln!(directives, "||ads{i}.test^$badfilter").unwrap();
+        }
+    }
+    directives.push_str("@@||ads1.test^$badfilter\n||ads2.test^$important,badfilter\n");
+    let lists = [
+        ListInput {
+            name: "directives".into(),
+            action: Action::Block,
+            syntax: RuleSyntax::AdguardV2,
+            rules: directives,
+        },
+        ListInput {
+            name: "publisher".into(),
+            action: Action::Block,
+            syntax: RuleSyntax::AdguardV2,
+            rules,
+        },
+    ];
+    compare(&lists, 50_000, usize::MAX);
+    compare(&lists, 8192, usize::MAX);
+}
+
+#[test]
+fn regex_budget_rejects_oversized_sets_but_does_not_count_duplicates() {
+    use rustwalld_dns_filter::RuleSyntax;
+    for syntax in [
+        RuleSyntax::Native,
+        RuleSyntax::Adguard,
+        RuleSyntax::AdguardV2,
+    ] {
+        let mut rules = String::new();
+        for i in 0..513 {
+            writeln!(rules, "/^ads{i}\\.test$/").unwrap();
+        }
+        // Force the parallel parser and verify the same hard rejection.
+        rules.push_str(&"/^duplicates\\.test$/\n".repeat(5000));
+        let mut list = ListInput {
+            syntax,
+            name: "regex".into(),
+            action: Action::Block,
+            rules,
+        };
+        compare(std::slice::from_ref(&list), 10000, usize::MAX);
+        assert!(FilterSnapshot::compile(std::slice::from_ref(&list), 10000, usize::MAX).is_err());
+        list.rules = "/^same\\.test$/\n".repeat(5000);
+        compare(std::slice::from_ref(&list), 10000, usize::MAX);
+        assert_eq!(
+            FilterSnapshot::compile(&[list], 10000, usize::MAX)
+                .unwrap()
+                .effective_rules(),
+            1
+        );
+    }
 }

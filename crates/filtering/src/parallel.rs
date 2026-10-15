@@ -1,6 +1,7 @@
 //! Optional bounded control-plane work. Query snapshots never retain this pool.
+use crate::badfilter::{ParsedLine, Targets};
 use crate::{CompileError, FilterSnapshot, ListInput, compile};
-use compile::{ParsedRules, Work};
+use compile::Work;
 use rayon::{ThreadPool, ThreadPoolBuilder, prelude::*};
 
 const BATCH_LINES: usize = 8192;
@@ -61,23 +62,35 @@ impl Work for ParallelCompiler {
         &self,
         list: &ListInput,
         budget: usize,
-        mut consume: impl FnMut(usize, ParsedRules) -> Result<(), CompileError>,
+        targets: &Targets<'_>,
+        mut consume: impl FnMut(usize, ParsedLine) -> Result<(), CompileError>,
     ) -> Result<(), CompileError> {
         if list.rules.len() < PARSE_MIN_BYTES {
-            return compile::Sequential.parse(list, budget, consume);
+            return compile::Sequential.parse(list, budget, targets, consume);
         }
+        // AdGuard masks may compile to regex. Do not validate thousands of
+        // extra patterns after the active-set budget is already exceeded.
+        let batch_lines = match list.syntax {
+            crate::RuleSyntax::Native => BATCH_LINES,
+            crate::RuleSyntax::Adguard
+            | crate::RuleSyntax::AdguardV2
+            | crate::RuleSyntax::AdguardV3
+            | crate::RuleSyntax::AdguardV4
+            | crate::RuleSyntax::AdguardV5
+            | crate::RuleSyntax::AdguardV6 => crate::regex_rules::MAX_PATTERNS,
+        };
         let mut lines = list.rules.lines().enumerate().peekable();
         let mut raw = 0;
         loop {
             let mut batch = Vec::new();
             let mut bytes = 0;
             while let Some(&(index, line)) = lines.peek() {
-                let Some(content) = compile::content(line) else {
+                let Some(content) = compile::content(line, list.syntax) else {
                     lines.next();
                     continue;
                 };
                 if raw == budget
-                    || batch.len() == BATCH_LINES
+                    || batch.len() == batch_lines
                     || line.len() > BATCH_BYTES
                     || bytes + line.len() > BATCH_BYTES
                 {
@@ -94,7 +107,7 @@ impl Work for ParallelCompiler {
                 let parsed: Vec<_> = self.pool.install(|| {
                     batch
                         .par_iter()
-                        .map(|&(index, line)| (index, crate::parse_rule(line, list.action)))
+                        .map(|&(index, line)| (index, targets.parse(line, list)))
                         .collect()
                 });
                 for (index, rules) in parsed {
@@ -105,7 +118,7 @@ impl Work for ParallelCompiler {
             let Some((index, line)) = lines.next() else {
                 return Ok(());
             };
-            let Some(line) = compile::content(line) else {
+            let Some(line) = compile::content(line, list.syntax) else {
                 continue;
             };
             if raw == budget {
@@ -114,7 +127,7 @@ impl Work for ParallelCompiler {
             // An oversized individual line follows the original parser alone;
             // never expand several oversized hosts lines concurrently.
             raw += 1;
-            consume(index, crate::parse_rule(line, list.action))?;
+            consume(index, targets.parse(line, list))?;
         }
     }
     fn finish(&self, snapshot: &mut FilterSnapshot) {

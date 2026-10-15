@@ -1,7 +1,7 @@
 # Contributing
 
 Start with [architecture](docs/architecture.md), [roadmap](docs/roadmap.md) and
-[AGENTS.md](AGENTS.md). Work in complete, reviewable slices. DNS correctness,
+[AGENTS.md](AGENTS.md). Follow the [agent delivery workflow](docs/engineering/workflow.md). Work in complete, reviewable slices. DNS correctness,
 security and predictable latency take priority over throughput.
 
 The project is maintained by [@Pettersen3008](https://github.com/Pettersen3008).
@@ -31,7 +31,7 @@ The maintainer verifies changes locally before merging, including Dependabot PRs
 Use the pinned `rust-toolchain.toml` for reproducible local performance/release
 work. Libraries support Rust 1.95 and edition 2024; local checks test that floor separately
 from the pinned measurement toolchain. Linux is the verified appliance platform. A C toolchain is
-needed for bundled SQLite; console work needs Node 22.12+ and npm.
+needed for bundled SQLite; console work needs Node 22.22+ and Bun 1.4.3+.
 
 Before submitting a meaningful change:
 
@@ -42,6 +42,7 @@ cargo test --workspace --locked
 cargo +1.95.0 check --workspace --all-targets --locked
 cargo bench --workspace --no-run --locked
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps --locked
+python3 scripts/check-docs.py
 python3 scripts/verify-consumers.py
 python3 scripts/verify-crates.py --allow-dirty
 ```
@@ -65,7 +66,7 @@ instrumentation. Record hardware, allocations, correctness, unfavorable results
 and uncertainty. Use `DNS_BENCH_SIZES` for larger filter sets. Do not relax DNS
 semantics, remove history, change benchmark cases or add complexity to hit a
 percentage. Profile before replacing Hickory or data structures. See
-[benchmark methodology](docs/benchmarks.md) and [refactor evidence](docs/refactor-results.md).
+[benchmark methodology](docs/engineering/performance.md) and [refactor evidence](docs/engineering/performance.md).
 
 Describe the concrete trigger and resulting behavior in pull requests. Explain
 why a boundary changed and how it was verified. Keep implementation choices
@@ -75,6 +76,6 @@ exercise observable contracts and failure modes rather than mirror code.
 
 Version 0.1 APIs may evolve with documented breaking changes. Stable standalone
 configuration, HTTP and SQLite formats require migration/regression evidence.
-See [release preparation](docs/releasing.md). Publishing and host activation are
+See [release preparation](docs/operations/releasing.md). Publishing and host activation are
 separate actions; passing local checks does not complete a representative-network
 soak.

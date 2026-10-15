@@ -1,0 +1,1 @@
+dns: {rewrites: [{domain: active.home.arpa, answer: 192.0.2.10, enabled: true}, {domain: disabled.home.arpa, answer: 192.0.2.11, enabled: false}, {domain: "*.inactive.test", answer: A, enabled: false}]}

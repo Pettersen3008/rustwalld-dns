@@ -1,6 +1,7 @@
 //! A dedicated SQLite thread with bounded commands and bounded telemetry batches.
 mod history;
 mod metrics;
+mod privacy;
 mod revisions;
 mod schema;
 mod types;
@@ -8,6 +9,7 @@ mod worker;
 
 use history::History;
 pub use metrics::{StoreMetrics, StoreMetricsSnapshot};
+pub use privacy::{HistoryMode, Privacy, PrivacyChange};
 use rustwalld_dns_core::telemetry::QueryEvent;
 use schema::open;
 use std::{path::PathBuf, sync::Arc, time::Duration};
@@ -20,7 +22,7 @@ pub use types::{
 use worker::{Command, Operation, Reply, Worker};
 
 /// Database schema version written by this release.
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 6;
 /// Revisions kept besides the live active/shadow ones.
 const RETAINED_REVISIONS: i64 = 32;
 /// Maximum history events written in one transaction.
@@ -53,21 +55,23 @@ impl Store {
         std::thread::Builder::new()
             .name("dns-sqlite".into())
             .spawn(move || {
-                let opened = open(&path).and_then(|connection| {
-                    let history = History::open(&connection, history_rows)?;
+                let opened = open(&path).and_then(|mut connection| {
+                    let privacy = privacy::initialize(&mut connection, history_rows)?;
+                    let history = History::open(&connection, &privacy)?;
                     let runtime = tokio::runtime::Builder::new_current_thread()
                         .enable_time()
                         .build()
                         .map_err(StoreError::Spawn)?;
-                    Ok((connection, history, runtime))
+                    Ok((connection, history, runtime, privacy))
                 });
                 match opened {
-                    Ok((connection, history, runtime)) => {
+                    Ok((connection, history, runtime, privacy)) => {
                         let _ = ready_tx.send(Ok(()));
                         let worker = Worker {
                             connection,
                             history,
                             counts,
+                            privacy,
                         };
                         runtime.block_on(worker.run(commands, events, cancel));
                     }
@@ -111,6 +115,38 @@ impl Store {
     pub async fn queries(&self, limit: usize) -> Result<Vec<HistoryEntry>, StoreError> {
         match self.request(Operation::Queries { limit }).await? {
             Reply::Queries(v) => Ok(v),
+            _ => Err(StoreError::Response),
+        }
+    }
+    /// One retained query by its primary key; absent/evicted entries are `None`.
+    ///
+    /// # Errors
+    /// Queue, worker or SQLite failures.
+    pub async fn query(&self, id: u64) -> Result<Option<HistoryEntry>, StoreError> {
+        match self.request(Operation::Query { id }).await? {
+            Reply::Query(value) => Ok(value),
+            _ => Err(StoreError::Response),
+        }
+    }
+    /// Current durable privacy preferences and retained query-row count.
+    pub async fn privacy(&self) -> Result<Privacy, StoreError> {
+        match self.request(Operation::Privacy).await? {
+            Reply::Privacy(value) => Ok(value),
+            _ => Err(StoreError::Response),
+        }
+    }
+    /// Change preferences only if their independent revision still matches.
+    pub async fn change_privacy(
+        &self,
+        expected: u64,
+        change: PrivacyChange,
+    ) -> Result<Privacy, StoreError> {
+        change.validate().map_err(StoreError::InvalidPrivacy)?;
+        match self
+            .request(Operation::ChangePrivacy { expected, change })
+            .await?
+        {
+            Reply::Privacy(value) => Ok(value),
             _ => Err(StoreError::Response),
         }
     }

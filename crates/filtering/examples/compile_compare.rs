@@ -1,4 +1,4 @@
-//! Fresh-process timing/RSS: compile_compare <rules> <workers: 0|2|4> [mixed|suffix|idna].
+//! Fresh-process timing/RSS: compile_compare <rules> <workers: 0|2|4> [mixed|suffix|idna|adguard|badfilter|denyallow|dnstype|client|tags].
 //! Zero workers selects the sequential implementation. Linux proc reads are outside compilation.
 use rustwalld_dns_filter::{FilterSnapshot, ParallelCompiler};
 use std::{error::Error, time::Instant};
@@ -10,9 +10,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     let workers: usize = args.next().ok_or("missing workers")?.parse()?;
     let workload = args.next().unwrap_or_else(|| "mixed".into());
     if args.next().is_some() || ![0, 2, 4].contains(&workers) {
-        return Err("expected <rules> <workers: 0|2|4> [mixed|suffix|idna]".into());
+        return Err(
+            "expected <rules> <workers: 0|2|4> [mixed|suffix|idna|adguard|badfilter|denyallow|dnstype|client|tags]"
+                .into(),
+        );
     }
     let lists = support::fixture(size, &workload)?;
+    let raw_budget = lists
+        .iter()
+        .map(|list| list.rules.lines().count())
+        .sum::<usize>()
+        .max(size)
+        + 1;
     let start = Instant::now();
     let compiler = if workers == 0 {
         None
@@ -22,8 +31,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let startup_ns = start.elapsed().as_nanos();
     let start = Instant::now();
     let snapshot = match &compiler {
-        None => FilterSnapshot::compile(&lists, size + 1, usize::MAX)?,
-        Some(compiler) => compiler.compile(&lists, size + 1, usize::MAX)?,
+        None => FilterSnapshot::compile(&lists, raw_budget, usize::MAX)?,
+        Some(compiler) => compiler.compile(&lists, raw_budget, usize::MAX)?,
     };
     let compile_ns = start.elapsed().as_nanos();
     if snapshot.effective_rules() != size {

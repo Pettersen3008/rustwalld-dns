@@ -1,0 +1,4 @@
+||tag.test^$ctag=device_phone|~user_admin,client=Kids,dnstype=AAAA,denyallow=safe.tag.test
+@@||allowed.test^$ctag=user_child
+---allow---
+@@||safe.test^$ctag=user_child

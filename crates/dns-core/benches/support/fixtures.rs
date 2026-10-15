@@ -21,6 +21,7 @@ pub fn setup(exception_domain: Option<&str>) -> (Engine, Vec<u8>, Vec<u8>) {
             network: network.parse().unwrap(),
             name: name.into(),
             policy: "default".into(),
+            filter_tags: Vec::new(),
             metadata: Some(rustwalld_dns_policy::BindingMetadata {
                 group: Some("g".repeat(128)),
                 owner: Some("o".repeat(128)),
@@ -33,6 +34,7 @@ pub fn setup(exception_domain: Option<&str>) -> (Engine, Vec<u8>, Vec<u8>) {
         ..Default::default()
     };
     config.policies[0].lists.push(ListInput {
+        syntax: Default::default(),
         name: "bench".into(),
         action: Action::Block,
         rules: "blocked.test".into(),
@@ -45,6 +47,8 @@ pub fn setup(exception_domain: Option<&str>) -> (Engine, Vec<u8>, Vec<u8>) {
         config.policies[0]
             .temporary_exceptions
             .push(rustwalld_dns_policy::TemporaryException {
+                clients: vec![],
+                include_subdomains: false,
                 name: "bench-exception".into(),
                 domain: domain.into(),
                 expires_at: std::time::SystemTime::now()

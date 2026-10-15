@@ -30,7 +30,7 @@ fuzz_target!(|input: &str| {
         .map(str::to_owned);
     let mut config = PolicyConfigSet::default();
     config.upstreams[0].addresses = vec!["127.0.0.1:9".parse().unwrap()];
-    config.policies[0].lists = vec![ListInput {
+    config.policies[0].lists = vec![ListInput { syntax: Default::default(),
         name: "remote".into(),
         action: Action::Block,
         rules: "ads.test\n".into(),

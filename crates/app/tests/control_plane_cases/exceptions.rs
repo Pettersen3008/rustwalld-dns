@@ -42,11 +42,14 @@ async fn temporary_exception_api_shadow_history_sqlite_failure_and_expired_rollb
     config.policies[0]
         .temporary_exceptions
         .push(rustwalld_dns_policy::TemporaryException {
+            clients: vec![],
+            include_subdomains: false,
             name: "repair".into(),
             domain: "ADS.TEST.".into(),
             expires_at: expiry,
         });
     config.assertions.push(rustwalld_dns_policy::Assertion {
+        qtype: 1,
         client: "127.0.0.1".parse().unwrap(),
         domain: "ads.test".into(),
         expected: Action::Block,
@@ -164,7 +167,7 @@ async fn temporary_exception_api_shadow_history_sqlite_failure_and_expired_rollb
         ResponseCode::NXDomain
     );
     let report = rustwalld_dns::maintenance::verify(&harness.path).unwrap();
-    assert_eq!(report.schema, 2);
+    assert_eq!(report.schema, rustwalld_dns::store::SCHEMA_VERSION);
     mock.abort();
     harness.shutdown().await;
 }
@@ -180,6 +183,8 @@ async fn api_intake_limits_only_new_exceptions_to_seven_days() {
     config.policies[0]
         .temporary_exceptions
         .push(rustwalld_dns_policy::TemporaryException {
+            clients: vec![],
+            include_subdomains: false,
             name: "too-long".into(),
             domain: "ads.test".into(),
             expires_at: now + 8 * 86400,

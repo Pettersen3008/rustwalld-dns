@@ -35,7 +35,10 @@ async fn schema_one_backup_restores_and_migrates_history_without_changing_revisi
     let queries = store.queries(10).await.unwrap();
     assert_eq!(queries[0].domain, "legacy.test");
     assert_eq!(queries[0].temporary_exception, None);
-    assert_eq!(maintenance::verify(&restored).unwrap().schema, 2);
+    assert_eq!(
+        maintenance::verify(&restored).unwrap().schema,
+        rustwalld_dns::store::SCHEMA_VERSION
+    );
     cancel.cancel();
     done.await.unwrap();
     // Reopening a migrated store must not attempt the ALTER again.
@@ -64,9 +67,10 @@ async fn wal_snapshot_and_restore_preserve_runtime_revisions_without_clobbering(
     config.policies[0]
         .lists
         .push(rustwalld_dns_filter::ListInput {
+            syntax: rustwalld_dns_filter::RuleSyntax::AdguardV3,
             name: "snapshot".into(),
             action: rustwalld_dns_filter::Action::Block,
-            rules: "backup.test".into(),
+            rules: "backup.test\n||cancel.test^\n||cancel.test^$badfilter\n||test^$denyallow=cancel.test|safe.test".into(),
         });
     for (id, mode) in [(2, RevisionMode::Promoted), (3, RevisionMode::Shadow)] {
         store
@@ -110,6 +114,38 @@ async fn wal_snapshot_and_restore_preserve_runtime_revisions_without_clobbering(
     assert_eq!(bootstrap.active, 2);
     assert_eq!(bootstrap.shadow, Some(3));
     assert_eq!(bootstrap.next, 4);
+    let restored_config: PolicyConfigSet = serde_json::from_str(&bootstrap.config).unwrap();
+    assert_eq!(
+        restored_config.policies[0].lists[0].syntax,
+        rustwalld_dns_filter::RuleSyntax::AdguardV3
+    );
+    let compiled =
+        rustwalld_dns_policy::PolicySnapshot::compile(restored_config, bootstrap.active).unwrap();
+    assert_eq!(compiled.policies()[0].filters().cancellation_targets(), 1);
+    assert_eq!(
+        compiled
+            .explain("127.0.0.1".parse().unwrap(), "cancel.test")
+            .unwrap()
+            .decision
+            .action,
+        rustwalld_dns_filter::Action::Allow
+    );
+    assert_eq!(
+        compiled
+            .explain("127.0.0.1".parse().unwrap(), "safe.test")
+            .unwrap()
+            .decision
+            .action,
+        rustwalld_dns_filter::Action::Allow
+    );
+    assert_eq!(
+        compiled
+            .explain("127.0.0.1".parse().unwrap(), "tracking.test")
+            .unwrap()
+            .decision
+            .action,
+        rustwalld_dns_filter::Action::Block
+    );
     restored_stop.cancel();
     restored_done.await.unwrap();
     cancel.cancel();
@@ -132,7 +168,8 @@ async fn online_backup_completes_while_another_connection_keeps_writing() {
         .execute_batch(
             "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<60000)
              INSERT INTO queries(client,domain,qtype,generation,policy,action,rule,decision_cached,rcode,source,latency_us)
-             SELECT '192.0.2.1', printf('history-%08d.example.test', x), 1, 1, 0, 'allow', NULL, 0, 0, 'forwarded', 10 FROM n;",
+             SELECT '192.0.2.1', printf('history-%08d.example.test', x), 1, 1, 0, 'allow', NULL, 0, 0, 'forwarded', 10 FROM n;
+             UPDATE privacy SET next_query_id=(SELECT MAX(id)+1 FROM queries) WHERE id=1;",
         )
         .unwrap();
     let stop = Arc::new(AtomicBool::new(false));
@@ -147,9 +184,8 @@ async fn online_backup_completes_while_another_connection_keeps_writing() {
             connection.busy_timeout(Duration::from_secs(1)).unwrap();
             while !stop.load(Ordering::Relaxed) {
                 connection
-                    .execute(
-                        "INSERT INTO queries(client,domain,qtype,generation,policy,action,decision_cached,rcode,source,latency_us) VALUES('192.0.2.2','live.test',1,1,0,'allow',0,0,'forwarded',1)",
-                        [],
+                    .execute_batch(
+                        "BEGIN; INSERT INTO queries(client,domain,qtype,generation,policy,action,decision_cached,rcode,source,latency_us) VALUES('192.0.2.2','live.test',1,1,0,'allow',0,0,'forwarded',1); UPDATE privacy SET next_query_id=(SELECT MAX(id)+1 FROM queries) WHERE id=1; COMMIT;",
                     )
                     .unwrap();
                 writes.fetch_add(1, Ordering::Relaxed);
@@ -205,6 +241,7 @@ async fn corrupt_future_or_assertion_failing_sources_never_publish_a_backup() {
         .unwrap();
     let mut config = PolicyConfigSet::default();
     config.assertions.push(rustwalld_dns_policy::Assertion {
+        qtype: 1,
         client: "127.0.0.1".parse().unwrap(),
         domain: "unblocked.test".into(),
         expected: rustwalld_dns_filter::Action::Block,
@@ -296,4 +333,30 @@ async fn untrusted_destination_directory_and_executable_schema_are_rejected() {
         maintenance::verify(&source).unwrap_err().to_string(),
         "runtime active pointer refers to missing revision 999"
     );
+}
+
+#[tokio::test]
+async fn schema_six_invalid_response_provenance_never_publishes_a_backup() {
+    let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    for (index, value) in ["0", "65536", "'not-a-type'", "1"].iter().enumerate() {
+        let source = dir.path().join(format!("bad-{index}.sqlite"));
+        let (_, cancel, done) = initialize(&source).await;
+        cancel.cancel();
+        done.await.unwrap();
+        let db = Connection::open(&source).unwrap();
+        db.execute_batch(&format!("PRAGMA ignore_check_constraints=ON; INSERT INTO queries(client,domain,qtype,generation,policy,action,decision_cached,rcode,source,latency_us,matched_type) VALUES('127.0.0.1','value.test',1,1,0,'block',0,3,'blocked',1,{value});")).unwrap();
+        let output = dir.path().join(format!("output-{index}.sqlite"));
+        assert!(maintenance::verify(&source).is_err());
+        assert!(maintenance::snapshot(&source, &output).is_err());
+        assert!(!output.exists());
+    }
+    let source = dir.path().join("missing.sqlite");
+    let (_, cancel, done) = initialize(&source).await;
+    cancel.cancel();
+    done.await.unwrap();
+    Connection::open(&source)
+        .unwrap()
+        .execute_batch("ALTER TABLE queries DROP COLUMN matched_type")
+        .unwrap();
+    assert!(maintenance::verify(&source).is_err());
 }

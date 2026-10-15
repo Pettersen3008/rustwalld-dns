@@ -196,26 +196,36 @@ async fn serve_udp(
         client,
         permit,
     } = query;
-    let reply = match engine.prepare(&bytes, client.ip(), Transport::Udp) {
-        Prepared::Drop => None,
-        Prepared::Reply(reply) => Some(reply),
+    let (reply, permit) = match engine.prepare(&bytes, client.ip(), Transport::Udp) {
+        Prepared::Drop => (None, permit),
+        Prepared::Reply(reply) => (Some(reply), permit),
         Prepared::Forward(pending) => {
-            drop(permit);
-            if let Ok(_wait) = waits.try_acquire_owned() {
-                engine.forward(pending).await
+            if let Ok(wait) = waits.try_acquire_owned() {
+                drop(permit);
+                (engine.forward(pending).await, wait)
             } else {
                 engine
                     .telemetry()
                     .metrics
                     .forward_overloads
                     .fetch_add(1, Ordering::Relaxed);
-                engine.reject(pending)
+                (engine.reject(pending), permit)
             }
         }
     };
     if let Some(reply) = reply {
-        let _ = socket.send_to(&reply, client).await;
+        let _ = send_reply(socket.send_to(&reply, client), permit).await;
     }
+}
+/// Keep admission through a reply's send. Socket backpressure cannot accumulate
+/// unbounded tasks after upstream completion or overload rejection.
+async fn send_reply(
+    send: impl std::future::Future<Output = io::Result<usize>>,
+    _permit: OwnedSemaphorePermit,
+) -> io::Result<usize> {
+    timeout(Duration::from_secs(1), send)
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "UDP reply send timed out"))?
 }
 /// Count a listener failure and decide whether to pause that listener.
 fn listener_failed(
@@ -279,5 +289,29 @@ async fn serve_tcp(
         timeout(idle, stream.write_all(&frame))
             .await
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "DNS write timeout"))??;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    #[tokio::test]
+    async fn stalled_reply_retains_admission_and_releases_it_on_cancel_or_timeout() {
+        let slots = Arc::new(Semaphore::new(1));
+        let permit = slots.clone().try_acquire_owned().unwrap();
+        let task = tokio::spawn(send_reply(std::future::pending(), permit));
+        tokio::task::yield_now().await;
+        assert!(slots.clone().try_acquire_owned().is_err());
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        let permit = slots.clone().try_acquire_owned().unwrap();
+        let result = send_reply(std::future::pending(), permit).await;
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::TimedOut);
+        assert_eq!(slots.available_permits(), 1);
+        let permit = slots.clone().try_acquire_owned().unwrap();
+        assert_eq!(send_reply(async { Ok(42) }, permit).await.unwrap(), 42);
+        assert_eq!(slots.available_permits(), 1);
     }
 }

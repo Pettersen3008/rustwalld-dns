@@ -66,6 +66,14 @@ fn write_text(output: &mut impl Write, report: &CheckReport) -> std::io::Result<
             result.assertion.domain,
             action(result.assertion.expected)
         )?;
+        if result.assertion.qtype != 1 {
+            writeln!(
+                output,
+                "  Query type: {} ({})",
+                hickory_proto::rr::RecordType::from(result.assertion.qtype),
+                result.assertion.qtype
+            )?;
+        }
         if let Some(failure) = &result.failure {
             writeln!(
                 output,

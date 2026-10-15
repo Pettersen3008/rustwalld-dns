@@ -21,6 +21,21 @@ pub struct UpstreamProfile {
     /// UDP (default), DNS-over-TLS or DNS-over-HTTPS.
     pub transport: rustwalld_dns_resolver::UpstreamTransport,
 }
+/// Resolver selection for DNSSEC delegation signer (DS) questions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DsRouting {
+    /// Match the question name, preserving existing native policy behavior.
+    #[default]
+    Question,
+    /// Match the parent name for DS; all other types use the question name.
+    Parent,
+}
+impl DsRouting {
+    fn is_question(&self) -> bool {
+        *self == Self::Question
+    }
+}
 /// Filtering, rewrites and exceptions applied to the clients bound to it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -38,6 +53,27 @@ pub struct PolicyConfig {
     /// Time-limited exact allows.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub temporary_exceptions: Vec<TemporaryException>,
+    /// Additional typed local DNS records.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dns_records: Vec<crate::local_dns::LocalRecord>,
+    /// Most-specific domain routes, evaluated inside this client policy.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<crate::local_dns::DomainRoute>,
+    /// DS routing mode; this does not enable DNSSEC validation.
+    #[serde(default, skip_serializing_if = "DsRouting::is_question")]
+    pub ds_routing: DsRouting,
+    /// How blocked requests are synthesized. NXDOMAIN is the default.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::local_dns::BlockMode::is_default"
+    )]
+    pub block_mode: crate::local_dns::BlockMode,
+    /// Optional provider-managed search/video restrictions, applied after filters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub safe_search: Option<crate::SafeSearchConfig>,
+    /// Optional versioned first-party service-domain blocks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_services: Option<crate::BlockedServices>,
 }
 /// Local A/AAAA answers for one exact name.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,8 +98,11 @@ pub struct Binding {
     pub network: IpNet,
     /// Policy name.
     pub policy: String,
-    /// Label shown in diagnostics.
+    /// Explicit client identity for V5 rules and the label shown in diagnostics.
     pub name: String,
+    /// Explicit AdGuard Home filtering tags; never inventory annotations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filter_tags: Vec<String>,
     /// Descriptive annotations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<BindingMetadata>,
@@ -72,12 +111,24 @@ pub struct Binding {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Assertion {
+    /// Question type for this filtering decision (A by default).
+    #[serde(
+        default = "default_assertion_type",
+        skip_serializing_if = "is_default_assertion_type"
+    )]
+    pub qtype: u16,
     /// Client address to evaluate.
     pub client: IpAddr,
     /// Domain to evaluate.
     pub domain: String,
     /// Required decision.
     pub expected: Action,
+}
+fn default_assertion_type() -> u16 {
+    1
+}
+fn is_default_assertion_type(kind: &u16) -> bool {
+    *kind == 1
 }
 /// Complete policy configuration; compiled into an immutable snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,6 +162,12 @@ impl Default for PolicyConfigSet {
                 lists: vec![],
                 rewrites: vec![],
                 temporary_exceptions: vec![],
+                dns_records: vec![],
+                routes: vec![],
+                ds_routing: Default::default(),
+                block_mode: crate::local_dns::BlockMode::default(),
+                safe_search: None,
+                blocked_services: None,
             }],
             upstreams: vec![UpstreamProfile {
                 name: "default".into(),

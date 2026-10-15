@@ -193,6 +193,7 @@ async fn main() {
     }
     config.policy.upstreams[0].addresses = vec![upstream_addr];
     config.policy.policies[0].lists = vec![rustwalld_dns_filter::ListInput {
+        syntax: Default::default(),
         name: "base".into(),
         action: rustwalld_dns_filter::Action::Block,
         rules: "blocked.test".into(),

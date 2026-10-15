@@ -11,6 +11,7 @@ fn config() -> PolicyConfigSet {
         writeln!(rules, "=rule{i}.test").unwrap();
     }
     config.policies[0].lists.push(ListInput {
+        syntax: Default::default(),
         name: "rules".into(),
         action: Action::Block,
         rules,
@@ -28,6 +29,7 @@ fn config() -> PolicyConfigSet {
     ]
     .into_iter()
     .map(|(domain, expected)| Assertion {
+        qtype: 1,
         client: "127.0.0.1".parse().unwrap(),
         domain: domain.into(),
         expected,
@@ -36,6 +38,7 @@ fn config() -> PolicyConfigSet {
     let mut second = config.policies[0].clone();
     second.name = "second".into();
     second.lists.push(ListInput {
+        syntax: Default::default(),
         name: "allowed".into(),
         action: Action::Allow,
         rules: "test".into(),
@@ -45,6 +48,7 @@ fn config() -> PolicyConfigSet {
         name: "second-client".into(),
         network: "127.0.0.2/32".parse().unwrap(),
         policy: "second".into(),
+        filter_tags: Vec::new(),
         metadata: None,
     });
     config

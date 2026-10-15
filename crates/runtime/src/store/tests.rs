@@ -1,11 +1,13 @@
 #![allow(clippy::unwrap_used)]
-use super::{schema::durable, worker::execute, *};
+use super::{history::queries, schema::durable, worker::execute, *};
 use rusqlite::Connection;
 use rustwalld_dns_core::telemetry::QuerySource;
 fn event() -> QueryEvent {
     QueryEvent {
         client: "127.0.0.1".parse().unwrap(),
         domain: "cache.example".into(),
+        matched_domain: None,
+        matched_type: None,
         qtype: 1,
         generation: 1,
         policy: 0,
@@ -16,6 +18,7 @@ fn event() -> QueryEvent {
         latency_us: 1,
         shadow: None,
         temporary_exception: None,
+        service_schedule: None,
     }
 }
 fn ids(connection: &Connection) -> Vec<i64> {
@@ -29,11 +32,21 @@ fn ids(connection: &Connection) -> Vec<i64> {
 }
 fn database() -> (tempfile::TempDir, Connection) {
     let directory = tempfile::tempdir().unwrap();
-    let connection = open(&directory.path().join("dns.sqlite")).unwrap();
+    let mut connection = open(&directory.path().join("dns.sqlite")).unwrap();
+    privacy::initialize(&mut connection, 100).unwrap();
     (directory, connection)
 }
 fn write(connection: &mut Connection, batch: &[QueryEvent], limit: u64) -> Result<(), StoreError> {
-    let mut history = History::open(connection, 0).unwrap();
+    let mut history = History::open(
+        connection,
+        &Privacy {
+            revision: 1,
+            mode: HistoryMode::Full,
+            retention_rows: 0,
+            retained_rows: 0,
+        },
+    )
+    .unwrap();
     history.limit = limit;
     history.write(connection, batch)
 }
@@ -66,7 +79,16 @@ fn failed_history_batch_cannot_insert_or_trim_partial_state() {
 #[test]
 fn retained_row_count_tracks_inserts_evictions_and_failed_batches() {
     let (_directory, mut connection) = database();
-    let mut history = History::open(&connection, 5).unwrap();
+    let mut history = History::open(
+        &connection,
+        &Privacy {
+            revision: 1,
+            mode: HistoryMode::Full,
+            retention_rows: 5,
+            retained_rows: 0,
+        },
+    )
+    .unwrap();
     history.write(&mut connection, &vec![event(); 3]).unwrap();
     assert_eq!(history.rows, 3);
     history.write(&mut connection, &vec![event(); 4]).unwrap();
@@ -77,7 +99,20 @@ fn retained_row_count_tracks_inserts_evictions_and_failed_batches() {
     assert_eq!(history.rows, 5);
     assert_eq!(History::count(&connection).unwrap(), 5);
     // A reopened store starts from the durable count, not from zero.
-    assert_eq!(History::open(&connection, 5).unwrap().rows, 5);
+    assert_eq!(
+        History::open(
+            &connection,
+            &Privacy {
+                revision: 1,
+                mode: HistoryMode::Full,
+                retention_rows: 5,
+                retained_rows: 0
+            }
+        )
+        .unwrap()
+        .rows,
+        5
+    );
     // The creation-time index is gone; retention never needed it.
     let indexes: i64 = connection
         .query_row(
@@ -250,4 +285,89 @@ fn pointer_and_revision_corruption_is_reported_not_hidden() {
         execute(&mut connection, Operation::Revision { id: 3 }).unwrap(),
         Reply::Revision(None)
     ));
+}
+
+#[test]
+fn schema_two_migration_preserves_history_and_adds_alias_provenance() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("old.sqlite");
+    {
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch("CREATE TABLE queries(id INTEGER PRIMARY KEY,created TEXT NOT NULL DEFAULT '2026-10-12T00:00:00Z',client TEXT NOT NULL,domain TEXT NOT NULL,qtype INTEGER NOT NULL,generation INTEGER NOT NULL,policy INTEGER NOT NULL,action TEXT NOT NULL,rule INTEGER,decision_cached INTEGER NOT NULL,rcode INTEGER NOT NULL,source TEXT NOT NULL,latency_us INTEGER NOT NULL,shadow TEXT,temporary_exception INTEGER); INSERT INTO queries(client,domain,qtype,generation,policy,action,decision_cached,rcode,source,latency_us) VALUES('127.0.0.1','old.test',1,1,0,'allow',0,0,'upstream',1); PRAGMA user_version=2;").unwrap();
+    }
+    let mut db = open(&path).unwrap();
+    privacy::initialize(&mut db, 100).unwrap();
+    assert_eq!(queries(&db, 10).unwrap()[0].domain, "old.test");
+    assert!(queries(&db, 10).unwrap()[0].matched_domain.is_none());
+    let mut alias = event();
+    alias.matched_domain = Some("tracking.test".into());
+    write(&mut db, &[alias], 10).unwrap();
+    let history = queries(&db, 10).unwrap();
+    assert_eq!(history[0].matched_domain.as_deref(), Some("tracking.test"));
+    assert_eq!(history[1].domain, "old.test");
+    assert_eq!(
+        db.query_row::<i64, _, _>("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap(),
+        SCHEMA_VERSION
+    );
+}
+
+#[test]
+fn scheduled_history_states_survive_write_and_legacy_schema_four_migration() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("history.sqlite");
+    let db = super::schema::open(&path).unwrap();
+    // Recreate the exact schema-four shape instead of merely lowering its marker.
+    db.execute_batch("ALTER TABLE queries DROP COLUMN service_schedule; ALTER TABLE queries DROP COLUMN matched_type; PRAGMA user_version=4;")
+        .unwrap();
+    drop(db);
+    let mut db = super::schema::open(&path).unwrap();
+    super::privacy::initialize(&mut db, 100).unwrap();
+    let privacy = Privacy {
+        revision: 1,
+        mode: HistoryMode::Full,
+        retention_rows: 100,
+        retained_rows: 0,
+    };
+    let mut history = super::history::History::open(&db, &privacy).unwrap();
+    let mut batch = vec![event(); 4];
+    for (entry, state) in batch.iter_mut().zip([
+        None,
+        Some(rustwalld_dns_policy::ServiceScheduleState::Inactive),
+        Some(rustwalld_dns_policy::ServiceScheduleState::Active),
+        Some(rustwalld_dns_policy::ServiceScheduleState::InvalidClock),
+    ]) {
+        entry.service_schedule = state;
+    }
+    history.write(&mut db, &batch).unwrap();
+    let rows = super::history::queries(&db, 10).unwrap();
+    for (row, input) in rows.iter().rev().zip(&batch) {
+        assert_eq!(row.service_schedule, input.service_schedule);
+    }
+    assert!(db.execute("INSERT INTO queries(client,domain,qtype,generation,policy,action,decision_cached,rcode,source,latency_us,service_schedule) VALUES('127.0.0.1','bad.test',1,1,0,'allow',0,0,'upstream',1,9)",[]).is_err());
+}
+
+#[test]
+fn schema_five_aliases_gain_cname_type_and_new_response_types_round_trip() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("history.sqlite");
+    let mut db = open(&path).unwrap();
+    privacy::initialize(&mut db, 100).unwrap();
+    let mut old = event();
+    old.matched_domain = Some("old.canon.test".into());
+    write(&mut db, &[old], 100).unwrap();
+    db.execute_batch("ALTER TABLE queries DROP COLUMN matched_type; PRAGMA user_version=5;")
+        .unwrap();
+    drop(db);
+    let mut db = open(&path).unwrap();
+    assert_eq!(queries(&db, 10).unwrap()[0].matched_type, Some(5));
+    let mut address = event();
+    address.matched_domain = Some("192.0.2.1".into());
+    address.matched_type = Some(28);
+    write(&mut db, &[address], 100).unwrap();
+    let records = queries(&db, 10).unwrap();
+    assert_eq!(records[0].qtype, 1);
+    assert_eq!(records[0].matched_type, Some(28));
+    assert_eq!(records[0].matched_domain.as_deref(), Some("192.0.2.1"));
+    assert_eq!(records[1].matched_type, Some(5));
 }

@@ -48,6 +48,7 @@ async fn real_http_auth_assertions_explanations_history_and_metrics() {
     assert_eq!(dropped["permitted"], false);
     let mut config = harness.state.control.engine().active().config().clone();
     config.assertions.push(rustwalld_dns_policy::Assertion {
+        qtype: 1,
         client: "127.0.0.1".parse().unwrap(),
         domain: "ads.test".into(),
         expected: Action::Allow,

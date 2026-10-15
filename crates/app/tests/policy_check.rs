@@ -22,6 +22,7 @@ fn invoke(path: &Path, format: &str, cwd: &Path) -> Output {
 }
 fn assertion(domain: &str, expected: Action) -> Assertion {
     Assertion {
+        qtype: 1,
         client: "127.0.0.1".parse().unwrap(),
         domain: domain.into(),
         expected,
@@ -61,6 +62,7 @@ fn offline_text_json_and_exit_status_report_all_cases_without_runtime_io() {
         name: "Work – 内部".into(),
         network: "127.0.0.1/32".parse().unwrap(),
         policy: "default".into(),
+        filter_tags: Vec::new(),
         metadata: Some(rustwalld_dns_policy::BindingMetadata {
             group: Some("Work".into()),
             owner: Some("Operator".into()),
@@ -179,6 +181,7 @@ fn invalid_config_and_invalid_cases_have_distinct_machine_readable_outcomes() {
     config.policy.assertions = vec![
         assertion("bad..domain", Action::Allow),
         Assertion {
+            qtype: 1,
             client: "192.0.2.1".parse().unwrap(),
             domain: "safe.test".into(),
             expected: Action::Allow,
@@ -197,6 +200,7 @@ fn invalid_config_and_invalid_cases_have_distinct_machine_readable_outcomes() {
     assert_eq!(report["results"][1]["permitted"], false);
     config.policy.assertions.clear();
     config.policy.policies[0].lists.push(ListInput {
+        syntax: Default::default(),
         name: "malformed".into(),
         action: Action::Block,
         rules: "https://unsupported.test/path".into(),
@@ -286,6 +290,8 @@ fn check_config_treats_file_exceptions_as_new_intake() {
     for (days, accepted) in [(6, true), (8, false)] {
         config.policy.policies[0].temporary_exceptions =
             vec![rustwalld_dns_policy::TemporaryException {
+                clients: vec![],
+                include_subdomains: false,
                 name: "repair".into(),
                 domain: "ads.test".into(),
                 expires_at: now + days * 86400,

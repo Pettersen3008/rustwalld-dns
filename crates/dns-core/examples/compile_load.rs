@@ -131,11 +131,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut config = PolicyConfigSet::default();
     config.upstreams[0].addresses = vec![upstream_addr];
     config.policies[0].lists.push(ListInput {
+        syntax: Default::default(),
         name: "fixture".into(),
         action: Action::Block,
         rules: "blocked.test".into(),
     });
     config.assertions = vec![Assertion {
+        qtype: 1,
         client: "127.0.0.1".parse()?,
         domain: "x.blocked.test".into(),
         expected: Action::Block,

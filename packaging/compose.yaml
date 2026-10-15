@@ -1,0 +1,27 @@
+# Prepare the bind-mounted configuration/state first; see docs/operations/container.md.
+services:
+  dns:
+    image: ${RUSTWALL_IMAGE:?Set the locally verified release image tag}
+    user: "${RUSTWALL_UID:-10001}:${RUSTWALL_GID:-10001}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 20s
+    mem_limit: ${RUSTWALL_MEMORY:-512m}
+    pids_limit: 64
+    environment:
+      RUSTWALLD_API_TOKEN_FILE: /etc/rustwalld-dns/master.token
+      RUST_LOG: info
+    volumes:
+      - ./config:/etc/rustwalld-dns:ro
+      - ./state:/var/lib/rustwalld-dns
+    tmpfs: [/tmp:size=16m,mode=1777]
+    ports:
+      - "${RUSTWALL_BIND:?Set a specific host LAN IP}:53:5353/udp"
+      - "${RUSTWALL_BIND}:53:5353/tcp"
+      - "${RUSTWALL_BIND}:8443:8443/tcp"
+      # Optional DoT/DoH listeners need matching process settings/certificates.
+      # - "${RUSTWALL_BIND}:853:8530/tcp"
+      # - "${RUSTWALL_BIND}:8444:8444/tcp"

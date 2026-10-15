@@ -58,7 +58,13 @@ pub(super) async fn preview_download(
         .await?;
     if preview.report.valid {
         // The tag the caller checked, so staging the preview detects later changes.
-        json_body(StatusCode::OK, Some(revision_tag(expected)), preview).await
+        json_body(
+            StatusCode::OK,
+            Some(revision_tag(expected)),
+            preview,
+            Some(_heavy),
+        )
+        .await
     } else {
         json_body(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -67,6 +73,7 @@ pub(super) async fn preview_download(
                 error: "downloaded candidate failed required assertions",
                 report: preview.report,
             },
+            Some(_heavy),
         )
         .await
     }

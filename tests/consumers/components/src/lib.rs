@@ -7,11 +7,13 @@ mod tests {
         let filters = FilterSnapshot::compile(
             &[
                 ListInput {
+                    syntax: Default::default(),
                     name: "blocked".into(),
                     action: Action::Block,
                     rules: "ads.test\n=exact.test".into(),
                 },
                 ListInput {
+                    syntax: Default::default(),
                     name: "allowed".into(),
                     action: Action::Allow,
                     rules: "=safe.ads.test".into(),
@@ -33,6 +35,7 @@ mod tests {
         let snapshot = compiler
             .compile(
                 &[ListInput {
+                    syntax: Default::default(),
                     name: "large".into(),
                     action: Action::Block,
                     rules,

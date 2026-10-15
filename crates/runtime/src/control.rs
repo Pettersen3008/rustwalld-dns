@@ -1,6 +1,6 @@
 //! Durable policy operations independent of HTTP requests and process signals.
 use crate::{
-    config::validate_policy,
+    config::validate_policy_listeners,
     downloads, refreshes,
     store::{
         ClearShadowReport, CommitReport, HistoryEntry, Revision, RevisionMode, RevisionSummary,
@@ -86,6 +86,8 @@ pub struct ControlService {
     engine: Arc<Engine>,
     store: Store,
     listen: SocketAddr,
+    listeners: Arc<[SocketAddr]>,
+    privacy_mutation: Arc<Semaphore>,
     next_generation: Arc<AtomicU64>,
     mutation: Arc<Semaphore>,
     downloads: Arc<Semaphore>,
@@ -119,6 +121,8 @@ impl ControlService {
             stopping: Arc::new(AtomicBool::new(false)),
             store,
             listen,
+            listeners: Arc::from([listen]),
+            privacy_mutation: Arc::new(Semaphore::new(1)),
             next_generation: Arc::new(AtomicU64::new(next_generation)),
             mutation: Arc::new(Semaphore::new(1)),
             downloads: Arc::new(Semaphore::new(1)),
@@ -128,6 +132,24 @@ impl ControlService {
     pub(crate) fn with_compiler(mut self, compiler: crate::compiler::Compiler) -> Self {
         self.compiler = compiler;
         self
+    }
+    /// Include external DNS transport listeners in every candidate check.
+    pub fn with_dns_listeners(mut self, additional: Vec<SocketAddr>) -> Result<Self, ControlError> {
+        if additional.len() > 4 {
+            return Err(invalid("at most four additional DNS listeners"));
+        }
+        let mut listeners = vec![self.listen];
+        listeners.extend(additional);
+        validate_policy_listeners(self.engine.snapshot().config(), &listeners).map_err(invalid)?;
+        if let Some(shadow) = self.engine.shadow_snapshot() {
+            validate_policy_listeners(shadow.config(), &listeners).map_err(invalid)?;
+        }
+        self.listeners = listeners.into();
+        Ok(self)
+    }
+    /// All DNS ingress addresses used by candidate/self-forwarding checks.
+    pub fn dns_listeners(&self) -> &[SocketAddr] {
+        &self.listeners
     }
     /// Next identifier to attempt; callers cannot reset or reuse it.
     pub fn next_generation(&self) -> u64 {
@@ -169,6 +191,41 @@ impl ControlService {
     /// The most recent `limit` persisted query events.
     pub async fn queries(&self, limit: usize) -> Result<Vec<HistoryEntry>, ControlError> {
         self.store.queries(limit).await.map_err(unavailable)
+    }
+    /// Read durable logging preferences independently of policy generations.
+    pub async fn privacy(&self) -> Result<crate::store::Privacy, crate::store::StoreError> {
+        self.store.privacy().await
+    }
+    /// Serialize durable preference publication and retain admission on cancellation.
+    pub async fn change_privacy(
+        self: &Arc<Self>,
+        expected: u64,
+        change: crate::store::PrivacyChange,
+    ) -> Result<crate::store::Privacy, crate::store::StoreError> {
+        self.admit()
+            .map_err(|_| crate::store::StoreError::WorkerStopped)?;
+        change
+            .validate()
+            .map_err(crate::store::StoreError::InvalidPrivacy)?;
+        let guard = self
+            .privacy_mutation
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| crate::store::StoreError::QueueUnavailable)?;
+        self.admit()
+            .map_err(|_| crate::store::StoreError::WorkerStopped)?;
+        let state = self.clone();
+        tokio::spawn(async move {
+            let _guard = guard;
+            let privacy = state.store.change_privacy(expected, change).await?;
+            state
+                .engine
+                .telemetry()
+                .set_logging_enabled(privacy.mode != crate::store::HistoryMode::Disabled);
+            Ok::<_, crate::store::StoreError>(privacy)
+        })
+        .await
+        .map_err(|_| crate::store::StoreError::WorkerStopped)?
     }
     /// Scheduled refresh state for the active generation, including why
     /// checks are paused.
@@ -231,11 +288,11 @@ impl ControlService {
             .clone()
             .try_acquire_owned()
             .map_err(|_| ControlError::Conflict("list download already running".into()))?;
-        let listen = self.listen;
+        let listeners = self.listeners.clone();
         // Admission moves into blocking jobs, so caller cancellation cannot
         // release a slot early. The fetch stays cancellable; its guard closes I/O.
         let (mut config, download) = tokio::task::spawn_blocking(move || {
-            validate_policy(&config, listen).map_err(invalid)?;
+            validate_policy_listeners(&config, &listeners).map_err(invalid)?;
             if source >= config.filter_sources.len() {
                 return Err(invalid("unknown source index"));
             }
@@ -269,10 +326,11 @@ impl ControlService {
         // The download took time; never return a candidate for a newer revision.
         self.check_revision(Some(expected))?;
         let compiler = self.compiler.clone();
+        let listeners = self.listeners.clone();
         tokio::task::spawn_blocking(move || {
             let _guard = guard;
             let _download = download;
-            validate_policy(&config, listen).map_err(invalid)?;
+            validate_policy_listeners(&config, &listeners).map_err(invalid)?;
             let report = compiler.check(config.clone()).map_err(invalid)?;
             if report.valid {
                 let raw = report
@@ -312,6 +370,7 @@ impl ControlService {
     /// admission, not a mutex held across network I/O.
     pub(crate) async fn drain_mutations(&self) {
         let _ = self.mutation.acquire().await;
+        let _ = self.privacy_mutation.acquire().await;
     }
     pub(crate) fn refresher(&self) -> &Arc<refreshes::Refresher> {
         &self.refreshes
@@ -353,13 +412,13 @@ impl ControlService {
         self.admit()?;
         let guard = self.try_mutation("policy compilation already running")?;
         self.admit()?;
-        let listen = self.listen;
+        let listeners = self.listeners.clone();
         let compiler = self.compiler.clone();
         let accepted = self.accepted();
         tokio::spawn(async move {
             let _guard = guard;
             tokio::task::spawn_blocking(move || {
-                validate_policy(&config, listen).map_err(invalid)?;
+                validate_policy_listeners(&config, &listeners).map_err(invalid)?;
                 validate_intake(&config, &accepted).map_err(invalid)?;
                 compiler.check(config).map_err(invalid)
             })
@@ -407,13 +466,13 @@ impl ControlService {
             let _guard = guard;
             let old = state.engine.snapshot();
             let version = state.version();
-            let listen = state.listen;
+            let listeners = state.listeners.clone();
             let compiler = state.compiler.clone();
             // Cloning, compilation, serialization and diffing are all CPU work
             // proportional to configuration size; keep them off async workers.
             let (snapshot, content, diff) = tokio::task::spawn_blocking(move || {
                 let config = draft.into_config();
-                validate_policy(&config, listen).map_err(PolicyError::Invalid)?;
+                validate_policy_listeners(&config, &listeners).map_err(PolicyError::Invalid)?;
                 if let Some(accepted) = &intake {
                     validate_intake(&config, accepted)?;
                 }

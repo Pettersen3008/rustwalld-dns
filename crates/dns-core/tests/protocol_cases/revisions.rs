@@ -17,6 +17,7 @@ async fn reload_under_traffic_generation_invalidation_and_shadow() {
     );
     let mut candidate = engine.active.load().config().clone();
     candidate.policies[0].lists.push(ListInput {
+        syntax: Default::default(),
         name: "deny".into(),
         action: Action::Block,
         rules: "example".into(),

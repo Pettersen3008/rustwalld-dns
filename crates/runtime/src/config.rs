@@ -26,6 +26,16 @@ pub fn validate_policy(config: &PolicyConfigSet, listen: SocketAddr) -> Result<(
     }
     Ok(())
 }
+/// Apply admission/self-forwarding validation to all enabled DNS transports.
+pub fn validate_policy_listeners(
+    config: &PolicyConfigSet,
+    listeners: &[SocketAddr],
+) -> Result<(), String> {
+    for listener in listeners {
+        validate_policy(config, *listener)?;
+    }
+    Ok(())
+}
 /// Direct self-forwarding check. Addresses are compared canonically, so
 /// `[::ffff:127.0.0.1]:53` is the IPv4 loopback listener it reaches.
 fn targets_listener(upstream: SocketAddr, listen: SocketAddr) -> bool {

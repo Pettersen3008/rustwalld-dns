@@ -147,6 +147,31 @@ struct Harness {
     refresh_task: tokio::task::JoinHandle<()>,
 }
 impl Harness {
+    async fn bind_dns(engine: Arc<Engine>) -> std::io::Result<Server> {
+        // TCP and UDP have independent port spaces. A port selected for TCP can
+        // already belong to another test's UDP socket; only retry that collision.
+        let mut retries = 0;
+        loop {
+            let result = Server::bind(
+                ServerConfig {
+                    listen: "127.0.0.1:0".parse().unwrap(),
+                    ..Default::default()
+                },
+                engine.clone(),
+            )
+            .await;
+            if retries < 7
+                && result
+                    .as_ref()
+                    .is_err_and(|error| error.kind() == std::io::ErrorKind::AddrInUse)
+            {
+                retries += 1;
+                continue;
+            }
+            return result;
+        }
+    }
+
     async fn start() -> Self {
         let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
         let path = dir.path().join("dns.sqlite");
@@ -157,6 +182,7 @@ impl Harness {
             .unwrap();
         let mut config = PolicyConfigSet::default();
         config.policies[0].lists = vec![ListInput {
+            syntax: Default::default(),
             name: "test".into(),
             action: Action::Block,
             rules: "ads.test".into(),
@@ -174,15 +200,7 @@ impl Harness {
             telemetry,
         );
         let engine = Arc::new(engine);
-        let server = Server::bind(
-            ServerConfig {
-                listen: "127.0.0.1:0".parse().unwrap(),
-                ..Default::default()
-            },
-            engine.clone(),
-        )
-        .await
-        .unwrap();
+        let server = Self::bind_dns(engine.clone()).await.unwrap();
         let listen = server.local_addr().unwrap();
         let stop = CancellationToken::new();
         let dns_task = tokio::spawn(server.run(stop.clone()));
@@ -244,12 +262,12 @@ impl Harness {
             .unwrap()
     }
     async fn dns(&self, domain: &str) -> Message {
+        self.dns_query(domain, RecordType::A).await
+    }
+    async fn dns_query(&self, domain: &str, kind: RecordType) -> Message {
         let mut request = Message::query();
         request.metadata.recursion_desired = true;
-        request.add_query(Query::query(
-            Name::from_ascii(domain).unwrap(),
-            RecordType::A,
-        ));
+        request.add_query(Query::query(Name::from_ascii(domain).unwrap(), kind));
         let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         socket
             .send_to(&request.to_vec().unwrap(), self.state.control.listen())
@@ -292,3 +310,35 @@ mod revisions;
 
 #[path = "control_plane_cases/security.rs"]
 mod security;
+
+#[path = "control_plane_cases/migration.rs"]
+mod migration;
+#[path = "control_plane_cases/safe_search.rs"]
+mod safe_search;
+
+#[path = "control_plane_cases/temporary.rs"]
+mod temporary;
+
+#[path = "control_plane_cases/privacy.rs"]
+mod privacy;
+
+#[path = "control_plane_cases/services.rs"]
+mod services;
+
+#[path = "control_plane_cases/schedules.rs"]
+mod schedules;
+
+#[path = "control_plane_cases/badfilter.rs"]
+mod badfilter;
+
+#[path = "control_plane_cases/denyallow.rs"]
+mod denyallow;
+
+#[path = "control_plane_cases/client_scope.rs"]
+mod client_scope;
+#[path = "control_plane_cases/dnstype.rs"]
+mod dnstype;
+#[path = "control_plane_cases/rewrite_import.rs"]
+mod rewrite_import;
+#[path = "control_plane_cases/tag_scope.rs"]
+mod tag_scope;

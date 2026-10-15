@@ -10,6 +10,14 @@ use std::{
 pub struct Config {
     pub dns_listen: SocketAddr,
     pub api_listen: SocketAddr,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_tls: Option<crate::tls::Certificate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_file: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dot: Option<crate::tls::DnsListener>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doh: Option<crate::tls::DnsListener>,
     pub database: PathBuf,
     pub web_root: Option<PathBuf>,
     pub dns_cache_entries: usize,
@@ -24,6 +32,8 @@ pub struct Config {
     pub history_rows: usize,
     pub policy: PolicyConfigSet,
     pub filter_files: Vec<FilterFile>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub integrations: Vec<crate::integrations::Integration>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -38,6 +48,10 @@ impl Default for Config {
         Self {
             dns_listen: SocketAddr::from(([127, 0, 0, 1], 5353)),
             api_listen: SocketAddr::from(([127, 0, 0, 1], 8080)),
+            api_tls: None,
+            auth_file: None,
+            dot: None,
+            doh: None,
             database: PathBuf::from("rustwalld.sqlite"),
             web_root: None,
             dns_cache_entries: 4096,
@@ -51,6 +65,7 @@ impl Default for Config {
             history_rows: 100000,
             policy: PolicyConfigSet::default(),
             filter_files: vec![],
+            integrations: vec![],
         }
     }
 }
@@ -65,7 +80,64 @@ impl Config {
         if text.len() > 16 * 1024 * 1024 {
             return Err(format!("{}: config exceeds 16 MiB", path.display()).into());
         }
-        let mut config: Self = toml::from_str(&text)?;
+        let mut config: Self = toml::from_str(&text).map_err(|error: toml::de::Error| {
+            // TOML errors retain the document and may echo arbitrary values or
+            // unknown keys in both Display and Debug. Keep only its location.
+            let location = error.span().map_or(String::new(), |span| {
+                let offset = span.start.min(text.len());
+                let prefix = &text.as_bytes()[..offset];
+                let line = prefix.iter().filter(|&&byte| byte == b'\n').count() + 1;
+                let column = prefix
+                    .iter()
+                    .rposition(|&byte| byte == b'\n')
+                    .map_or(offset + 1, |last| offset - last);
+                format!(" at line {line}, byte column {column}")
+            });
+            format!(
+                "{}: invalid TOML configuration{location}; check syntax and field types (configuration values omitted)",
+                path.display()
+            )
+        })?;
+        let parent = path.parent().unwrap_or(Path::new("."));
+        if let Some(file) = &mut config.auth_file
+            && file.is_relative()
+        {
+            *file = parent.join(&*file);
+        }
+        for integration in &mut config.integrations {
+            use crate::integrations::Source;
+            let path = match &mut integration.source {
+                Source::Dnsmasq { lease_file } => lease_file,
+                Source::Unifi { endpoint, .. }
+                | Source::Opnsense { endpoint }
+                | Source::Peer { endpoint } => &mut endpoint.token_file,
+            };
+            if path.is_relative() {
+                *path = parent.join(&*path);
+            }
+        }
+        for cert in config
+            .api_tls
+            .iter_mut()
+            .chain(
+                config
+                    .dot
+                    .iter_mut()
+                    .map(|listener| &mut listener.certificate),
+            )
+            .chain(
+                config
+                    .doh
+                    .iter_mut()
+                    .map(|listener| &mut listener.certificate),
+            )
+        {
+            for file in [&mut cert.cert_file, &mut cert.key_file] {
+                if file.is_relative() {
+                    *file = parent.join(&*file);
+                }
+            }
+        }
         if let Some(root) = &mut config.web_root
             && root.is_relative()
         {
@@ -91,6 +163,7 @@ impl Config {
                 .find(|p| p.name == input.policy)
                 .ok_or("filter file refers to missing policy")?;
             policy.lists.push(rustwalld_dns_filter::ListInput {
+                syntax: Default::default(),
                 name: input.name.clone(),
                 action: input.action,
                 rules,
@@ -102,12 +175,42 @@ impl Config {
     /// Validate listeners, limits and the embedded policy (`--check-config`).
     pub fn validate(&self) -> Result<(), String> {
         self.validate_settings()?;
-        validate_policy(&self.policy, self.dns_listen)
+        if let Some(file) = &self.auth_file {
+            crate::auth::Identity::load(file.clone())?;
+        }
+        for integration in &self.integrations {
+            crate::integrations::Adapter::load(integration.clone())?;
+        }
+        for certificate in self
+            .api_tls
+            .iter()
+            .chain(self.dot.iter().map(|listener| &listener.certificate))
+            .chain(self.doh.iter().map(|listener| &listener.certificate))
+        {
+            certificate.load(true)?;
+        }
+        validate_policy(&self.policy, self.dns_listen)?;
+        for listener in self.dot.iter().chain(self.doh.iter()) {
+            validate_policy(&self.policy, listener.listen)?;
+        }
+        Ok(())
     }
     /// Validate everything except the policy. The file's policy seeds only a
     /// new database; the runtime validates and compiles it when bootstrapping,
     /// so a broken file cannot block a valid stored revision at startup.
     pub fn validate_settings(&self) -> Result<(), String> {
+        if self.integrations.len() > 8
+            || self.integrations.iter().enumerate().any(|(index, entry)| {
+                self.integrations[..index]
+                    .iter()
+                    .any(|old| old.name == entry.name)
+            })
+        {
+            return Err("at most eight uniquely named integrations".into());
+        }
+        if self.auth_file.is_some() && self.api_tls.is_none() {
+            return Err("Password/session administration requires HTTPS (api_tls)".into());
+        }
         if self
             .web_root
             .as_ref()
@@ -115,8 +218,23 @@ impl Config {
         {
             return Err("web_root must contain a built index.html".into());
         }
-        if !self.api_listen.ip().is_loopback() {
-            return Err("management API must bind to loopback".into());
+        if !self.api_listen.ip().is_loopback() && self.api_tls.is_none() {
+            return Err("management API must bind to loopback unless HTTPS is configured".into());
+        }
+        let mut listeners = vec![self.dns_listen, self.api_listen];
+        for listener in self.dot.iter().chain(self.doh.iter()) {
+            listener.validate()?;
+            if listener.listen.port() == 0
+                || listeners
+                    .iter()
+                    .any(|address| address.port() == listener.listen.port())
+            {
+                return Err("encrypted listener ports must be nonzero and distinct".into());
+            }
+            listeners.push(listener.listen);
+        }
+        if let Some(cert) = &self.api_tls {
+            cert.validate()?;
         }
         if self.dns_listen.port() == 0
             || self.api_listen.port() == 0
@@ -142,6 +260,12 @@ impl Config {
     pub fn into_runtime(self) -> rustwalld_dns_runtime::RuntimeConfig {
         rustwalld_dns_runtime::RuntimeConfig {
             dns_listen: self.dns_listen,
+            additional_dns_listeners: self
+                .dot
+                .iter()
+                .chain(self.doh.iter())
+                .map(|listener| listener.listen)
+                .collect(),
             database: self.database,
             dns_cache_entries: self.dns_cache_entries,
             serve_stale_max_staleness_secs: self.serve_stale_max_staleness_secs,

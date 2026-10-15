@@ -1,0 +1,1 @@
+\0{"user_rules": ["||typed.test^$dnsrewrite=NOERROR;TXT;first", "||typed.test^$dnsrewrite=NOERROR;PTR;NAS.home.arpa.", "||typed.test^$dnsrewrite=NOERROR;MX;10 mail.home.arpa", "||typed.test^$dnsrewrite=NOERROR;SRV;1 2 8443 service.home.arpa", "@@||typed.test^$dnsrewrite=NOERROR;TXT;first"]}

@@ -61,15 +61,30 @@ pub(super) async fn upstreams(State(state): State<Arc<AppState>>) -> Json<Value>
 pub(super) struct ExplainQuery {
     client: IpAddr,
     domain: String,
+    #[serde(default = "default_qtype")]
+    qtype: u16,
+    answer_value: Option<String>,
+    answer_type: Option<u16>,
+}
+fn default_qtype() -> u16 {
+    1
 }
 pub(super) async fn explain(
     State(state): State<Arc<AppState>>,
     ApiQuery(query): ApiQuery<ExplainQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let snapshot = state.control.engine().active();
-    let explanation = snapshot
-        .explain(query.client, &query.domain)
-        .map_err(invalid)?;
+    let kind = hickory_proto::rr::RecordType::from(query.qtype);
+    let explanation = match (query.answer_value, query.answer_type) {
+        (None, None) => snapshot.explain_query(query.client, &query.domain, kind),
+        (Some(value), Some(rrtype)) => {
+            snapshot.explain_answer_query(query.client, &query.domain, kind, &value, rrtype)
+        }
+        _ => Err(rustwalld_dns_policy::PolicyError::Invalid(
+            "answer_value and answer_type must be supplied together".into(),
+        )),
+    }
+    .map_err(invalid)?;
     Ok(Json(
         serde_json::to_value(explanation).map_err(unavailable)?,
     ))

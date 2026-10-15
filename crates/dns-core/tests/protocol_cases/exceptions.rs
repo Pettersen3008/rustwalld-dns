@@ -8,6 +8,12 @@ async fn temporary_exact_allow_caps_udp_tcp_cache_ttls_and_expires_without_telem
     let mut config = temporary_config(&mock, expiry);
     config.allowed_clients = vec!["127.0.0.0/8".parse().unwrap()];
     config.policies.push(PolicyConfig {
+        dns_records: vec![],
+        routes: vec![],
+        ds_routing: Default::default(),
+        block_mode: Default::default(),
+        safe_search: None,
+        blocked_services: None,
         name: "permanent".into(),
         upstream: "default".into(),
         lists: vec![],
@@ -18,6 +24,7 @@ async fn temporary_exact_allow_caps_udp_tcp_cache_ttls_and_expires_without_telem
         name: "Other client".into(),
         network: "127.0.0.2/32".parse().unwrap(),
         policy: "permanent".into(),
+        filter_tags: Vec::new(),
         metadata: None,
     });
     let mut baseline = config.clone();
@@ -94,62 +101,75 @@ async fn temporary_exact_allow_caps_udp_tcp_cache_ttls_and_expires_without_telem
 
 #[tokio::test]
 async fn temporary_coalesced_waiters_and_pinned_generation_cannot_answer_after_expiry() {
-    let mock = Mock::with_delay(false, false, Duration::from_secs(3)).await;
-    let expiry = exception_expiry(2);
-    let config = temporary_config(&mock, expiry);
-    let (telemetry, mut receiver) = Telemetry::channel(32);
-    let engine = Arc::new(Engine::new(
-        PolicySnapshot::compile(config.clone(), 1).unwrap(),
-        32,
-        32,
-        32,
-        telemetry,
-    ));
-    let mut tasks = Vec::new();
-    for _ in 0..16 {
-        let engine = engine.clone();
-        tasks.push(tokio::spawn(async move {
-            Message::from_vec(
-                &engine
-                    .answer(
-                        &query(RecordType::A).to_vec().unwrap(),
-                        "127.0.0.1".parse().unwrap(),
-                        Transport::Udp,
-                    )
-                    .await
-                    .unwrap(),
-            )
-            .unwrap()
-        }));
-    }
-    timeout(Duration::from_secs(1), async {
-        while engine.resolver().metrics.snapshot().coalesced < 15 {
-            tokio::task::yield_now().await;
+    for passthrough in [false, true] {
+        let mock = Mock::with_delay(false, false, Duration::from_secs(3)).await;
+        let expiry = exception_expiry(2);
+        let mut config = temporary_config(&mock, expiry);
+        if passthrough {
+            config.policies[0]
+                .dns_records
+                .push(rustwalld_dns_policy::LocalRecord {
+                    domain: "test.example".into(),
+                    ttl: 60,
+                    data: rustwalld_dns_policy::LocalData::Passthrough {
+                        family: rustwalld_dns_policy::AddressFamily::A,
+                    },
+                });
         }
-    })
-    .await
-    .unwrap();
-    let mut replacement = config;
-    replacement.policies[0].temporary_exceptions.clear();
-    engine
-        .active
-        .store(Arc::new(PolicySnapshot::compile(replacement, 2).unwrap()));
-    for task in tasks {
-        assert_eq!(
-            task.await.unwrap().metadata.response_code,
-            ResponseCode::NXDomain
-        );
+        let (telemetry, mut receiver) = Telemetry::channel(32);
+        let engine = Arc::new(Engine::new(
+            PolicySnapshot::compile(config.clone(), 1).unwrap(),
+            32,
+            32,
+            32,
+            telemetry,
+        ));
+        let mut tasks = Vec::new();
+        for _ in 0..16 {
+            let engine = engine.clone();
+            tasks.push(tokio::spawn(async move {
+                Message::from_vec(
+                    &engine
+                        .answer(
+                            &query(RecordType::A).to_vec().unwrap(),
+                            "127.0.0.1".parse().unwrap(),
+                            Transport::Udp,
+                        )
+                        .await
+                        .unwrap(),
+                )
+                .unwrap()
+            }));
+        }
+        timeout(Duration::from_secs(1), async {
+            while engine.resolver().metrics.snapshot().coalesced < 15 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let mut replacement = config;
+        replacement.policies[0].temporary_exceptions.clear();
+        engine
+            .active
+            .store(Arc::new(PolicySnapshot::compile(replacement, 2).unwrap()));
+        for task in tasks {
+            assert_eq!(
+                task.await.unwrap().metadata.response_code,
+                ResponseCode::NXDomain
+            );
+        }
+        assert_eq!(mock.hits.load(Ordering::Relaxed), 1);
+        assert_eq!(engine.resolver().metrics.snapshot().upstream_lookups, 1);
+        assert_eq!(engine.telemetry().metrics.snapshot().failures, 0);
+        for _ in 0..16 {
+            let event = receiver.recv().await.unwrap();
+            assert_eq!(event.generation, 1);
+            assert!(event.temporary_exception.is_none());
+            assert_eq!(event.decision.action, rustwalld_dns_filter::Action::Block);
+        }
+        engine.resolver().shutdown();
     }
-    assert_eq!(mock.hits.load(Ordering::Relaxed), 1);
-    assert_eq!(engine.resolver().metrics.snapshot().upstream_lookups, 1);
-    assert_eq!(engine.telemetry().metrics.snapshot().failures, 0);
-    for _ in 0..16 {
-        let event = receiver.recv().await.unwrap();
-        assert_eq!(event.generation, 1);
-        assert!(event.temporary_exception.is_none());
-        assert_eq!(event.decision.action, rustwalld_dns_filter::Action::Block);
-    }
-    engine.resolver().shutdown();
 }
 
 #[tokio::test]

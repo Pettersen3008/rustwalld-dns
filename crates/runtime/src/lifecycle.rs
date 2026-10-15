@@ -12,6 +12,8 @@ type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 pub struct RuntimeConfig {
     /// DNS listen address (UDP and TCP); port 0 selects one.
     pub dns_listen: SocketAddr,
+    /// External DoT/DoH listeners checked on restore and every mutation.
+    pub additional_dns_listeners: Vec<SocketAddr>,
     /// SQLite database path; created 0600 when absent.
     pub database: PathBuf,
     /// Response-cache entries.
@@ -40,6 +42,7 @@ impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
             dns_listen: SocketAddr::from(([127, 0, 0, 1], 5353)),
+            additional_dns_listeners: vec![],
             database: PathBuf::from("rustwalld.sqlite"),
             dns_cache_entries: 4096,
             serve_stale_max_staleness_secs: 0,
@@ -62,10 +65,19 @@ impl RuntimeConfig {
     /// A description of the first violated bound or rule.
     pub fn validate(&self) -> std::result::Result<(), String> {
         self.validate_limits()?;
-        config::validate_policy(&self.policy, self.dns_listen)
+        config::validate_policy(&self.policy, self.dns_listen)?;
+        config::validate_policy_listeners(&self.policy, &self.additional_dns_listeners)
     }
     /// Validate numeric bounds independently of policy compilation.
     pub fn validate_limits(&self) -> std::result::Result<(), String> {
+        if self.additional_dns_listeners.len() > 4
+            || self
+                .additional_dns_listeners
+                .iter()
+                .any(|listener| listener.port() == 0)
+        {
+            return Err("at most four additional DNS listeners with nonzero ports".into());
+        }
         rustwalld_dns_core::ServeStale::new(Duration::from_secs(
             self.serve_stale_max_staleness_secs,
         ))
@@ -143,6 +155,8 @@ impl Runtime {
             db_cancel.clone(),
         )
         .await?;
+        let privacy = store.privacy().await?;
+        telemetry.set_logging_enabled(privacy.mode != crate::store::HistoryMode::Disabled);
         let database = DatabaseWorker {
             cancel: db_cancel,
             done: Some(done),
@@ -162,6 +176,8 @@ impl Runtime {
             }
             None => {
                 config::validate_policy(&config.policy, listen).map_err(config::invalid)?;
+                config::validate_policy_listeners(&config.policy, &config.additional_dns_listeners)
+                    .map_err(config::invalid)?;
                 let policy = std::mem::take(&mut config.policy);
                 let compiler = compiler.clone();
                 let (initial, content) = tokio::task::spawn_blocking(move || {
@@ -221,7 +237,9 @@ impl Runtime {
             }
         }
         let control = Arc::new(
-            ControlService::new(engine, controller, store, listen, next)?.with_compiler(compiler),
+            ControlService::new(engine, controller, store, listen, next)?
+                .with_dns_listeners(config.additional_dns_listeners)?
+                .with_compiler(compiler),
         );
         Ok(Self {
             control,
@@ -374,6 +392,8 @@ mod tests {
             .as_secs();
         let mut stored = config.policy.clone();
         stored.policies[0].temporary_exceptions = vec![TemporaryException {
+            clients: vec![],
+            include_subdomains: false,
             name: "repair".into(),
             domain: "ads.test".into(),
             expires_at: now + 30 * 86400,
@@ -414,6 +434,7 @@ mod tests {
         .await;
         let mut failing = config.policy.clone();
         failing.assertions.push(rustwalld_dns_policy::Assertion {
+            qtype: 1,
             client: "127.0.0.1".parse().unwrap(),
             domain: "allowed.test".into(),
             expected: rustwalld_dns_filter::Action::Block,
@@ -464,6 +485,7 @@ mod tests {
             .policy
             .assertions
             .push(rustwalld_dns_policy::Assertion {
+                qtype: 1,
                 client: "127.0.0.1".parse().unwrap(),
                 domain: "allowed.test".into(),
                 expected: rustwalld_dns_filter::Action::Block,

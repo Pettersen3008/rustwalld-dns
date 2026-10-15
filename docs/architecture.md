@@ -1,177 +1,80 @@
-# ADR 001: a small forwarding data plane
+# DNS engine architecture
 
-Automation note (2026-10-06): GitHub Actions and `.github/` were removed at
-the maintainer's request. References to CI below describe historical verification;
-run the documented commands locally and retain artifacts under `target/`.
+The workspace has six crates: five reusable libraries and the standalone app.
+Hickory owns DNS wire parsing/serialization. Tokio owns bounded network work.
+The management plane compiles and persists policy without stalling DNS workers.
 
-Status: accepted, initial implementation. Goal: local-first DNS policy/security
-engine with a control plane that cannot stall DNS on storage or compilation.
+| Crate and folder | Owns | Dependency boundary |
+| --- | --- | --- |
+| rustwalld-dns-filter, crates/filtering | Pure compiled matching, source provenance | No app/runtime dependencies |
+| rustwalld-dns-resolver, crates/resolver | Validated upstream exchanges, raw cache, coalescing, encrypted pools | No app/runtime dependencies |
+| rustwalld-dns-policy, crates/policy | Client selection, assertions, local records, immutable policy snapshots | Composes filter/resolver; no app/runtime |
+| rustwalld-dns-core, crates/dns-core | Engine, admission, response synthesis, publication and UDP/TCP ingress | Composes policy/filter/resolver; no app/runtime/SQLite/management JSON |
+| rustwalld-dns-runtime, crates/runtime | Durable revisions, SQLite/history, downloads, scheduling, lifecycle | Uses DNS libraries; never imported by them |
+| rustwalld-dns, crates/app | Files, CLI, authentication, import, HTTP/console and process wiring | Outer application layer |
 
-Use stable Rust, Tokio and Hickory Proto 0.26 for wire parsing/serialization.
-Hickory owns compression, RR encoding and truncation. Use ordinary bounded,
-sharded caches before considering packed tries, custom parsers or lock-free maps.
-Tokio's sockets need no mutex around network I/O. Axum 0.8 will own the API.
-The resolved versions are recorded in Cargo.lock.
+The React console lives in `web/src/` by feature. Tests, examples and benchmarks
+live with the crate whose observable contract they exercise. Independent host
+consumers are in `tests/consumers/`; parser fuzz targets are in `fuzz/`.
 
-Ownership: `rustwalld-dns-core` owns ingress, response synthesis and admission;
-`rustwalld-dns-resolver` owns validated forwarding, caches and coalescing;
-`rustwalld-dns-filter` owns normalized exact/suffix rules and provenance;
-`rustwalld-dns-policy` compiles client prefixes, filter/upstream profiles and
-assertions into immutable generations. The optional `rustwalld-dns-runtime`
-owns SQLite/history, typed revisions, downloads, scheduling and explicit lifecycle.
-App owns file/config loading, HTTP/console adapters and CLI formatting; its binary
-owns process signals and tracing setup. No DNS library depends on runtime or app.
+Core's engine facade owns configuration, snapshots and opaque pending state.
+Private engine modules own admission, local/cache decisions, forwarding,
+outcome/shadow evaluation and wire handling. These retain the same pinned state
+and public API; transport admission and controller publication remain separate.
 
-A separate `PolicyController` checks versions and generation high-water marks,
-then reserves publication without holding a mutex across I/O. The durable service
-persists first; reservation commit performs infallible ArcSwap publication.
-Aborting burns the identifier and leaves live state unchanged. Rollback compiles
-a fresh generation; startup includes retired durable identifiers and empty caches.
-Queries never acquire the control mutex and retain their original snapshot while
-an update is published. Compiled snapshot fields cannot be mutated externally.
-Active publication clears shadow state. See [embedding](embedding.md).
+## Query lifecycle
 
-Compiled temporary exceptions additionally have a bounded one-way expiry bit:
-observed wall-clock expiry cannot be reversed by a clock jump. Their absolute
-and monotonic deadlines do not depend on a control-plane timer. See
-[temporary exceptions](temporary-exceptions.md).
+Admission accepts one supported IN question and pins the immutable generation and
+source client context. Local answers and compiled filters run without control-plane
+I/O. Allow rules override blocks. Cache hits and coalesced waiters avoid constructing
+an unused forwarding envelope. A new admitted upstream flight constructs a fresh
+request; client EDNS options are ignored, never forwarded. DO/CD participate in
+cache semantics; replies clear AD because the engine does not validate DNSSEC.
 
-Filter domains share immutable `Arc<str>` storage between rules and matcher keys;
-provenance shares one list-name allocation per list. Query lookup borrows `&str`
-without reference-count operations. The logical payload estimate is compiled
-once so management status reads do not scan entire rule sets. This replaces
-measured duplicate string storage while retaining ordinary maps, rule IDs and
-source lines. See [filter memory measurements](filter-memory.md).
+Resolver exchanges validate ID, QR, opcode and complete question. UDP truncation
+falls back to TCP; encrypted profiles authenticate their configured identities
+without plaintext downgrade. Timeouts, sockets, connection/stream pools, frame sizes,
+cache entries and inflight keys have explicit bounds. No lock crosses await/I/O.
 
-Forwarding is sequential fallback, never unsolicited racing. Each exchange uses
-a randomized ID and an OS-selected ephemeral connected UDP socket; validate ID,
-QR, opcode and the complete question before accepting it. Retry truncation via
-TCP. Bound the entire exchange, listeners, connections, frames, cache, inflight
-keys and telemetry. Refuse nonrecursive requests, updates, transfers and signed
-queries; only one IN question is supported. EDNS options (cookies, ECS, padding
-and unknown codes) are ignored as RFC 6891 requires and never forwarded: the
-resolver sends a fresh EDNS envelope, so options cannot change cached content.
-Implement cache/forwarding semantics before forwarding any. Pass DO/CD explicitly;
-clear AD: this server does not perform DNSSEC validation.
+Raw cache identity includes canonical question/type/class, resolver content and
+DO/CD. Cache complete validated messages; never promote unsolicited additional
+records into independent entries. Positive expiration uses minimum RR TTL;
+negative caching requires SOA and min(SOA TTL, SOA MINIMUM). Decrement all TTLs.
+Final policy blocks never enter the raw upstream cache. Optional stale answers
+are considered only after upstream failure and retain expiry/resource bounds.
 
-Accepted TCP streams use TCP_NODELAY once per connection, and each reply (length
-prefix and payload) leaves in a single write. Upstream TCP fallback and DoT also
-frame requests into one write with TCP_NODELAY. Admission, frame/deadline bounds and protocol
-handling remain unchanged. See [matched wire measurements](comparison.md).
+Filter decisions partition by immutable generation, policy, required qtype and
+compiled client/tag equivalence class. Reachable response CNAME/value inspection,
+exception expiry and schedule transitions recheck before final synthesis. Pending
+work retains its original generation. Best-effort telemetry uses bounded try_send;
+storage, JSON, parsing and plugin execution never enter this path.
 
-Default DNS/API binds are loopback and unprivileged. Non-loopback DNS listeners
-require explicit client CIDRs. Management binds must remain loopback for now.
-Reject direct self-upstreams; indirect forwarding loops are bounded by timeouts
-and admission, and must also be prevented by operators.
+## Publication and persistence
 
-Alternative: hickory-server/resolver could manage forwarding and caching for us.
-Use hickory-proto with explicit transport code to make admission, cache keys,
-response validation and policy boundaries inspectable. This increases protocol
-responsibility; local packet regression tests and fuzz targets are required.
+The controller validates revision/generation high-water marks and reserves a new
+publication without holding a mutex across I/O. Compile and assertion checking
+run off DNS executors. Runtime persists the revision/pointer before infallible
+ArcSwap publication. Aborts burn identifiers. Active publication clears shadow;
+rollback compiles a fresh generation. Startup accounts for retired durable IDs
+and starts with empty caches. A query keeps its pinned snapshot across promotion.
 
-Cache complete validated upstream messages, not independently extracted records:
-never promote unsolicited additional records to separate cache entries. Cache key
-includes canonical name, type, class, upstream content identity and DO/CD.
-Policy decisions remain partitioned by policy and immutable generation.
-Expire conservatively at the minimum RR TTL, decrement every TTL on hits, and
-cache NXDOMAIN/NODATA only with SOA, using min(SOA TTL, SOA MINIMUM) (RFC 2308).
-Keep final policy answers out of the upstream cache. Optional
-[serve-stale](serve-stale.md) checks expired responses only after all upstreams
-fail, with validated age bounds and a final temporary-exception expiry check.
-Expired entries count against capacity; stale reads never extend retention and
-successful uncacheable refreshes invalidate older data. Coalesced work must survive
-one waiter's cancellation and release its slot after timeout/completion.
-Construct the owned canonical forwarding message only for an admitted upstream
-flight. Cache hits and coalesced waiters derive the existing semantic key from
-the accepted client request without building an unused forward; DO/CD remain
-keyed and client question/size restoration stays in the engine. See
-[forwarding allocation measurements](cache-forwarding.md).
-Decision-cache hits borrow the normalized domain plus policy/generation, creating
-owned keys only on misses. Sharded maps use hashbrown's safe equivalent-key API
-with explicit `RandomState`; FIFO capacity and lock boundaries remain intact.
-See [borrowed decision measurements](borrowed-decisions.md).
+SQLite failure rejects management mutations while the last good DNS generation
+continues. History is bounded, best-effort NORMAL transactions; revision/pointer
+commits use FULL. Privacy has its own durable revision and logging flag; auth
+credentials are separate private state. Neither is policy export data. Shutdown
+stops ingress, drains bounded work, cancels refreshes and drains admitted durable
+publication before storage stops. The host owns executors and signal handling.
 
-CPU accounting lives only in a Linux benchmark example. Shared fixture builders
-keep Criterion and CPU scenarios aligned; the CPU executable excludes allocation
-instrumentation. Proc reads, setup and reporting stay outside measured queries
-and production libraries. See [CPU/query methodology](cpu-query.md).
+## Read the affected contract
 
-Hot-path telemetry uses try_send; database work and JSON never run in Engine.
-The SQLite worker keeps the retained history row count in memory (counted once
-at open, adjusted by inserts and evictions) and trims only excess oldest rows.
-It preserves sparse IDs and atomic batches without counting or walking rows on
-every small batch; the unused creation-time index is dropped. The worker blocks
-on commands/events (commands first) and writes a history batch when full or
-10 ms after its first event, instead of polling. History batches commit with
-`synchronous=NORMAL`; revision/pointer commits switch to `FULL`. New database
-files are created 0600 and WAL mode is verified. Burst history remains best-effort.
-Once policy/shadow matching finishes, query telemetry takes ownership of the
-normalized name buffer. Rewrites and temporary allows avoid unused decision-key
-construction. The parser, cache representations and telemetry admission remain
-unchanged; see [query allocation measurements](query-allocations.md).
-Compilation, policy assertions and persistence complete before atomic promotion.
-SQLite unavailability must reject management changes without disrupting the
-active generation. Shadow evaluates a candidate without changing DNS answers.
-Offline/API checking shares a private snapshot builder with strict compilation,
-but returns only bounded assertion diagnostics. Unchecked snapshots cannot be
-returned through this diagnostic API. See [policy checks](offline-policy-checks.md).
-Downloaded-list metadata stays in configuration; matching still consumes the
-same compiled list structures. A control-plane HTTPS fetch produces a checked
-draft, never a live snapshot or independently persisted feed registry. Downloads
-have separate bounded admission from mutations and pin destination IPs; stale
-previews retain the caller's original revision tag. See
-[reviewed lists](downloaded-lists.md).
-Client/subnet annotations are optional revisioned configuration. A sparse
-network-to-config index serves control-plane explanations; the DNS selection
-maps and telemetry remain free of group, owner, VLAN-label, tag and note data.
-Only the winning binding's metadata is reported; labels never affect admission
-or create policy inheritance. See [client metadata](client-metadata.md).
+[Filtering](architecture/filtering.md), [local DNS/routes](architecture/local-dns.md),
+[policy controls](architecture/policy.md), [migration](architecture/migration.md),
+[feeds](architecture/feeds.md), [transports/cache](architecture/upstreams.md),
+[security/privacy](architecture/security.md), [embedding](architecture/embedding.md)
+and [API/limits](architecture/api.md) contain the detailed bounds and compatibility.
 
-Verification: local mock authoritative UDP/TCP servers; A/AAAA/CNAME, truncation,
-malformed/compression loops, mismatched IDs/questions, timeout/fallback, SOA
-negative TTL, cache partitioning, burst coalescing/cancellation, reload under
-traffic, telemetry saturation and graceful shutdown. No public DNS is needed for
-tests. fmt, clippy and workspace tests are mandatory after each working slice.
-
-Primary references (reviewed 2026-10-05):
-- https://docs.rs/hickory-proto/0.26.3/hickory_proto/
-- https://docs.rs/tokio/1.53.2/tokio/net/
-- https://docs.rs/axum/0.8.9/axum/
-- https://www.rfc-editor.org/rfc/rfc1035 (wire format, UDP limits)
-- https://www.rfc-editor.org/rfc/rfc7766 (TCP support/framing)
-- https://www.rfc-editor.org/rfc/rfc5452 (response matching)
-- https://www.rfc-editor.org/rfc/rfc2308 (negative caching)
-- https://www.rfc-editor.org/rfc/rfc6891 (EDNS)
-- https://www.rfc-editor.org/rfc/rfc9619 (one question)
-
-## Authenticated upstream transport
-
-Explicit `transport.kind = "tls"` or `"https"` profiles compile rustls trust/identity state
-before publication. Resolver-owned bounded socket pools reuse warm encrypted connections:
-DoT with eight pipelined queries and DoH with eight multiplexed HTTP/2 streams
-per connection, both with cancellation-safe disposal. Bootstrap IPs avoid
-recursive hostname resolution; strict certificate checks and sequential TLS-only
-fallback avoid silent downgrade. See [TLS decision](encrypted-upstreams.md).
-HTTPS uses POST wire messages over authenticated HTTP/2 with explicit header/body
-bounds, TTL/Age validation and separately bounded driver/socket lifetimes. See the
-[HTTPS decision](doh-design.md). Management HTTP remains outside the DNS executor.
-
-Opt-in downloaded-list schedules run in one app worker sharing bounded HTTPS
-admission with manual previews. Changed bytes use the existing assertion/durable
-shadow publication path; generation preconditions reject stale fetches. Shadows
-pause further checks and require explicit promotion. Runtime deadlines/status
-are bounded and independent of DNS. Shutdown cancels fetches and drains admitted
-publication before SQLite stops. No timer, source lookup or additional lock is
-added to DNS workers. Existing shadow evaluation retains its normal cost. See
-[scheduled refreshes](scheduled-refreshes.md).
-
-Scheduled retrieval may use bounded conditional HTTP validators tied to publisher
-identity/trust and a stored content fingerprint. Hints cannot validate edited
-live text or a dismissed shadow's bytes. Generation/content validation and changed
-candidate clones run off executor. HTTP 304 changes only runtime status; no
-compilation, durable write or snapshot swap. Restart uses a full GET. See
-[conditional retrieval](conditional-retrieval.md).
-
-Persistence and scheduled-refresh internals are divided by ownership and lifecycle;
-external counter inspection uses plain read-only samples. See
-[runtime modules and metric snapshots](runtime-modules.md).
+The original ADRs 001–003 were living documents covering the data plane, console
+and deployment. Their current contracts are consolidated here, in
+[design](engineering/design.md) and [operations](operations/install.md).
+[ADR 0004](decisions/0004-agent-workflow.md) starts the immutable decision series;
+future accepted ADRs are superseded with a new record rather than rewritten.

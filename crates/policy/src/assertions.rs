@@ -77,6 +77,9 @@ pub struct AssertionTrace {
     pub policy: String,
     /// Filter decision.
     pub decision: Decision,
+    /// Explicit filtering tags assigned by the selected binding.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub filter_tags: Vec<&'static str>,
     /// Whether a local rewrite answers the name.
     pub rewrite: bool,
     /// Upstream profile name.
@@ -92,6 +95,18 @@ pub struct MatchedRule {
     pub domain: String,
     /// Exact or suffix.
     pub matcher: Matcher,
+    /// Domains excluded from this rule only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub denyallow: Option<std::sync::Arc<rustwalld_dns_filter::DomainExclusions>>,
+    /// DNS type selector of the deciding rule.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dnstype: Option<rustwalld_dns_filter::TypeSelector>,
+    /// Restriction to original source client identities.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client: Option<rustwalld_dns_filter::ClientSelector>,
+    /// Original per-rule tag restrictions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ctag: Option<rustwalld_dns_filter::TagSelector>,
     /// First declaring sources (at most 16).
     pub sources: Vec<Source>,
     /// Total declaring sources.
@@ -154,7 +169,11 @@ impl PolicySnapshot {
                 failure: Some(AssertionFailure::InvalidDomain),
             };
         };
-        let explanation = self.explain_normalized(assertion.client, &domain);
+        let explanation = self.explain_normalized_query(
+            assertion.client,
+            &domain,
+            hickory_proto::rr::RecordType::from(assertion.qtype),
+        );
         let failure = if !permitted {
             Some(AssertionFailure::ClientNotPermitted)
         } else if explanation.decision.action != assertion.expected {
@@ -170,6 +189,7 @@ impl PolicySnapshot {
                 client_name: explanation.client_name.map(str::to_owned),
                 network: explanation.network,
                 binding_metadata: explanation.binding_metadata.cloned(),
+                filter_tags: explanation.filter_tags.clone(),
                 policy: explanation.policy.to_owned(),
                 decision: explanation.decision,
                 rewrite: explanation.rewrite,
@@ -177,6 +197,14 @@ impl PolicySnapshot {
                 rule: explanation.rule.map(|rule| MatchedRule {
                     domain: rule.domain.to_string(),
                     matcher: rule.matcher,
+                    denyallow: rule.denyallow().cloned(),
+                    dnstype: rule.dnstype().cloned(),
+                    client: rule.client().cloned(),
+                    ctag: rule
+                        .scope
+                        .as_ref()
+                        .and_then(|scope| scope.ctag.as_deref())
+                        .cloned(),
                     sources: rule
                         .sources
                         .iter()
@@ -209,11 +237,13 @@ mod tests {
         };
         config.policies[0].lists = vec![
             ListInput {
+                syntax: Default::default(),
                 name: "deny".into(),
                 action: Action::Block,
                 rules: "=adverts.test\ntracking.test\n=bücher.test\nnas.test".into(),
             },
             ListInput {
+                syntax: Default::default(),
                 name: "allow".into(),
                 action: Action::Allow,
                 rules: "=work.tracking.test".into(),
@@ -225,6 +255,12 @@ mod tests {
             ttl: 60,
         });
         config.policies.push(PolicyConfig {
+            dns_records: vec![],
+            routes: vec![],
+            ds_routing: Default::default(),
+            block_mode: Default::default(),
+            safe_search: None,
+            blocked_services: None,
             name: "device".into(),
             upstream: "default".into(),
             lists: vec![],
@@ -236,18 +272,21 @@ mod tests {
                 name: "Loopback".into(),
                 network: "127.0.0.0/8".parse().unwrap(),
                 policy: "default".into(),
+                filter_tags: Vec::new(),
                 metadata: None,
             },
             Binding {
                 name: "Laptop".into(),
                 network: "127.0.0.2/32".parse().unwrap(),
                 policy: "device".into(),
+                filter_tags: Vec::new(),
                 metadata: None,
             },
             Binding {
                 name: "IPv6".into(),
                 network: "2001:db8::/32".parse().unwrap(),
                 policy: "default".into(),
+                filter_tags: Vec::new(),
                 metadata: None,
             },
         ];
@@ -265,6 +304,7 @@ mod tests {
         ]
         .into_iter()
         .map(|(client, domain, expected)| Assertion {
+            qtype: 1,
             client: client.parse().unwrap(),
             domain: domain.into(),
             expected,
@@ -316,12 +356,14 @@ mod tests {
     fn provenance_is_capped_and_structural_or_case_limits_reject_checking() {
         let mut config = PolicyConfigSet::default();
         config.policies[0].lists.push(ListInput {
+            syntax: Default::default(),
             name: "duplicates".into(),
             action: Action::Block,
             rules: "ads.test\n".repeat(100),
         });
         config.assertions = vec![
             Assertion {
+                qtype: 1,
                 client: "127.0.0.1".parse().unwrap(),
                 domain: "ads.test".into(),
                 expected: Action::Block
@@ -345,5 +387,23 @@ mod tests {
         assert!(report.valid);
         assert_eq!(report.assertions, 0);
         assert_eq!(report.failed, 0);
+    }
+}
+
+#[cfg(test)]
+mod typed_compatibility {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+    #[test]
+    fn legacy_assertions_default_to_a_and_reserved_type_zero_is_rejected() {
+        let legacy =
+            serde_json::json!({"client":"127.0.0.1","domain":"typed.test","expected":"allow"});
+        let mut assertion: Assertion = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(assertion.qtype, 1);
+        assert_eq!(serde_json::to_value(&assertion).unwrap(), legacy);
+        assertion.qtype = 0;
+        let mut config = PolicyConfigSet::default();
+        config.assertions.push(assertion);
+        assert!(PolicySnapshot::compile(config, 1).is_err());
     }
 }

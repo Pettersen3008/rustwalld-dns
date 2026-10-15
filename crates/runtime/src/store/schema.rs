@@ -34,14 +34,25 @@ pub(super) fn open(path: &Path) -> Result<Connection, StoreError> {
     tx.execute_batch("
         CREATE TABLE IF NOT EXISTS revisions(id INTEGER PRIMARY KEY,created TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),actor TEXT NOT NULL,state TEXT NOT NULL,diff TEXT NOT NULL,config TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS runtime(key TEXT PRIMARY KEY,value INTEGER NOT NULL);
-        CREATE TABLE IF NOT EXISTS queries(id INTEGER PRIMARY KEY,created TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),client TEXT NOT NULL,domain TEXT NOT NULL,qtype INTEGER NOT NULL,generation INTEGER NOT NULL,policy INTEGER NOT NULL,action TEXT NOT NULL,rule INTEGER,decision_cached INTEGER NOT NULL,rcode INTEGER NOT NULL,source TEXT NOT NULL,latency_us INTEGER NOT NULL,shadow TEXT,temporary_exception INTEGER);
+        CREATE TABLE IF NOT EXISTS privacy(id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL CHECK(revision>0),mode INTEGER NOT NULL CHECK(mode BETWEEN 0 AND 2),retention_rows INTEGER NOT NULL CHECK(retention_rows BETWEEN 0 AND 1000000),next_query_id INTEGER NOT NULL CHECK(next_query_id>0));
+        CREATE TABLE IF NOT EXISTS queries(id INTEGER PRIMARY KEY,created TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),client TEXT NOT NULL,domain TEXT NOT NULL,qtype INTEGER NOT NULL,generation INTEGER NOT NULL,policy INTEGER NOT NULL,action TEXT NOT NULL,rule INTEGER,decision_cached INTEGER NOT NULL,rcode INTEGER NOT NULL,source TEXT NOT NULL,latency_us INTEGER NOT NULL,shadow TEXT,temporary_exception INTEGER,matched_domain TEXT,matched_type INTEGER CHECK(matched_type BETWEEN 1 AND 65535),service_schedule INTEGER CHECK(service_schedule IN (0,1,2)));
         -- Nothing reads by creation time and retention no longer counts rows,
         -- so this index only cost a B-tree update per history insert.
         DROP INDEX IF EXISTS queries_created;")?;
     if version == 1 {
         tx.execute_batch("ALTER TABLE queries ADD COLUMN temporary_exception INTEGER;")?;
     }
-    tx.prepare("SELECT temporary_exception FROM queries LIMIT 0")?;
+    if matches!(version, 1 | 2) {
+        tx.execute_batch("ALTER TABLE queries ADD COLUMN matched_domain TEXT;")?;
+    }
+    if (1..=4).contains(&version) {
+        tx.execute_batch("ALTER TABLE queries ADD COLUMN service_schedule INTEGER CHECK(service_schedule IN (0,1,2));")?;
+    }
+    if (1..=5).contains(&version) {
+        tx.execute_batch("ALTER TABLE queries ADD COLUMN matched_type INTEGER CHECK(matched_type BETWEEN 1 AND 65535); UPDATE queries SET matched_type=5 WHERE matched_domain IS NOT NULL;")?;
+    }
+    tx.prepare("SELECT temporary_exception,matched_domain,matched_type,service_schedule FROM queries LIMIT 0")?;
+    tx.prepare("SELECT id,revision,mode,retention_rows,next_query_id FROM privacy LIMIT 0")?;
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     tx.commit()?;
     Ok(connection)

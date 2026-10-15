@@ -146,6 +146,78 @@ fn bench(c: &mut Criterion) {
     });
     assert_eq!(engine.resolver().metrics.snapshot().upstream_lookups, 0);
 
+    let (engine, blocked, cached, nodata) = passthrough();
+    for (name, bytes, code, answer_count) in [
+        (
+            "passthrough_blocked_wire",
+            &blocked,
+            hickory_proto::op::ResponseCode::NXDomain,
+            0,
+        ),
+        (
+            "passthrough_cached_wire",
+            &cached,
+            hickory_proto::op::ResponseCode::NoError,
+            1,
+        ),
+        (
+            "passthrough_other_family_nodata_wire",
+            &nodata,
+            hickory_proto::op::ResponseCode::NoError,
+            0,
+        ),
+    ] {
+        let response = runtime
+            .block_on(engine.answer(bytes, client, Transport::Udp))
+            .unwrap();
+        let response = Message::from_vec(&response).unwrap();
+        assert_eq!(response.response_code, code);
+        assert_eq!(response.answers.len(), answer_count);
+        let allocations = allocation_counter::measure(|| {
+            std::hint::black_box(runtime.block_on(engine.answer(bytes, client, Transport::Udp)));
+        });
+        eprintln!(
+            "{name}: {} allocations / {} allocated bytes per warm query",
+            allocations.count_total, allocations.bytes_total
+        );
+        c.bench_function(name, |b| {
+            b.iter(|| {
+                std::hint::black_box(runtime.block_on(engine.answer(bytes, client, Transport::Udp)))
+            })
+        });
+    }
+    assert_eq!(engine.resolver().metrics.snapshot().upstream_lookups, 0);
+
+    let (engine, cases) = wildcard();
+    for (name, bytes, count) in cases {
+        let wire = runtime
+            .block_on(engine.answer(&bytes, client, Transport::Udp))
+            .unwrap();
+        let response = Message::from_vec(&wire).unwrap();
+        assert_eq!(response.answers.len(), count);
+        for answer in &response.answers {
+            assert_eq!(answer.name, response.queries[0].name().clone());
+            assert!(!answer.name.is_wildcard());
+        }
+        let allocations = allocation_counter::measure(|| {
+            std::hint::black_box(runtime.block_on(engine.answer(&bytes, client, Transport::Udp)));
+        });
+        eprintln!(
+            "{name}: {} allocations / {} allocated bytes per warm query",
+            allocations.count_total, allocations.bytes_total
+        );
+        c.bench_function(name, |b| {
+            b.iter(|| {
+                std::hint::black_box(runtime.block_on(engine.answer(
+                    &bytes,
+                    client,
+                    Transport::Udp,
+                )))
+            })
+        });
+    }
+    assert_eq!(engine.resolver().metrics.snapshot().upstream_lookups, 0);
+
     for (name, cached_path, full) in [
         ("telemetry_empty_blocked_wire", false, false),
         ("telemetry_full_blocked_wire", false, true),
@@ -197,5 +269,89 @@ fn bench(c: &mut Criterion) {
         assert_eq!(engine.resolver().metrics.snapshot().upstream_lookups, 0);
     }
 }
+
+fn passthrough() -> (fixtures::Engine, Vec<u8>, Vec<u8>, Vec<u8>) {
+    let (engine, blocked, cached) = setup(None);
+    let mut config = engine.active.load().config().clone();
+    for domain in ["blocked.test", "cached.test"] {
+        config.policies[0]
+            .dns_records
+            .push(rustwalld_dns_policy::LocalRecord {
+                domain: domain.into(),
+                ttl: 60,
+                data: rustwalld_dns_policy::LocalData::Passthrough {
+                    family: rustwalld_dns_policy::AddressFamily::A,
+                },
+            });
+    }
+    engine.active.store(std::sync::Arc::new(
+        rustwalld_dns_policy::PolicySnapshot::compile(config, 2).unwrap(),
+    ));
+    let mut nodata = Message::from_vec(&cached).unwrap();
+    nodata.queries[0].set_query_type(hickory_proto::rr::RecordType::AAAA);
+    (engine, blocked, cached, nodata.to_vec().unwrap())
+}
+
+type WildcardCase = (&'static str, Vec<u8>, usize);
+fn wildcard() -> (fixtures::Engine, Vec<WildcardCase>) {
+    let (engine, _, _) = setup(None);
+    let mut config = engine.active.load().config().clone();
+    for index in 0..1000 {
+        config.policies[0]
+            .dns_records
+            .push(rustwalld_dns_policy::LocalRecord {
+                domain: format!("*.zone{index}.test"),
+                ttl: 60,
+                data: rustwalld_dns_policy::LocalData::A {
+                    address: "192.0.2.10".parse().unwrap(),
+                },
+            });
+    }
+    config.policies[0]
+        .dns_records
+        .push(rustwalld_dns_policy::LocalRecord {
+            domain: "*.deep.zone999.test".into(),
+            ttl: 60,
+            data: rustwalld_dns_policy::LocalData::A {
+                address: "192.0.2.20".parse().unwrap(),
+            },
+        });
+    engine.active.store(std::sync::Arc::new(
+        rustwalld_dns_policy::PolicySnapshot::compile(config, 2).unwrap(),
+    ));
+    let cases = [
+        (
+            "wildcard_address_1000_wire",
+            "x.deep.zone999.test",
+            hickory_proto::rr::RecordType::A,
+            1,
+        ),
+        (
+            "wildcard_nodata_1000_wire",
+            "x.deep.zone999.test",
+            hickory_proto::rr::RecordType::AAAA,
+            0,
+        ),
+        (
+            "wildcard_unmatched_1000_wire",
+            "blocked.test",
+            hickory_proto::rr::RecordType::A,
+            0,
+        ),
+    ]
+    .into_iter()
+    .map(|(label, owner, kind, count)| {
+        let mut query = Message::query();
+        query.metadata.recursion_desired = true;
+        query.add_query(hickory_proto::op::Query::query(
+            hickory_proto::rr::Name::from_ascii(owner).unwrap(),
+            kind,
+        ));
+        (label, query.to_vec().unwrap(), count)
+    })
+    .collect();
+    (engine, cases)
+}
+
 criterion_group!(benches, bench);
 criterion_main!(benches);

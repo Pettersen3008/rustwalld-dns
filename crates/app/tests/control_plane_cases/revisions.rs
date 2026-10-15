@@ -10,6 +10,7 @@ async fn binding_metadata_is_revisioned_specific_and_failure_isolated() {
         name: "Work laptop".into(),
         network: "127.0.0.1/32".parse().unwrap(),
         policy: "default".into(),
+        filter_tags: Vec::new(),
         metadata: None,
     });
     let legacy = serde_json::to_value(&config).unwrap();
@@ -29,6 +30,7 @@ async fn binding_metadata_is_revisioned_specific_and_failure_isolated() {
         name: "Loopback network".into(),
         network: "127.0.0.0/8".parse().unwrap(),
         policy: "default".into(),
+        filter_tags: Vec::new(),
         metadata: Some(rustwalld_dns_policy::BindingMetadata {
             group: Some("Network group".into()),
             ..Default::default()
@@ -193,26 +195,31 @@ async fn policy_test_reports_every_case_without_publishing_or_touching_revisions
     config.upstreams[0].addresses = vec!["127.0.0.1:9".parse().unwrap()];
     config.assertions = vec![
         rustwalld_dns_policy::Assertion {
+            qtype: 1,
             client: "127.0.0.1".parse().unwrap(),
             domain: "ads.test".into(),
             expected: Action::Allow,
         },
         rustwalld_dns_policy::Assertion {
+            qtype: 1,
             client: "127.0.0.1".parse().unwrap(),
             domain: "allowed.test".into(),
             expected: Action::Block,
         },
         rustwalld_dns_policy::Assertion {
+            qtype: 1,
             client: "127.0.0.1".parse().unwrap(),
             domain: "bad..domain".into(),
             expected: Action::Allow,
         },
         rustwalld_dns_policy::Assertion {
+            qtype: 1,
             client: "192.0.2.1".parse().unwrap(),
             domain: "allowed.test".into(),
             expected: Action::Allow,
         },
         rustwalld_dns_policy::Assertion {
+            qtype: 1,
             client: "127.0.0.1".parse().unwrap(),
             domain: "x.ads.test".into(),
             expected: Action::Block,

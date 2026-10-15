@@ -1,17 +1,16 @@
+import { revisionHeaders } from "./helpers";
 import { test, expect } from "@playwright/test";
-import type { Configuration, Upstream } from "../src/api";
+import type { Configuration, Upstream } from "../src/lib/api";
 import { authorization, dns, login, reset, token } from "./helpers";
 test.beforeEach(async ({ request }) => {
   await reset(request);
 });
-test("authentication, live views, provenance and memory-only session", async ({
-  page,
-}, info) => {
+test("authentication, live views, provenance and memory-only session", async ({ page }, info) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto("/");
   await page.getByLabel("Management token").fill("incorrect-token-value");
-  await page.getByRole("button", { name: "Connect securely" }).click();
+  await page.getByRole("button", { name: "Connect" }).click();
   await expect(page.getByRole("alert")).toContainText("bearer token required");
   await login(page);
   await expect(page.getByText("DNS service online")).toBeVisible();
@@ -26,23 +25,14 @@ test("authentication, live views, provenance and memory-only session", async ({
     ["Revision history", "Durable revisions"],
   ] as const) {
     await page.getByRole("link", { name: link, exact: true }).click();
-    await expect(
-      page.getByRole("heading", { name: heading, exact: true }),
-    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
   }
   await page.getByRole("link", { name: "Query log", exact: true }).click();
   await page.getByLabel("Search queries").fill("ads.test");
-  await page
-    .getByRole("button", { name: "ads.test", exact: true })
-    .first()
-    .click();
+  await page.getByRole("button", { name: "ads.test", exact: true }).first().click();
   await expect(page.getByRole("dialog")).toContainText("Recorded decision");
-  await page
-    .getByRole("button", { name: "Explain with current policy" })
-    .click();
-  await expect(page.getByRole("dialog")).toContainText(
-    "Source: baseline · line 1",
-  );
+  await page.getByRole("button", { name: "Explain with current policy" }).click();
+  await expect(page.getByRole("dialog")).toContainText("Source: baseline · line 1");
   await expect(page.getByRole("dialog")).toContainText("suffix / ads.test");
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).not.toBeVisible();
@@ -54,9 +44,7 @@ test("authentication, live views, provenance and memory-only session", async ({
   ).toEqual({ local: {}, session: {} });
   expect(page.url()).not.toContain(token);
   expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= window.innerWidth,
-    ),
+    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
   ).toBeTruthy();
   await page.reload();
   await expect(page.getByLabel("Management token")).toHaveValue("");
@@ -74,22 +62,14 @@ test("validate, shadow, inspect, promote and durable rollback with real DNS", as
   await page.getByLabel("Rules for baseline").fill("ads.test\nnew.test");
   await page.getByRole("tab", { name: "Assertions", exact: true }).click();
   await page.getByLabel("Assertion 1 expected").selectOption("allow");
-  await page
-    .getByRole("button", { name: "Validate draft", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Validate draft", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("assertion");
-  await expect(
-    page.getByRole("button", { name: "Stage in shadow" }),
-  ).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Stage in shadow" })).toBeDisabled();
   await page.getByLabel("Assertion 1 expected").selectOption("block");
-  await page
-    .getByRole("button", { name: "Validate draft", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Validate draft", exact: true }).click();
   await expect(page.getByRole("status")).toContainText("Validation passed");
   await page.getByRole("button", { name: "Stage in shadow" }).click();
-  await expect(
-    page.getByRole("button", { name: "Review promotion" }),
-  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Review promotion" })).toBeVisible();
   expect(await dns("new.test")).toBe(0);
   await expect
     .poll(async () => {
@@ -98,9 +78,7 @@ test("validate, shadow, inspect, promote and durable rollback with real DNS", as
           headers: authorization,
         })
       ).json()) as { domain: string; shadow: { differs: boolean } | null }[];
-      return events.some(
-        (event) => event.domain === "new.test" && event.shadow?.differs,
-      );
+      return events.some((event) => event.domain === "new.test" && event.shadow?.differs);
     })
     .toBeTruthy();
   await page.getByRole("button", { name: "Review promotion" }).click();
@@ -118,35 +96,24 @@ test("validate, shadow, inspect, promote and durable rollback with real DNS", as
       exact: false,
     }),
   ).not.toBeVisible();
-  await expect(
-    page.getByText("ACTIVE CONFIGURATION", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("ACTIVE CONFIGURATION", { exact: true })).toBeVisible();
   expect(await dns("new.test")).toBe(3);
-  await page
-    .getByRole("link", { name: "Revision history", exact: true })
-    .click();
+  await page.getByRole("link", { name: "Revision history", exact: true }).click();
   const initial = page.locator(".revision-list > div").filter({
     has: page.getByText(`G${initialGeneration}`, { exact: true }),
   });
   await initial.getByRole("button", { name: "Inspect revision" }).click();
   await expect(page.getByRole("dialog")).toContainText("1 raw rules");
-  await page
-    .getByRole("button", { name: "Validate and roll back to this revision" })
-    .click();
+  await page.getByRole("button", { name: "Validate and roll back to this revision" }).click();
   await expect(page.getByRole("dialog")).not.toBeVisible();
   expect(await dns("new.test")).toBe(0);
   expect(await dns("ads.test")).toBe(3);
 });
-test("a conflicting administrator preserves the validated draft", async ({
-  page,
-  request,
-}) => {
+test("a conflicting administrator preserves the validated draft", async ({ page, request }) => {
   await login(page);
   await page.getByRole("link", { name: "Policies", exact: true }).click();
   await page.getByLabel("Rules for baseline").fill("ads.test\nmy-draft.test");
-  await page
-    .getByRole("button", { name: "Validate draft", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Validate draft", exact: true }).click();
   await expect(page.getByRole("status")).toContainText("Validation passed");
   await page.route("**/api/v1/shadow", async (route) => {
     if (route.request().method() === "POST") {
@@ -156,7 +123,7 @@ test("a conflicting administrator preserves the validated draft", async ({
       const config = (await current.json()) as Configuration;
       config.policies[0]!.lists[0]!.rules = "ads.test\nother-admin.test";
       const update = await request.put("/api/v1/config", {
-        headers: authorization,
+        headers: await revisionHeaders(request),
         data: config,
       });
       expect(update.ok()).toBeTruthy();
@@ -164,42 +131,28 @@ test("a conflicting administrator preserves the validated draft", async ({
     await route.continue();
   });
   await page.getByRole("button", { name: "Stage in shadow" }).click();
-  await expect(page.getByRole("alert")).toContainText(
-    "Your draft is preserved",
-  );
-  await expect(page.getByLabel("Rules for baseline")).toHaveValue(
-    "ads.test\nmy-draft.test",
-  );
+  await expect(page.getByRole("alert")).toContainText("Your draft is preserved");
+  await expect(page.getByLabel("Rules for baseline")).toHaveValue("ads.test\nmy-draft.test");
   const response = await request.get("/api/v1/shadow", {
     headers: authorization,
   });
   expect(((await response.json()) as { config: unknown }).config).toBeNull();
-  await page
-    .getByRole("button", { name: "Reload active", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Reload active", exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText("Discard your draft");
   await page.getByRole("button", { name: "Discard draft and reload" }).click();
-  await expect(page.getByLabel("Rules for baseline")).toHaveValue(
-    "ads.test\nother-admin.test",
-  );
+  await expect(page.getByLabel("Rules for baseline")).toHaveValue("ads.test\nother-admin.test");
 });
-test("errors are visible and multiline network editing survives separators", async ({
-  page,
-}) => {
+test("errors are visible and multiline network editing survives separators", async ({ page }) => {
   await login(page);
   await page.getByRole("link", { name: "Policies", exact: true }).click();
-  await page
-    .getByRole("tab", { name: "Clients & networks", exact: true })
-    .click();
+  await page.getByRole("tab", { name: "Clients & networks", exact: true }).click();
   const networks = page.getByLabel("Allowed client networks");
   await networks.fill("127.0.0.1/32");
   await networks.press("End");
   await networks.press("Enter");
   await networks.pressSequentially("::1/128");
   await expect(networks).toHaveValue("127.0.0.1/32\n::1/128");
-  await page
-    .getByRole("button", { name: "Validate draft", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Validate draft", exact: true }).click();
   await expect(page.getByRole("status")).toContainText("Validation passed");
   await page.route("**/api/v1/queries?*", (route) =>
     route.fulfill({
@@ -213,9 +166,7 @@ test("errors are visible and multiline network editing survives separators", asy
   await page.unroute("**/api/v1/queries?*");
   await page.getByRole("button", { name: "Retry", exact: true }).click();
   await expect(page.getByRole("alert")).not.toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "ads.test", exact: true }).first(),
-  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "ads.test", exact: true }).first()).toBeVisible();
 });
 
 test("stopping another editor’s candidate keeps an older draft stale", async ({
@@ -224,9 +175,7 @@ test("stopping another editor’s candidate keeps an older draft stale", async (
 }) => {
   await login(page);
   await page.getByRole("link", { name: "Policies", exact: true }).click();
-  await page
-    .getByLabel("Rules for baseline")
-    .fill("ads.test\nlocal-draft.test");
+  await page.getByLabel("Rules for baseline").fill("ads.test\nlocal-draft.test");
   const active = await request.get("/api/v1/config", {
     headers: authorization,
   });
@@ -235,7 +184,7 @@ test("stopping another editor’s candidate keeps an older draft stale", async (
   expect(
     (
       await request.put("/api/v1/config", {
-        headers: authorization,
+        headers: await revisionHeaders(request),
         data: config,
       })
     ).ok(),
@@ -244,7 +193,7 @@ test("stopping another editor’s candidate keeps an older draft stale", async (
   expect(
     (
       await request.post("/api/v1/shadow", {
-        headers: authorization,
+        headers: await revisionHeaders(request),
         data: config,
       })
     ).ok(),
@@ -253,20 +202,14 @@ test("stopping another editor’s candidate keeps an older draft stale", async (
   await page.getByRole("button", { name: "Stop shadow", exact: true }).click();
   await page.getByRole("button", { name: "Stop this shadow" }).click();
   await expect(page.getByRole("dialog")).not.toBeVisible();
-  await expect(page.getByLabel("Rules for baseline")).toHaveValue(
-    "ads.test\nlocal-draft.test",
-  );
+  await expect(page.getByLabel("Rules for baseline")).toHaveValue("ads.test\nlocal-draft.test");
   await expect(
     page.getByText("A newer active or shadow revision exists.", {
       exact: false,
     }),
   ).toBeVisible();
-  await page
-    .getByRole("button", { name: "Validate draft", exact: true })
-    .click();
-  await expect(
-    page.getByRole("button", { name: "Stage in shadow" }),
-  ).toBeDisabled();
+  await page.getByRole("button", { name: "Validate draft", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Stage in shadow" })).toBeDisabled();
   expect(
     (
       (await (
@@ -285,34 +228,20 @@ test("TLS profile edits validate and survive staging without changing live DNS",
 }) => {
   await login(page);
   await page.getByRole("link", { name: "Policies", exact: true }).click();
-  await page
-    .getByRole("tab", { name: "Upstream profiles", exact: true })
-    .click();
+  await page.getByRole("tab", { name: "Upstream profiles", exact: true }).click();
   await page.getByLabel("Upstream 1 transport").selectOption("tls");
   await page.getByLabel("Upstream 1 TLS server name").fill("resolver.test");
   await page.getByLabel("Upstream 1 TLS connections per address").fill("3");
-  await page
-    .getByLabel("Upstream 1 private CA certificates (PEM)")
-    .fill("invalid CA");
-  await page
-    .getByRole("button", { name: "Validate draft", exact: true })
-    .click();
+  await page.getByLabel("Upstream 1 private CA certificates (PEM)").fill("invalid CA");
+  await page.getByRole("button", { name: "Validate draft", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("TLS CA PEM");
-  await expect(
-    page.getByRole("button", { name: "Stage in shadow" }),
-  ).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Stage in shadow" })).toBeDisabled();
   await page.getByLabel("Upstream 1 private CA certificates (PEM)").fill("");
-  await page
-    .getByRole("button", { name: "Validate draft", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Validate draft", exact: true }).click();
   await expect(page.getByRole("status")).toContainText("Validation passed");
   await page.getByRole("button", { name: "Stage in shadow" }).click();
-  await expect(
-    page.getByRole("button", { name: "Review promotion" }),
-  ).toBeVisible();
-  const shadow = await (
-    await request.get("/api/v1/shadow", { headers: authorization })
-  ).json();
+  await expect(page.getByRole("button", { name: "Review promotion" })).toBeVisible();
+  const shadow = await (await request.get("/api/v1/shadow", { headers: authorization })).json();
   expect(shadow.config.upstreams[0].transport).toEqual({
     kind: "tls",
     server_name: "resolver.test",
@@ -323,9 +252,7 @@ test("TLS profile edits validate and survive staging without changing live DNS",
   await page.reload();
   await login(page);
   await page.getByRole("link", { name: "Policies", exact: true }).click();
-  await expect(
-    page.getByRole("button", { name: "Review promotion" }),
-  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Review promotion" })).toBeVisible();
 });
 
 test("HTTPS endpoint validation and shadow staging preserve the explicit profile", async ({
@@ -334,34 +261,20 @@ test("HTTPS endpoint validation and shadow staging preserve the explicit profile
 }) => {
   await login(page);
   await page.getByRole("link", { name: "Policies", exact: true }).click();
-  await page
-    .getByRole("tab", { name: "Upstream profiles", exact: true })
-    .click();
+  await page.getByRole("tab", { name: "Upstream profiles", exact: true }).click();
   await page.getByLabel("Upstream 1 transport").selectOption("https");
   await page.getByLabel("Upstream 1 TLS server name").fill("resolver.test");
   await page.getByLabel("Upstream 1 TLS connections per address").fill("3");
-  await page
-    .getByLabel("Upstream 1 HTTPS path")
-    .fill("http://other.test/dns-query");
-  await page
-    .getByRole("button", { name: "Validate draft", exact: true })
-    .click();
+  await page.getByLabel("Upstream 1 HTTPS path").fill("http://other.test/dns-query");
+  await page.getByRole("button", { name: "Validate draft", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("HTTPS path");
-  await expect(
-    page.getByRole("button", { name: "Stage in shadow" }),
-  ).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Stage in shadow" })).toBeDisabled();
   await page.getByLabel("Upstream 1 HTTPS path").fill("/dns-query");
-  await page
-    .getByRole("button", { name: "Validate draft", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Validate draft", exact: true }).click();
   await expect(page.getByRole("status")).toContainText("Validation passed");
   await page.getByRole("button", { name: "Stage in shadow" }).click();
-  await expect(
-    page.getByRole("button", { name: "Review promotion" }),
-  ).toBeVisible();
-  const shadow = await (
-    await request.get("/api/v1/shadow", { headers: authorization })
-  ).json();
+  await expect(page.getByRole("button", { name: "Review promotion" })).toBeVisible();
+  const shadow = await (await request.get("/api/v1/shadow", { headers: authorization })).json();
   expect(shadow.config.upstreams[0].transport).toEqual({
     kind: "https",
     server_name: "resolver.test",
@@ -372,12 +285,8 @@ test("HTTPS endpoint validation and shadow staging preserve the explicit profile
   expect(await dns("ads.test")).toBe(3);
   // Switching encrypted transports keeps trust/identity while changing the protocol.
   await page.getByLabel("Upstream 1 transport").selectOption("tls");
-  await expect(page.getByLabel("Upstream 1 TLS server name")).toHaveValue(
-    "resolver.test",
-  );
-  await expect(
-    page.getByLabel("Upstream 1 TLS connections per address"),
-  ).toHaveValue("3");
+  await expect(page.getByLabel("Upstream 1 TLS server name")).toHaveValue("resolver.test");
+  await expect(page.getByLabel("Upstream 1 TLS connections per address")).toHaveValue("3");
 });
 
 test("upstream failure reasons, recovery and generation reset use real DNS", async ({
@@ -394,17 +303,11 @@ test("upstream failure reasons, recovery and generation reset use real DNS", asy
   expect(health[0]!.servers[1]!.failures.servfail).toBe(1);
   await login(page);
   await page.getByRole("link", { name: "Upstreams", exact: true }).click();
-  await expect(page.getByRole("list").first()).toContainText(
-    "Upstream SERVFAIL: 1",
-  );
+  await expect(page.getByRole("list").first()).toContainText("Upstream SERVFAIL: 1");
   await expect(page.getByText("Upstream SERVFAIL: 1").first()).toBeInViewport();
-  await expect(
-    page.getByText("Failures are historical", { exact: false }),
-  ).toBeVisible();
+  await expect(page.getByText("Failures are historical", { exact: false })).toBeVisible();
   expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= window.innerWidth,
-    ),
+    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
   ).toBeTruthy();
   await page.screenshot({
     path: info.outputPath("upstream-failure-recovery.png"),
@@ -417,14 +320,10 @@ test("upstream failure reasons, recovery and generation reset use real DNS", asy
     await request.get("/api/v1/upstreams", { headers: authorization })
   ).json()) as Upstream[];
   expect(fresh[0]!.generation).toBeGreaterThan(health[0]!.generation);
-  expect(
-    fresh[0]!.servers.every((s) => s.attempts === 0 && s.inflight === 0),
-  ).toBeTruthy();
+  expect(fresh[0]!.servers.every((s) => s.attempts === 0 && s.inflight === 0)).toBeTruthy();
 });
 
-test("stale answers appear under cache while retaining their path", async ({
-  page,
-}) => {
+test("stale answers appear under cache while retaining their path", async ({ page }) => {
   const events = ["stale", "cache", "upstream"].map((source, index) => ({
     id: index + 1,
     timestamp: new Date().toISOString(),
@@ -441,30 +340,24 @@ test("stale answers appear under cache while retaining their path", async ({
     latency_us: 40000,
     shadow: null,
   }));
-  await page.route(/\/api\/v1\/queries\?/, (route) =>
-    route.fulfill({ json: events }),
-  );
+  await page.route(/\/api\/v1\/queries\?/, (route) => route.fulfill({ json: events }));
   await login(page);
-  await expect(
-    page.locator(".chart-legend span").filter({ hasText: "Cached" }),
-  ).toContainText(/Cached\s*2/);
-  await expect(
-    page.locator(".chart-legend span").filter({ hasText: "Forwarded" }),
-  ).toContainText(/Forwarded\s*1/);
+  await expect(page.locator(".chart-legend span").filter({ hasText: "Cached" })).toContainText(
+    /Cached\s*2/,
+  );
+  await expect(page.locator(".chart-legend span").filter({ hasText: "Forwarded" })).toContainText(
+    /Forwarded\s*1/,
+  );
   await page.getByRole("link", { name: "Query log", exact: true }).click();
   await page.getByRole("button", { name: "Cached", exact: true }).click();
-  await expect(
-    page.getByRole("button", { name: "stale.fixture.test", exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "cache.fixture.test", exact: true }),
-  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "stale.fixture.test", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "cache.fixture.test", exact: true })).toBeVisible();
   await expect(
     page.getByRole("button", { name: "upstream.fixture.test", exact: true }),
   ).not.toBeVisible();
-  await expect(
-    page.getByRole("row").filter({ hasText: "stale.fixture.test" }),
-  ).toContainText("stale");
+  await expect(page.getByRole("row").filter({ hasText: "stale.fixture.test" })).toContainText(
+    "stale",
+  );
   await page.getByRole("button", { name: "Forwarded", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "upstream.fixture.test", exact: true }),

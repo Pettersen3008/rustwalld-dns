@@ -2,6 +2,169 @@
 
 ## Unreleased
 
+- Bring the Local DNS Add action into the first phone viewport, identify its
+  selected policy, and focus newly added records across paging. Compact policy
+  publication controls while retaining guidance, review and draft safeguards.
+- Separate policy, network, upstream and assertion editors and workbench
+  presentation from shared draft/publication handlers.
+
+- Restore keyboard focus to the initiating policy-review button after asynchronous
+  candidate loading; use main content after promotion or stopping removes it.
+- Make cancellation review guidance accurate for imported and legacy list versions.
+- Split engine admission, decisions, forwarding, outcomes and wire handling into
+  private modules while preserving public interfaces and query behavior.
+
+- Prevent malformed appliance TOML from dumping configuration values/unknown keys
+  in CLI errors; retain a safe path and parse location for diagnosis.
+
+- Add parameter-free HTTPS/SVCB ServiceMode local records and exact/suffix AdGuard
+  pattern imports with source TTL, bounded RRsets and whole-pattern exceptions.
+- Expose priority/target fields and usage guidance; reject AliasMode, parameters
+  and value exceptions rather than discarding unsupported settings.
+
+- Support descendant wildcard TXT/PTR/MX/SRV records and bounded AdGuard suffix
+  pattern imports with TTL, same-pattern exceptions and concrete reply owners.
+- Clarify independent apex/descendant editing, typed NODATA and address fallback;
+  preserve legacy address limits, alias and priority blockers.
+
+- Import exact AdGuard TXT/PTR/MX/SRV rewrite records alongside addresses, retaining
+  source TTL and reviewed same-pattern TXT/PTR exception semantics.
+- Validate typed response targets before conversion and preserve single-string TXT
+  bounds; clarify typed import limits in the migration UI.
+
+- Import supported rewrites from enabled AdGuard block feeds bundled in ZIP
+  backups; combine custom/feed exceptions and budgets without fetching publishers.
+- Reject ambiguous feed files/identities and retain explicit frozen-refresh guidance.
+
+- Import exact AdGuard address rewrite RRsets and same-pattern whole/value
+  exceptions; preserve ordinary blocking and reject partial exception coverage.
+
+- Import disjoint literal exact/suffix AdGuard user-rule `$dnsrewrite` addresses
+  with source TTL and explicit activation/priority/layout/expansion limits.
+- Fix legacy rewrites surviving global/client filtering disable; block source
+  whitespace normalization and unknown active rewrites in paused downloaded feeds.
+- Update all five Cargo lockfiles to Rustls 0.23.46 for RUSTSEC-2026-0346–0349.
+
+### Descendant wildcard address rewrites (2026-10-14)
+
+- Compile bounded A/AAAA wildcard local owners with family-aware exact overrides
+  and concrete question names on wire replies.
+- Import the verified legacy subset, retaining disabled state and blockers for
+  ambiguous addresses, unsupported patterns and alias/SafeSearch conflicts.
+- Show apex/family limits in the local DNS editor and detect address/TTL/template
+  changes in shadow comparison before reviewed promotion.
+
+- Preserve disabled AdGuard exact rewrite entries during import instead of
+  activating them. Review per-entry unknown settings, validate enabled types,
+  select legacy/DNS rewrite containers independently and block ambiguous input.
+
+- Correct AdGuard rewrite source-layout classification, accept exact family
+  passthrough in older DNS-container exports, and honor the verified global rewrite
+  activation switch without disabling ordinary filters. Malformed controls,
+  ambiguous layouts and pre-31 disabled-state conflicts remain blockers.
+  See [source layout and activation](docs/architecture/migration.md).
+
+- Add exact A/AAAA family passthrough directives, typed explanation/shadow decisions,
+  legacy AdGuard import and an IPv4/IPv6 editor. Ordinary filtering and response
+  inspection remain active; wildcard patterns and ambiguous CNAME owners
+  remain blockers. See [rewrite passthrough](docs/architecture/local-dns.md).
+
+- Add explicit `adguard_v6` `$ctag` restrictions, typed/client/domain combinations,
+  original rule provenance and explicit binding `filter_tags` separate from
+  advisory annotations. Fresh imports preserve supported source tags in V6;
+  unsupported values remain blockers. Partition decision caches by relevant tags,
+  pin pending/shadow contexts and expose tag choices and explanations in the UI.
+  AdGuard `$important` remains unsupported because its block-over-allow precedence
+  conflicts with this repository's allow-first contract.
+
+- Add explicit `adguard_v5` per-rule `$client` restrictions for IPs/CIDRs and exact
+  binding names, with escaped source syntax and combined type/domain scopes.
+  This slice introduced V5 imports, now superseded by V6; old interpreters stay frozen. Partition decisions using
+  bounded compiled equivalence classes while retaining raw-cache sharing and
+  pinned binding names. Add original/current/assertion UI traces and rename hints.
+  Merge CIDR membership off the query path after profiling, and skip response-value
+  filtering when every value rule excludes the client. Missing source names block
+  named-rule migration. Schema 6 is unchanged; downgrade needs a compatible backup.
+  See [client rule scopes](docs/architecture/filtering.md).
+
+- Add explicit `adguard_v4` `$dnstype` selectors, optionally combined with
+  `$denyallow`, and bounded reachable CNAME/address/HTTPS hint filtering with
+  actual response types. This slice introduced V4 imports, now superseded by V6; older versions stay
+  frozen. Partition typed decisions without filtering raw resolver cache entries.
+  Add typed assertions, schema 6 response provenance and desktop/mobile traces.
+  Unreleased Rust `Rule` literals use `scope` and `response_value`; `Assertion`
+  requires `qtype`; event/history literals require optional `matched_type`.
+  Legacy unscoped JSON is preserved. Downgrading requires a compatible backup.
+  See [supported type rules](docs/architecture/filtering.md) for limits and verification.
+
+- Add explicit `adguard_v3` per-rule `$denyallow` exclusions for exact/suffix/regex
+  network rules, bounded scoped indexes, exclusion-aware deduplication and
+  historical/current/assertion UI explanations. This slice introduced V3 imports; V4 now supersedes it;
+  existing interpreters stay frozen and unsupported combinations block publication.
+  Rust `Rule`/`MatchedRule` literals gain optional `denyallow`; it is omitted from
+  JSON for unscoped rules. Older binaries require a compatible backup to downgrade.
+
+- Add explicit `adguard_v2` compile-time `$badfilter` cancellation for supported
+  masks/regex, retaining Native/legacy parser semantics and historical rule IDs.
+  This slice introduced V2 imports, now superseded by V4, with bounded source review and per-policy lazy
+  reports. Enforce the existing active-regex budget earlier to reject oversized
+  sets promptly. `ListStats` Rust literals require `badfilters`/`disabled`; zero
+  serialized counts stay omitted. Downgrade requires a compatible backup.
+
+- Add opt-in per-policy parent-name routing for DS questions, preserving native
+  question-name defaults, original filtering/questions and resolver cache identity.
+  AdGuard imports use the setting and no longer require a DS incompatibility
+  blocker. Add typed query explanations, recorded-type query-log requests and a
+  scoped route editor. Verify cache/inflight generations, local overrides, aliases,
+  migration and restart/backup/restore. `PolicyConfig` Rust literals require the
+  new `ds_routing` field; legacy serialized configurations keep their default.
+
+- Import bounded AdGuard per-client UDP and matching pinned DoT/DoH resolvers,
+  independently of filtering inheritance. Preserve custom defaults, conditional
+  route precedence and whole-client fallback; share identical profiles within the
+  native 32-profile budget. Fix bracketed IPv6 imports and global profile limits.
+  Add a pageable client/resolver review table, missing-identity/cache-type checks
+  and an explicit DS parent-routing incompatibility for imported suffix routes.
+  Verify cache isolation, reviewed promotion and CLI restart/backup/restore.
+
+- Add frozen service catalog v2 with twelve first-party groups, including Netflix,
+  Spotify, Twitch, Steam, Roblox, WhatsApp, Telegram and Signal. Preserve v1 defaults,
+  coverage and historical IDs; expose explicit API versions and scoped provider
+  references. Add searchable/category-filtered editing, reviewed version changes
+  preserving weekly windows and guarded downgrade. Import new source selectors as
+  drafts with compatibility blockers; verify v2 history, DNS and packaged recovery.
+
+- Add per-policy weekly service schedules with explicit bundled IANA zones,
+  block/allow periods, overnight/DST handling and bounded immutable filter variants.
+  Recheck cached/in-flight replies, cap private TTLs without changing raw cache/OPT,
+  and preserve actual schedule state in schema-5 history and shadow explanations.
+  Add desktop/mobile draft editing, conservative AdGuard duration/zone translation,
+  missing-window/empty-selection validation and packaged upgrade/restore checks.
+
+- Add versioned first-party YouTube/TikTok/Reddit/Discord domain groups per client
+  policy, authenticated coverage metadata and a compact Services editor. Reuse
+  assertion-gated filters, CNAME/cache/shadow behavior and recorded rule provenance;
+  translate AdGuard selectors with explicit coverage/schedule/inheritance blockers.
+  Validate raw filter budgets before expansion and align historical rule limits.
+
+- Add opt-in per-policy Google/Bing/DuckDuckGo SafeSearch and YouTube moderate/
+  strict, versioned offline catalogs, shared compiled maps, filter-first CNAME
+  routing, historical provenance and a desktop/mobile policy editor. Preserve
+  supported AdGuard client/global settings with explicit compatibility blockers.
+  Verify local DNS, shadow/caches, packaged persistence and recovery; reject
+  structural CNAME loops for ordinary local aliases as well as SafeSearch.
+
+- Keep UDP admission through bounded reply sends, and configuration-sized API
+  admission through canceled serializers/shared response buffers. Admit rollback
+  before loading/parsing its stored policy; add lifetime regressions.
+- Move the console to React Router document routes, current TanStack Query/Table,
+  owned shadcn/Radix components, Bun and Oxc. Organize feature folders, preserve
+  drafts/bookmarks, abort disconnected requests, fetch configuration by version,
+  and improve neutral/blue layouts, table density and keyboard navigation.
+- Record [readiness, parity and resource evidence](docs/product/scope.md), and
+  add an [optional Unbound guide](docs/operations/integrations.md), distro snippet and isolated
+  compatibility fixture. Native-host and long network-soak gates remain pending.
+
 ## 0.1.0-alpha.1 — 2026-10-10
 
 - Open the source as a public alpha under MIT OR Apache-2.0. Add maintainer-wide
@@ -15,43 +178,43 @@
   snapshots, and make the disabled stale default explicit in the install template.
   Packaged non-root smoke now checks TTL-30 stale answers over UDP/TCP during a
   local encrypted-upstream outage, alongside upgrade/WAL recovery and independent
-  library consumer checks. See [release verification](docs/release-rebuild.md).
+  library consumer checks. See [release verification](docs/engineering/performance.md).
 
 - Split SQLite persistence and scheduled refreshes into focused internal modules,
   preserving SQL, durability and scheduling behavior. Encapsulate upstream,
   telemetry, resolver and history atomics behind plain `snapshot()` values;
   diagnostics and Prometheus names retain their existing contracts. See
-  [module and snapshot boundaries](docs/runtime-modules.md).
+  [module and snapshot boundaries](docs/architecture/embedding.md).
 
 - Dev-only proptest models compare CLOCK eviction with a rotating queue and
   cache removal/regrowth with a map, and stress DoT/DoH cancellation across
   admission, connection setup and active requests. They check reply identity,
   per-connection limits, capacity recovery and socket/permit disposal; see
-  [test depth](docs/property-tests.md).
+  [test depth](docs/architecture/upstreams.md).
 
 - Opt-in serve-stale returns retained expired answers with TTL 30 only after
   every upstream fails, within a validated maximum age of one day. Default off;
   policy blocks/rewrites, temporary deadlines and upstream partitions remain
   enforced. Adds `rustwalld_stale_answers_total` and `stale` history sources;
-  uncacheable refreshes invalidate older answers. See [setting and tests](docs/serve-stale.md).
+  uncacheable refreshes invalidate older answers. See [setting and tests](docs/architecture/upstreams.md).
 
 - DoT pipelines eight pending queries per pooled connection, with unique message
   IDs, out-of-order reply matching, cancellation cleanup, strict connection
   retirement and bounded writer/admission queues. Local failure tests and the
   `dot_concurrent` benchmark cover the shared connection lifecycle; see
-  [measurements](docs/dot-pipelining.md).
+  [measurements](docs/engineering/performance.md).
 
 - Explain the encrypted rehearsal's DoH latency gap: its one-stream fixture
   serialized two clients. With only the fixture limit changed to 100, HTTPS
   fresh p99 falls from 22.1 to 11.1 ms with the same daemon; TLS stays at 11.1 ms.
-  Add `--https-streams` and an overlap/lifecycle test ([evidence](docs/doh-latency.md)).
+  Add `--https-streams` and an overlap/lifecycle test ([evidence](docs/engineering/performance.md)).
 
 - DNS-over-HTTPS multiplexes up to eight requests per HTTP/2 connection within
   the existing socket cap: 32 concurrent misses against a 10 ms server complete
-  in 22 ms instead of 178 ms (~8x throughput, [evidence](docs/doh-design.md)).
+  in 22 ms instead of 178 ms (~8x throughput, [evidence](docs/architecture/upstreams.md)).
   Refused streams are retried once; timed-out requests retire their connection.
 - Query path is 2–16% faster than before this review on every warm wire
-  scenario with unchanged allocation counts ([evidence](docs/engine-split.md)):
+  scenario with unchanged allocation counts ([evidence](docs/engineering/performance.md)):
   replies finalize in place, and rewrite answers are grouped by record type at
   compile time (`CompiledPolicy::rewrite` returns a borrowed slice).
 - Every public item of the library crates is documented and
@@ -75,10 +238,10 @@
   configurable (default 1,024).
 - Filter matching walks each name once over merged allow/block indexes with a
   per-process seeded foldhash: 22–80% faster evaluation, 14–30% faster
-  compilation, unchanged decisions and memory ([evidence](docs/filter-matching.md)).
+  compilation, unchanged decisions and memory ([evidence](docs/engineering/performance.md)).
 - `BoundedCache` evicts with CLOCK (second chance) and hashes each key once:
   hot entries survive one-off names, cache hits are 8–25% and insertions ~2x
-  faster ([evidence](docs/cache-eviction.md)).
+  faster ([evidence](docs/engineering/performance.md)).
 - The response cache and coalescing are keyed by upstream content identity
   (`UpstreamId`) instead of policy generation, so publishing unchanged upstream
   profiles (including scheduled list refreshes) keeps warm answers.
@@ -158,3 +321,50 @@
 
 The baseline remains at Git commit d7fc877. Native deployment and a clean
 24–72-hour representative-network soak remain release gates.
+
+### Homelab alpha expansion (2026-10-12–13)
+
+- Add reachable CNAME and bounded regex filtering, typed local DNS/routes/block
+  modes, scoped temporary actions and original-generation history explanations.
+- Add supported-subset Pi-hole/AdGuard migration with strict compatibility and
+  archive/parser bounds; source credentials and unsupported settings stay explicit.
+- Add HTTPS/DoT/DoH ingress, local Argon2id/TOTP administration, scoped tokens,
+  secure sessions/CSRF, privacy preferences and schema-4 history sequencing.
+- Add setup/resolver profiles, advisory DHCP/UniFi/OPNsense inventory and reviewed
+  peer policy copying; package non-root native/container recovery fixtures.
+- Replace the console stack with React Router, TanStack Query/Table, Tailwind,
+  shadcn/Radix, Bun/Oxc and feature folders; verify desktop/mobile/keyboard flows.
+- Keep full source parity, additional transports/HA and deployment-host/long-soak
+  gates explicit. See docs/readiness-review.md for evidence and limits.
+
+### Migration parity follow-up (2026-10-13)
+
+- Import supported Pi-hole v5 Teleporter JSON tables from bounded tar.gz without
+  extracting paths or executing source SQL/settings; preserve group/client rules,
+  local hosts/CNAME and supported block modes. Missing feeds/privacy/source gaps
+  remain explicit compatibility blockers.
+- Translate AdGuard literal domain routes and reuse matching destination DoT/DoH
+  endpoint pins/trust. Refuse ambiguous profiles and incompatible mixed fallbacks;
+  never use source bootstrap DNS as resolver endpoint IPs.
+- Put backup import and its compatibility report first in the migration console;
+  keep encrypted resolver help expandable and node copying below the import.
+
+
+### Service aliases (2026-10-15)
+
+- Add parameter-free HTTPS/SVCB priority 0 AliasMode to native local records and
+  supported exact/suffix AdGuard pattern imports, preserving TTL and frozen whole
+  exceptions. Reject mixed modes, multiple aliases and obvious self aliases.
+- Accept priority 0 in the structured editor and explain client follow-up and
+  advisory root-target unavailability. Service parameters and value exceptions
+  remain blockers; no service-alias chasing or Additional synthesis is added.
+
+
+### Service endpoint ports (2026-10-15)
+
+- Add typed optional port parameters to HTTPS/SVCB ServiceMode local records and
+  supported AdGuard pattern imports. Preserve explicit port 0 distinctly from no
+  override; reject unknown/duplicate parameters and AliasMode parameters.
+- Add optional port editing/removal and clarify client-default behavior in the
+  console. Parameter-free native configurations remain valid; Rust constructors
+  now supply a ServiceParams field. No endpoint networking/listener setup is added.

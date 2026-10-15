@@ -1,0 +1,1 @@
+[{"domain": "port.test", "ttl": 31, "data": {"type": "SVCB", "priority": 0, "target": ".", "params": {"port": 443}}}]

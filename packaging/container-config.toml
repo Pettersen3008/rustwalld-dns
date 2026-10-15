@@ -1,0 +1,25 @@
+# Replace example LAN admission and use a certificate valid for this host.
+dns_listen = "0.0.0.0:5353"
+api_listen = "0.0.0.0:8443"
+database = "/var/lib/rustwalld-dns/rustwalld.sqlite"
+web_root = "/usr/share/rustwalld-dns/web"
+auth_file = "/var/lib/rustwalld-dns/auth.json"
+[api_tls]
+cert_file = "/etc/rustwalld-dns/cert.pem"
+key_file = "/etc/rustwalld-dns/key.pem"
+hostnames = ["dns.home.arpa"]
+[policy]
+default_policy = "default"
+allowed_clients = ["192.168.1.0/24", "127.0.0.1/32"]
+[[policy.upstreams]]
+name = "encrypted"
+addresses = ["1.1.1.1:853", "1.0.0.1:853"]
+timeout_ms = 1500
+[policy.upstreams.transport]
+kind = "tls"
+server_name = "cloudflare-dns.com"
+[[policy.policies]]
+name = "default"
+upstream = "encrypted"
+lists = []
+rewrites = []

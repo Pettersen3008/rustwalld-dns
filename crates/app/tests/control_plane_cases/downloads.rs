@@ -467,6 +467,7 @@ async fn scheduled_failures_keep_last_good_dns_and_shutdown_cancels_stalled_io()
     let fixture = download_fixture::Fixture::start().await;
     let mut config = harness.state.control.engine().active().config().clone();
     config.assertions = vec![rustwalld_dns_policy::Assertion {
+        qtype: 1,
         client: "127.0.0.1".parse().unwrap(),
         domain: "ads.test".into(),
         expected: Action::Block,
@@ -687,6 +688,7 @@ async fn downloaded_list_preview_durable_shadow_promotion_provenance_and_rollbac
     let mut baseline = harness.state.control.engine().active().config().clone();
     baseline.upstreams[0].addresses = vec![upstream];
     baseline.assertions = vec![rustwalld_dns_policy::Assertion {
+        qtype: 1,
         client: "127.0.0.1".parse().unwrap(),
         domain: "ads.test".into(),
         expected: Action::Block,
@@ -829,7 +831,7 @@ async fn downloaded_list_preview_durable_shadow_promotion_provenance_and_rollbac
         rustwalld_dns::maintenance::verify(&harness.path)
             .unwrap()
             .schema,
-        2
+        rustwalld_dns::store::SCHEMA_VERSION
     );
     let backup = harness._dir.path().join("download-backup.sqlite");
     rustwalld_dns::maintenance::snapshot(&harness.path, &backup).unwrap();
@@ -937,6 +939,7 @@ async fn downloads_reject_tls_http_body_rules_and_assertion_failures_without_pub
             vec![]
         } else {
             vec![rustwalld_dns_policy::Assertion {
+                qtype: 1,
                 client: "127.0.0.1".parse().unwrap(),
                 domain: "ads.test".into(),
                 expected: Action::Block,

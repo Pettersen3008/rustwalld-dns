@@ -1,0 +1,1 @@
+filtering: {rewrites: [{domain: local.test, answer: 192.0.2.10, enabled: false, unreviewed_setting: true}]}

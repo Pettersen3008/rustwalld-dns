@@ -35,6 +35,7 @@ struct FilterSets<'a> {
     sets: Vec<FilterSet<'a>>,
     rules: usize,
     max_rules: usize,
+    regex_sets: usize,
 }
 struct FilterSet<'a> {
     lists: &'a [ListInput],
@@ -49,6 +50,7 @@ impl<'a> FilterSets<'a> {
             sets: Vec::new(),
             rules: 0,
             max_rules,
+            regex_sets: 0,
         }
     }
     fn hash(&self, lists: &[ListInput], content: bool) -> u64 {
@@ -56,6 +58,7 @@ impl<'a> FilterSets<'a> {
         for list in lists {
             list.name.hash(&mut hasher);
             list.action.hash(&mut hasher);
+            list.syntax.hash(&mut hasher);
             if content {
                 list.rules.hash(&mut hasher);
             } else {
@@ -73,13 +76,15 @@ impl<'a> FilterSets<'a> {
         let content = OnceCell::new();
         for &index in self.by_shape.get(&shape).into_iter().flatten() {
             let set = &self.sets[index];
-            let same =
-                set.lists.len() == lists.len()
-                    && *set.content.get_or_init(|| self.hash(set.lists, true))
-                        == *content.get_or_init(|| self.hash(lists, true))
-                    && set.lists.iter().zip(lists).all(|(a, b)| {
-                        a.name == b.name && a.action == b.action && a.rules == b.rules
-                    });
+            let same = set.lists.len() == lists.len()
+                && *set.content.get_or_init(|| self.hash(set.lists, true))
+                    == *content.get_or_init(|| self.hash(lists, true))
+                && set.lists.iter().zip(lists).all(|(a, b)| {
+                    a.name == b.name
+                        && a.action == b.action
+                        && a.rules == b.rules
+                        && a.syntax == b.syntax
+                });
             if same {
                 return Ok(set.filters.clone());
             }
@@ -87,6 +92,20 @@ impl<'a> FilterSets<'a> {
         // The remaining budget also bounds parsing of this set's raw lines.
         let budget = self.max_rules.saturating_sub(self.rules);
         let filters = Arc::new(compile(lists, budget, MAX_FILTER_BYTES)?);
+        if filters
+            .rules()
+            .iter()
+            .any(|rule| rule.matcher == rustwalld_dns_filter::Matcher::Regex)
+        {
+            self.regex_sets += 1;
+            // Each distinct set has two bounded automata plus per-thread search
+            // scratch. Sharing identical policies does not spend this budget.
+            if self.regex_sets > 8 {
+                return Err(CompileError::Domain(
+                    "at most eight distinct regex filter sets per generation".into(),
+                ));
+            }
+        }
         self.rules = self.rules.saturating_add(filters.rules().len());
         self.by_shape
             .entry(shape)
@@ -159,6 +178,29 @@ impl PolicySnapshot {
         for (index, network) in config.allowed_clients.iter_mut().enumerate() {
             *network = canonical_network(*network, || format!("allowed_clients[{index}]"))?;
         }
+        let mut raw_bytes = 0usize;
+        for (index, policy) in config.policies.iter().enumerate() {
+            PolicyError::check_count(
+                || format!("policies[{index}].lists"),
+                policy.lists.len(),
+                0,
+                256,
+            )?;
+            for list in &policy.lists {
+                raw_bytes = raw_bytes.saturating_add(list.rules.len());
+            }
+            if raw_bytes > MAX_FILTER_BYTES {
+                return Err(PolicyError::field(
+                    "policies.lists",
+                    "combined filter data exceeds 256 MiB",
+                ));
+            }
+        }
+        let effective_lists = config
+            .policies
+            .iter()
+            .map(crate::PolicyConfig::filter_inputs)
+            .collect::<Result<Vec<_>, _>>()?;
         let clock = exceptions::Clock::now();
         metadata::validate(&config.bindings)?;
         let (profiles, upstreams) = compile_upstreams(&config)?;
@@ -166,6 +208,12 @@ impl PolicySnapshot {
         let mut policies = Vec::new();
         let mut total_bytes = 0usize;
         let mut filter_sets = FilterSets::new(max_rules);
+        let mut safe_search_sets: HashMap<
+            crate::SafeSearchConfig,
+            Arc<crate::safe_search::Entries>,
+        > = HashMap::new();
+        let mut schedule_sets =
+            HashMap::<crate::WeeklySchedule, Arc<crate::schedules::CompiledSchedule>>::new();
         for (index, input) in config.policies.iter().enumerate() {
             let field = |name: &str| format!("policies[{index}].{name}");
             validate_name(&input.name, || field("name"))?;
@@ -189,8 +237,12 @@ impl PolicySnapshot {
                 0,
                 1024,
             )?;
-            total_bytes = total_bytes
-                .saturating_add(input.lists.iter().map(|l| l.rules.len()).sum::<usize>());
+            total_bytes = total_bytes.saturating_add(
+                effective_lists[index]
+                    .iter()
+                    .map(|l| l.rules.len())
+                    .sum::<usize>(),
+            );
             if total_bytes > MAX_FILTER_BYTES {
                 return Err(PolicyError::field(
                     field("lists"),
@@ -198,7 +250,7 @@ impl PolicySnapshot {
                 ));
             }
             let filters = filter_sets
-                .get_or_compile(&input.lists, &compile_filters)
+                .get_or_compile(&effective_lists[index], &compile_filters)
                 .map_err(|error| match error {
                     rustwalld_dns_filter::CompileError::Limit => PolicyError::field(
                         field("lists"),
@@ -220,12 +272,51 @@ impl PolicySnapshot {
                     ),
                 ));
             }
+            let safe_search = if let Some(settings) = &input.safe_search {
+                let entries = if let Some(entries) = safe_search_sets.get(settings) {
+                    entries.clone()
+                } else {
+                    let entries = Arc::new(crate::safe_search::Entries::compile(
+                        settings,
+                        &field("safe_search"),
+                    )?);
+                    safe_search_sets.insert(settings.clone(), entries.clone());
+                    entries
+                };
+                entries.check_conflicts(input, &field("safe_search"))?;
+                (!settings.is_disabled()).then_some(entries)
+            } else {
+                None
+            };
+            let (schedule, services_off) = if let Some(settings) = input
+                .blocked_services
+                .as_ref()
+                .and_then(|value| value.schedule.as_ref())
+            {
+                let compiled = if let Some(compiled) = schedule_sets.get(settings) {
+                    compiled.clone()
+                } else {
+                    let compiled = Arc::new(crate::schedules::CompiledSchedule::compile(settings)?);
+                    schedule_sets.insert(settings.clone(), compiled.clone());
+                    compiled
+                };
+                let off = filter_sets.get_or_compile(&input.lists, &compile_filters)?;
+                (Some(compiled), Some(off))
+            } else {
+                (None, None)
+            };
             policies.push(CompiledPolicy {
                 id: policies.len(),
                 name: input.name.clone(),
                 upstream,
+                ds_routing: input.ds_routing,
                 filters,
+                services_off,
+                schedule,
                 rewrites: compile_rewrites(index, input)?,
+                routes: crate::local_dns::compile_routes(index, &input.routes, &profiles)?,
+                block_mode: input.block_mode,
+                safe_search,
                 exceptions: exceptions::Entries::compile(
                     index,
                     &input.temporary_exceptions,
@@ -290,6 +381,10 @@ fn compile_bindings(
         let entry = ClientBinding {
             policy,
             name: binding.name.clone(),
+            filter_tags: rustwalld_dns_filter::ClientTags::compile(
+                binding.filter_tags.iter().map(String::as_str),
+            )
+            .map_err(|error| PolicyError::field(field("filter_tags"), error.to_string()))?,
             network,
         };
         match network {
@@ -315,7 +410,10 @@ fn compile_bindings(
 /// `a.b.c.d`), so an IPv4-mapped IPv6 network can only ever match as the IPv4
 /// network it maps. Convert it; a mapped prefix shorter than /96 would also
 /// cover unrelated IPv6 space and is rejected.
-fn canonical_network(network: IpNet, field: impl FnOnce() -> String) -> Result<IpNet, PolicyError> {
+pub(crate) fn canonical_network(
+    network: IpNet,
+    field: impl FnOnce() -> String,
+) -> Result<IpNet, PolicyError> {
     let IpNet::V6(v6) = network else {
         return Ok(network);
     };
@@ -347,6 +445,30 @@ fn validate_counts(config: &PolicyConfigSet, generation: u64) -> Result<(), Poli
         256,
     )?;
     PolicyError::check_count(|| "assertions".into(), config.assertions.len(), 0, 10000)?;
+    for (index, assertion) in config.assertions.iter().enumerate() {
+        if assertion.qtype == 0 {
+            return Err(PolicyError::field(
+                format!("assertions[{index}].qtype"),
+                "reserved DNS type zero",
+            ));
+        }
+    }
+    PolicyError::check_count(
+        || "policies[*].dns_records and rewrites (combined)".into(),
+        config
+            .policies
+            .iter()
+            .map(|p| p.dns_records.len() + p.rewrites.len())
+            .sum(),
+        0,
+        10000,
+    )?;
+    PolicyError::check_count(
+        || "policies[*].routes (combined)".into(),
+        config.policies.iter().map(|p| p.routes.len()).sum(),
+        0,
+        4096,
+    )?;
     PolicyError::check_count(
         || "policies[*].temporary_exceptions (combined)".into(),
         config
@@ -403,7 +525,7 @@ fn compile_upstreams(config: &PolicyConfigSet) -> Result<Upstreams, PolicyError>
 fn compile_rewrites(
     policy: usize,
     input: &crate::PolicyConfig,
-) -> Result<HashMap<String, crate::rewrite::LocalAnswers>, PolicyError> {
+) -> Result<crate::rewrite::Rewrites, PolicyError> {
     let mut rewrites = HashMap::new();
     for (index, rewrite) in input.rewrites.iter().enumerate() {
         let field = |name: &str| format!("policies[{policy}].rewrites[{index}].{name}");
@@ -441,7 +563,16 @@ fn compile_rewrites(
         }
         rewrites.insert(domain, answers);
     }
-    Ok(rewrites)
+    crate::local_dns::compile_records(policy, input, &mut rewrites)?;
+    let mut compiled = crate::rewrite::Rewrites::default();
+    for (owner, answers) in rewrites {
+        if let Some(suffix) = owner.strip_prefix("*.") {
+            compiled.wildcards.insert(suffix.to_owned(), answers);
+        } else {
+            compiled.exact.insert(owner, answers);
+        }
+    }
+    Ok(compiled)
 }
 
 #[cfg(test)]
@@ -473,6 +604,12 @@ mod tests {
         ] {
             let mut config = PolicyConfigSet::default();
             config.policies.push(PolicyConfig {
+                dns_records: vec![],
+                routes: vec![],
+                ds_routing: Default::default(),
+                block_mode: Default::default(),
+                safe_search: None,
+                blocked_services: None,
                 name: name.into(),
                 upstream: "default".into(),
                 lists: vec![],
@@ -521,6 +658,7 @@ mod tests {
                 network: "127.0.0.1/32".parse().unwrap(),
                 policy: "default".into(),
                 name: "one".into(),
+                filter_tags: Vec::new(),
                 metadata: None,
             };
             2
@@ -533,6 +671,7 @@ mod tests {
         source.policies[0]
             .lists
             .push(rustwalld_dns_filter::ListInput {
+                syntax: Default::default(),
                 name: "remote".into(),
                 action: rustwalld_dns_filter::Action::Block,
                 rules: "ads.test".into(),
@@ -559,12 +698,19 @@ mod tests {
     fn identical_list_sets_compile_once_and_count_once_against_the_rule_budget() {
         let list = |rules: &str| {
             vec![ListInput {
+                syntax: Default::default(),
                 name: "deny".into(),
                 action: rustwalld_dns_filter::Action::Block,
                 rules: rules.into(),
             }]
         };
         let policy = |name: &str, lists| PolicyConfig {
+            dns_records: vec![],
+            routes: vec![],
+            ds_routing: Default::default(),
+            block_mode: Default::default(),
+            safe_search: None,
+            blocked_services: None,
             name: name.into(),
             upstream: "default".into(),
             lists,
@@ -621,6 +767,12 @@ mod tests {
             ..Default::default()
         };
         config.policies.push(PolicyConfig {
+            dns_records: vec![],
+            routes: vec![],
+            ds_routing: Default::default(),
+            block_mode: Default::default(),
+            safe_search: None,
+            blocked_services: None,
             name: "lan".into(),
             upstream: "default".into(),
             lists: vec![],
@@ -631,6 +783,7 @@ mod tests {
             network: "::ffff:10.9.9.9/104".parse().unwrap(),
             policy: "lan".into(),
             name: "mapped".into(),
+            filter_tags: Vec::new(),
             metadata: None,
         }];
         let snapshot = PolicySnapshot::compile(config.clone(), 1).unwrap();
@@ -686,5 +839,41 @@ mod tests {
         let mut config = PolicyConfigSet::default();
         config.upstreams[0].addresses = vec!["[::ffff:127.0.0.1]:53".parse().unwrap()];
         assert!(PolicySnapshot::compile(config, 1).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod format_tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+    use rustwalld_dns_filter::{Action, RuleSyntax};
+    #[test]
+    fn identical_text_with_different_formats_never_shares_the_wrong_compiled_set() {
+        let mut config = PolicyConfigSet::default();
+        config.policies[0].lists = vec![ListInput {
+            syntax: RuleSyntax::Native,
+            name: "same".into(),
+            action: Action::Block,
+            rules: "ads.test".into(),
+        }];
+        let mut imported = config.policies[0].clone();
+        imported.name = "imported".into();
+        imported.lists[0].syntax = RuleSyntax::Adguard;
+        config.policies.push(imported);
+        let snapshot = PolicySnapshot::compile(config, 1).unwrap();
+        assert_eq!(
+            snapshot.policies()[0]
+                .filters()
+                .evaluate("child.ads.test")
+                .action,
+            Action::Block
+        );
+        assert_eq!(
+            snapshot.policies()[1]
+                .filters()
+                .evaluate("child.ads.test")
+                .action,
+            Action::Allow
+        );
     }
 }

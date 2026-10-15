@@ -4,7 +4,7 @@ use std::{
     net::IpAddr,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Instant,
 };
@@ -16,6 +16,10 @@ pub struct QueryEvent {
     pub client: IpAddr,
     /// Normalized query name without the root dot.
     pub domain: String,
+    /// Reachable CNAME target that caused a block, otherwise absent.
+    pub matched_domain: Option<String>,
+    /// Record type of the matched response subject; original qtype is separate.
+    pub matched_type: Option<u16>,
     /// Query type code.
     pub qtype: u16,
     /// Policy generation that decided the query.
@@ -36,6 +40,8 @@ pub struct QueryEvent {
     pub shadow: Option<ShadowDecision>,
     /// Index of the temporary exception that allowed the query, if any.
     pub temporary_exception: Option<u16>,
+    /// Actual selected weekly service state; absent when no schedule applies.
+    pub service_schedule: Option<rustwalld_dns_policy::ServiceScheduleState>,
 }
 /// How the staged shadow generation would have decided a query.
 #[derive(Clone, Debug)]
@@ -52,6 +58,8 @@ pub struct ShadowDecision {
     pub differs: bool,
     /// Shadow temporary exception index, if one applied.
     pub temporary_exception: Option<u16>,
+    /// Actual selected weekly service state; absent when no schedule applies.
+    pub service_schedule: Option<rustwalld_dns_policy::ServiceScheduleState>,
 }
 /// Monotonic counters and a fixed latency histogram; updated with relaxed atomics.
 #[derive(Default)]
@@ -168,6 +176,7 @@ pub struct Telemetry {
     sender: mpsc::Sender<QueryEvent>,
     /// Aggregate counters.
     pub metrics: Arc<Metrics>,
+    logging: Arc<AtomicBool>,
 }
 impl Telemetry {
     /// Telemetry with a queue of `capacity` events (at least one) and its receiver.
@@ -177,6 +186,7 @@ impl Telemetry {
             Self {
                 sender,
                 metrics: Arc::new(Metrics::default()),
+                logging: Arc::new(AtomicBool::new(true)),
             },
             receiver,
         )
@@ -184,9 +194,20 @@ impl Telemetry {
     /// Queue `event` without waiting; a full or closed queue drops it and
     /// counts the drop.
     pub fn emit(&self, event: QueryEvent) {
+        if !self.logging.load(Ordering::Acquire) {
+            return;
+        }
         if self.sender.try_send(event).is_err() {
             self.metrics.dropped_events.fetch_add(1, Ordering::Relaxed);
         }
+    }
+    /// Control-plane choice; aggregate counters keep running when history is off.
+    pub fn set_logging_enabled(&self, enabled: bool) {
+        self.logging.store(enabled, Ordering::Release);
+    }
+    /// Whether new query events may enter the bounded history queue.
+    pub fn logging_enabled(&self) -> bool {
+        self.logging.load(Ordering::Acquire)
     }
 }
 
@@ -196,6 +217,8 @@ impl Telemetry {
 pub enum QuerySource {
     /// A local rewrite.
     Rewrite,
+    /// A provider SafeSearch/restricted-content CNAME route.
+    SafeSearch,
     /// A block rule (NXDOMAIN).
     Blocked,
     /// The response cache.
@@ -214,6 +237,7 @@ impl QuerySource {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Rewrite => "rewrite",
+            Self::SafeSearch => "safe_search",
             Self::Blocked => "blocked",
             Self::Cache => "cache",
             Self::Stale => "stale",

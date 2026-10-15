@@ -100,6 +100,7 @@ mod tests {
             network: network.parse().unwrap(),
             policy: "default".into(),
             name: group.into(),
+            filter_tags: Vec::new(),
             metadata: Some(BindingMetadata {
                 group: Some(group.into()),
                 ..Default::default()
@@ -116,6 +117,7 @@ mod tests {
                 binding("2001:db8:1::9/32", "IPv6"),
             ],
             assertions: vec![Assertion {
+                qtype: 1,
                 client: "127.0.0.1".parse().unwrap(),
                 domain: "safe.test".into(),
                 expected: Action::Allow,

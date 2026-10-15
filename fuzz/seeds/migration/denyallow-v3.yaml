@@ -1,0 +1,8 @@
+
+dns: {upstream_dns: ['127.0.0.1:15354']}
+user_rules: ['||test^$denyallow=safe.test', '||ads.safe.test^']
+clients:
+  persistent:
+    - name: inherited
+      ids: ['192.0.2.10']
+      use_global_settings: true

@@ -5,7 +5,7 @@ This is an MVP with local verification, not a claim of production hardening or a
 completed network soak.
 Do not expose the management API outside loopback. Use explicit allowed-client
 CIDRs when binding DNS outside loopback, and authenticated trust settings for
-TLS/HTTPS upstreams. See [operations](docs/operations.md).
+TLS/HTTPS upstreams. See [operations](docs/operations/install.md).
 
 Report suspected vulnerabilities using
 [GitHub's private vulnerability reporting](https://github.com/Pettersen3008/rustwalld-dns/security/advisories/new).

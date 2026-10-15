@@ -10,6 +10,7 @@ use std::{sync::Arc, time::Instant};
 fn config() -> PolicyConfigSet {
     let mut config = PolicyConfigSet::default();
     config.policies[0].lists = vec![rustwalld_dns_filter::ListInput {
+        syntax: Default::default(),
         name: "test".into(),
         action: rustwalld_dns_filter::Action::Block,
         rules: "ads.test\n".into(),

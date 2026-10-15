@@ -307,7 +307,7 @@ workspace gates pass. Evidence: target/review/sprint-05/; self-reviewed.
 
 ### DNS-020 Implement bounded remote soak runner — E4 — M
 
-Status: Backlog. Priority: 7. Dependencies: DNS-018. Sprint: 06 proposed.
+Status: Done. Priority: 7. Dependencies: DNS-018. Sprint: 06.
 Outcome: exercise an independently hosted appliance without respawning/resetting
 it per cycle. Acceptance: validate the protocol's run record, bounded offered-rate
 driver/oracle, explicit load skips/cancellations, fixed resource/histogram windows,
@@ -315,10 +315,19 @@ counter resets and output limits; reject wrong answers, missing budgets, clippin
 and unsafe/unbounded inputs. Preserve existing short local modes. Verify with
 local mocks, injected wrong answers, recorder limits and cleanup. No external
 activation or long run; ground a short spec before implementation.
+Accepted: [spec](../specs/DNS-020-remote-soak.md) and
+[driver contract](../operations/soak-runner.md), self-reviewed. Strict inputs,
+continuous offered phases, original-phase oracle, resource/reset accounting and
+bounded output verified with local mocks and a separately running appliance.
+All 473 workspace tests, required gates, six CLI success/failure checks, 61-second
+minute-boundary run, both legacy rehearsals and seeded sanitizer smoke pass;
+root/fuzz audit/deny pass with retained warnings. Evidence: target/review/sprint-06/.
+No representative/remote-collector/long-window acceptance is claimed.
 
 ### DNS-021 Qualify representative soak lab — E4 — M
 
 Status: Backlog. Priority: 7. Dependencies: DNS-020 and named authorized lab.
+Sprint: 07 proposed; not Ready without target/workload/budget/authority prerequisites.
 Acceptance: independent clients and representative routed/storage path, private
 fixtures, observed workload basis, numeric load/latency/resource/recovery budgets,
 verified backup and reversal, and at most 15-minute qualification including a

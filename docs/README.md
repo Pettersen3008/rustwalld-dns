@@ -16,10 +16,10 @@ product direction, external releases, deployment and contributor merge approval.
 | Local acceptance commands | [Verification](engineering/verification.md) |
 | Performance experiments | [Performance](engineering/performance.md) |
 | UI and interaction acceptance | [Design](engineering/design.md) |
-| Milestones and next work | [Roadmap](roadmap.md), [backlog](planning/backlog.md), [Sprint 06](planning/sprints/sprint-06.md) |
+| Milestones and next work | [Roadmap](roadmap.md), [backlog](planning/backlog.md), [Sprint 07](planning/sprints/sprint-07.md) |
 | Short implementation design | [Filter ownership](specs/DNS-005-filter-ownership.md), [templates](templates/story.md) |
 | Durable decisions | [ADR 0004](decisions/0004-agent-workflow.md) |
-| Review and learning | [Sprint 05 review](reviews/sprint-05.md) |
+| Review and learning | [Sprint 06 review](reviews/sprint-06.md) |
 | Documentation recovery and old paths | [Cleanup map](archive.md) |
 
 ## Behavior contracts
@@ -32,6 +32,7 @@ product direction, external releases, deployment and contributor merge approval.
 · [Optional parallel compiler](engineering/parallel-compilation.md)
 
 External acceptance: [representative soak protocol](engineering/soak.md) ·
+[bounded remote driver](operations/soak-runner.md) ·
 [independent security review scope](engineering/security-review.md).
 
 ## Operator guides

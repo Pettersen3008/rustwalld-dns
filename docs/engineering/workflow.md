@@ -13,7 +13,7 @@ agent. A new session resumes from the backlog and sprint.
 | Why the product exists, exclusions | [Scope](../product/scope.md) |
 | Milestone exit criteria | [Roadmap](../roadmap.md) |
 | Priority, story status, acceptance criteria, dependencies | [Backlog](../planning/backlog.md) |
-| Selected scope, goal, task checkboxes, capacity | [Sprint](../planning/sprints/sprint-06.md) |
+| Selected scope, goal, task checkboxes, capacity | [Sprint](../planning/sprints/sprint-07.md) |
 | Grounded design, alternatives, budgets, test plan | docs/specs/DNS-NNN-slug.md |
 | Current behavior | Architecture and operator guides |
 | Durable tradeoff | docs/decisions/NNNN-slug.md |

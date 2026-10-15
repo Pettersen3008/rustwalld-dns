@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add a bounded remote soak example with strict run records, UDP/TCP answer
+  oracles, explicit load/cancellation accounting, resource collector input and
+  capped window/bin evidence; preserve existing local rehearsals.
+
 - Correct control/encrypted rehearsal report descriptions to the shared
   2-second, 21,001-bin histogram; sampling and query behavior are unchanged.
 

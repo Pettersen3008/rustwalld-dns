@@ -81,3 +81,7 @@ test = true
 [[example]]
 name = "wire_compare"
 test = true
+
+[[example]]
+name = "remote_soak"
+test = true

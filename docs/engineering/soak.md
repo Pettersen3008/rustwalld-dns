@@ -15,6 +15,8 @@ invalid replies/reset/stalls/outages and promotion with three UDP-client lanes.
 `auth_resilience.rs` checks blocked/local DNS while bounded password jobs run.
 `resilience.rs` covers stalled management, compilation and failed persistence.
 These spawn their own appliance; they do not drive an existing remote deployment.
+The separate [remote driver](../operations/soak-runner.md) now provides bounded
+UDP/TCP traffic and collector-file recording without owning the target service.
 
 The shared histogram has 21,001 bins: exact microseconds through 1 ms, 100-us upper
 buckets thereafter, 2 s cap, explicit clipped count and uncapped observed maximum.
@@ -51,8 +53,11 @@ Before setup is accepted, freeze a private `run.json` lab record with:
 | Faults | Ordered named start/end windows, target resource, expected DNS/control behavior and verified backup/undo action |
 | Evidence | Monotonic start/end, duration, baseline/warmup windows, sampling cadence, output limits and required final checks |
 
-This is proposed controller input, not an existing application configuration/CLI
-format. Missing target identity, numeric budgets, representativeness or authority
+The [version 1 driver record](../operations/soak-runner.md#frozen-version-1-record)
+freezes traffic/collector input and hashes the external controller plan, separately
+from application configuration. Fault execution, collector transport, authenticated
+provenance and final checks remain external lab duties. Missing target identity,
+numeric budgets, representativeness or authority
 prevents setup being Ready. No values are inferred from an empty template or an
 old benchmark. Dataset/filter sizes and IPv4/IPv6 coverage must match the selected
 target; unsupported paths remain explicit gaps. Keep credentials out of this record.
@@ -131,7 +136,9 @@ Reaching a collection/output limit is incomplete evidence and stops the run safe
 Each window records run/phase/lane/transport and bounded per-client counters,
 offered/sent/replied/timed-out/wrong/
 skipped/cancelled counts, elapsed monotonic time, quantiles/max/clipping, configured
-generation and sampled resources/metric deltas. Reconcile sent work with replies,
+generation and sampled resources/metric deltas. Driver `sent` means dispatched
+exchange attempts, including connect/write failures, not verified wire delivery.
+Reconcile sent work with replies,
 timeouts, errors and cancellations; preserve counter resets across process IDs and
 generations. Final quantiles merge histogram counts, never average window quantiles.
 Report sample counts and bucket precision. Any clipped tail prevents a latency pass;

@@ -85,8 +85,12 @@ use fresh checked-in seeds when a bounded mutation smoke is intended.
 
 Other targets are declared in fuzz/Cargo.toml: wire messages, TLS/DoH responses,
 policy checks, cache/stale, service records, SafeSearch/catalogs, schedules,
-credentials, identity and inventory. Seed the affected target from fuzz/seeds/;
-keep discriminator bytes intact. A short run is supplementary evidence, not a
+credentials, identity and inventory. Seed the affected target from fuzz/seeds/
+and keep discriminator bytes intact.
+`soak_record` covers the strict example run record, frozen Hickory templates and
+collector envelopes without filesystem/network operations; seed from its two JSON
+fixtures, with `-max_len=262144` and the same bounded sanitizer command above.
+A short run is supplementary evidence, not a
 security audit or proof of parser safety. Preserve crashing inputs locally.
 
 ## Packaging failure recovery and deployment

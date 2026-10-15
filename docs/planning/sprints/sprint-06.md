@@ -1,30 +1,36 @@
 # Sprint 06 Build bounded remote soak support
 
-Status: Proposed; not started. Goal: turn the accepted soak protocol into a
+Status: Completed. Goal: turn the accepted soak protocol into a
 bounded, locally verified remote-appliance driver before selecting/activating a
 representative lab. Personal context; repository planning, no Jira.
 
-## Proposed scope
+## Scope
 
 | Order | Story | Points | Readiness and purpose |
 | --- | --- | --- | --- |
-| 1 | DNS-020 | 3 | Ground/review a short implementation spec, then deliver a bounded driver and recorder with local fault/cleanup acceptance |
+| 1 | DNS-020 | 3 | Accepted grounded spec; deliver a bounded driver and recorder with local fault/cleanup acceptance |
 
 Reserve one point for rework. Relative size is not a time/velocity promise.
 [Backlog](../backlog.md) owns acceptance/status; [protocol](../../engineering/soak.md)
-defines the requirements. DNS-018/019/010 are complete; DNS-020 needs its concrete
-design before Ready.
+defines the requirements. DNS-018/019/010 are complete; [DNS-020 design](../../specs/DNS-020-remote-soak.md) is accepted after
+self-review; local verification is available.
 
-## Proposed tasks
+## Tasks
 
-- [ ] Inspect reuse boundaries in existing examples/helpers and define a narrow
+- [x] Inspect reuse boundaries in existing examples/helpers and define a narrow
       remote driver/run-record interface, oracle, ownership and limits.
-- [ ] Implement input validation, bounded rate/concurrency, late-reply handling,
+- [x] Implement input validation, bounded rate/concurrency, late-reply handling,
       accounting and windowed histogram/resource output without resetting the target.
-- [ ] Exercise private local mocks, independent endpoint configuration, wrong-answer
+- [x] Exercise private local mocks, independent endpoint configuration, wrong-answer
       sentinel, clipped/empty/incomplete evidence, counter resets and recorder limits.
-- [ ] Verify cancellation/failure cleanup and legacy local modes; self-review and
+- [x] Verify cancellation/failure cleanup and legacy local modes; self-review and
       run required checks, update protocol/backlog and review/retrospective.
+
+DNS-020 is Done: three relative points, rework reserve used, no carryover.
+[Review](../../reviews/sprint-06.md) records 473 tests, real appliance/failure and
+minute-boundary checks, legacy rehearsals, seeded sanitizer and scan evidence.
+[Sprint 07](sprint-07.md) proposes lab qualification; its actual target/authority
+prerequisites remain missing. No long run is implied by this implementation.
 
 ## Exclusions
 

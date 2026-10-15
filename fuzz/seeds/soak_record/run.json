@@ -1,0 +1,95 @@
+{
+  "format": 1,
+  "run_id": "fuzz-fixture",
+  "seed": 42,
+  "mode": "qualification",
+  "authority": {
+    "instruction": "pure fuzz fixture; no execution authority",
+    "window": "not a live run",
+    "stop_owner": "fuzzer",
+    "allowed_actions": "parse bytes only",
+    "reversal": "none; no IO"
+  },
+  "identity": {
+    "revision": "0000000000000000000000000000000000000000",
+    "source_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "binary_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "dataset_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "appliance_config_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "controller_plan_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "appliance_limits": {
+      "raw_cache": 16,
+      "decision_cache": 16,
+      "inflight": 16,
+      "udp_tasks": 16,
+      "upstream_waiters": 16,
+      "tcp_connections": 16,
+      "event_queue": 16,
+      "history": 16
+    },
+    "platform": "synthetic fixture",
+    "topology": "no network",
+    "clock_check": "synthetic",
+    "workload_basis": "not representative"
+  },
+  "collector": {
+    "path": "/nonexistent/soak-fixture.json",
+    "target_id": "fixture",
+    "max_age_ms": 2000
+  },
+  "limits": {
+    "outstanding": 8,
+    "latency_us": 400000,
+    "resources": [
+      1024,
+      64,
+      16,
+      1048576,
+      16,
+      16
+    ],
+    "artifact_bytes": 8388608,
+    "aggregate_bytes": 4194304,
+    "window_bytes": 16384
+  },
+  "clients": [
+    {
+      "id": "client-1",
+      "bind": "127.0.0.1"
+    }
+  ],
+  "lanes": [
+    {
+      "id": "lane-0",
+      "client": 0,
+      "endpoint": "127.0.0.1:9",
+      "transport": "udp",
+      "weight": 1,
+      "responses": [
+        "000081800001000100000000056c6f63616c04736f616b04746573740000010001c00c000100010000003c0004c0000201"
+      ],
+      "ttl_floor": 0,
+      "tcp_fallback": false,
+      "fresh": false
+    }
+  ],
+  "phases": [
+    {
+      "id": "steady",
+      "seconds": 1,
+      "qps": 10,
+      "deadline_ms": 500,
+      "max_lag_ms": 1000,
+      "accepted": [
+        0
+      ],
+      "generations": [
+        1
+      ],
+      "allow_timeouts": false
+    }
+  ],
+  "external_checks": [
+    "fuzz only; no appliance or lab evidence"
+  ]
+}

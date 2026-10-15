@@ -1616,6 +1616,7 @@ dependencies = [
  "rustwalld-dns-policy",
  "rustwalld-dns-resolver",
  "rustwalld-dns-runtime",
+ "serde",
  "serde_json",
 ]
 

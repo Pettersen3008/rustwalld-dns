@@ -1,5 +1,6 @@
 //! Fixed-memory latency measurement shared by real-process rehearsals.
 use serde_json::{Value, json};
+#[derive(serde::Serialize)]
 pub struct Histogram {
     bins: Vec<u64>,
     replies: u64,

@@ -8,7 +8,7 @@ for the current dirty tree. [Scope](product/scope.md) defines release boundaries
 | --- | --- | --- |
 | M0 — Reset | Lean contracts, shared agent instructions, story/spec/sprint/decision/review templates, recoverable cleanup and locally verified documentation tools | Complete; see Sprint 00 review |
 | M1 — Trustworthy development baseline | Repeatable local Rust/UI/consumer checks; matched benchmark baseline; reviewed large-module boundaries; actionable UX audit; no false acceptance claims | Complete; Sprint 01 baseline and Sprint 02 engine/focus/copy accepted |
-| M2 — Reliable appliance | Native deployment-host recovery and sandbox tests plus representative soak; failure/resource limits and compatibility documented; independent security findings triaged | Native Debian 13/KVM accepted; Sprint 05 soak protocol/review packet prepared; representative run and independent review remain open |
+| M2 — Reliable appliance | Native deployment-host recovery and sandbox tests plus representative soak; failure/resource limits and compatibility documented; independent security findings triaged | Native Debian 13/KVM accepted; bounded remote driver/protocol/review scope prepared; representative qualification/run and independent review remain open |
 | M3 — Focused product improvement | Highest-value migration/local DNS/UI gaps delivered in complete measured slices; each selected feature meets spec, review and UX acceptance | Sprint 02 focus/copy and Sprint 03 phone/editor slices accepted; compatibility candidates remain |
 | M4 — Release readiness | Target hardware evidence, security review disposition, verified supported formats, clean local package checks and explicit release authorization | Later |
 
@@ -17,6 +17,6 @@ implementation. Preserve the reusable libraries and keep management out of DNS.
 Do not copy router-project CI, kernel lab requirements or feature plans here.
 
 The [backlog](planning/backlog.md) owns story priority/status and acceptance;
-[Sprint 06](planning/sprints/sprint-06.md) proposes bounded remote-runner implementation;
-[Sprint 05 review](reviews/sprint-05.md) records the prepared protocols and open gates.
+[Sprint 07](planning/sprints/sprint-07.md) proposes representative lab qualification;
+[Sprint 06 review](reviews/sprint-06.md) records verified driver support and open gates.
 At closeout, update milestones using delivered evidence and the retrospective.

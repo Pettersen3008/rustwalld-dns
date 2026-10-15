@@ -33,6 +33,7 @@ Windows/macOS appliance hardening are not implemented claims.
 | [Downloads](../../crates/runtime/src/downloads.rs), [refresh worker](../../crates/runtime/src/refreshes/worker.rs), [remote adapters](../../crates/app/src/integrations/remote.rs) | Privileged pinned HTTPS egress, URL/trust/body/header bounds, conditional 304 semantics, queue/cancellation and failed refresh isolation; advisory discovery cannot grant DNS identity | app downloads/integrations, runtime refresh/download tests; download_config, lease_inventory |
 | [Migration](../../crates/app/src/migration/mod.rs), [TOML/TLS files](../../crates/app/src/config.rs) | Bounded archive/scalar expansion, duplicate/ambiguous layout refusal, unsupported source semantics, path/permission/error redaction; imports create reviewed drafts | migration/import suites, process/policy_check; migration, tls_config |
 | [History/privacy](../../crates/runtime/src/store/history.rs), [schema](../../crates/runtime/src/store/schema.rs), [maintenance](../../crates/runtime/src/maintenance.rs) | Bounded best-effort telemetry, separate durable policy writes, privacy retention, corrupt/future schema refusal, live WAL backup and absent restore destination | app maintenance, runtime store/privacy tests, isolated package/native recovery |
+| [Remote rehearsal intake](../../crates/app/examples/support/soak_record.rs), [driver](../../crates/app/examples/remote_soak.rs) | Strict bounded records, private numeric endpoints, oracle/counter/output caps, cancellation ownership; collector and operational authority are external trust assumptions | remote_soak example tests; seeded soak_record sanitizer target |
 | [Installer](../../scripts/install.py), [unit](../../packaging/rustwalld-dns.service), [container](../../packaging/Dockerfile), [console](../../web/README.md) | Trusted bundle/member/path validation, credentials/state ownership, native/container least privilege, UI token/CSRF handling and dependency/license provenance | Python deployment tests, package/native fixture, web browser suites, audit/deny/Bun audit |
 
 Review cancellation, malformed/huge/concurrent input and failed persistence across
@@ -79,6 +80,11 @@ Sprint 05 prepares `target/review/sprint-05/security-packet/` locally:
   hash. `working.diff` and `git-status.txt` distinguish the snapshot from its base.
 - `scope.md` freezes this brief. `checks.json` and `security-scans.json` record
   actual commands/exits; raw test/scan logs remain in the parent evidence directory.
+
+DNS-020 adds example run/collector intake, oracle/scheduling/recording and fuzz
+coverage after this Sprint 05 packet. Include that new diff in the actual review
+target; the older packet alone does not represent it. No production DNS/API or
+credential behavior changed in that slice.
 
 Verify every extracted file against the manifest before review/build, and compare
 the changed files to the base revision. A checksum detects mismatch, not source

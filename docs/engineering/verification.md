@@ -102,8 +102,13 @@ Replay tests assert parser fields, intended rejection categories and exact 1-MiB
 4096-line boundaries. Copy those seeds to a fresh ignored corpus after separately
 building the target; use `-max_len=1048577`, RSS <=1024 MiB, per-input timeout 5s
 and a whole-process deadline. It exercises pure parsing with fixed time, not file
-intake, discovery or operational inventory. Identity and server-TLS seed preparation
-remain [draft follow-ups](../planning/sprints/sprint-09.md).
+intake, discovery or operational inventory. `identity` has public dummy JSON seeds
+in fuzz/seeds/identity/; replay tests assert each validation error category and exact
+128-byte label, 64-token, 20..64-byte TOTP and 64-KiB bounds. Use `-max_len=65537`
+with the same RSS/timeout limits. `server_tls` seeds in fuzz/seeds/server_tls/
+pack mode byte, certificate PEM, `\0\0` and key PEM using a deliberately public
+pair; replay tests assert ALPN by mode bit, each error category, 1..8 certificates
+and exact 256-KiB/16-KiB bounds. Use `-max_len=278532`.
 A short run is supplementary evidence, not a
 security audit or proof of parser safety. Preserve crashing inputs locally.
 

@@ -562,21 +562,27 @@ independent-review claim. Evidence: target/review/sprint-09/.
 
 ### DNS-037 Seed pure identity-document review coverage — E4 — M
 
-Status: Backlog. Priority: 7. Dependencies: DNS-010. Candidate: Sprint 09 follow-up.
+Status: Done. Priority: 7. Dependencies: DNS-010. Sprint: 09.
 Outcome: public synthetic corpus reaches valid/invalid validate_document branches
 without password hashing, file load/save, provisioning or actual credentials.
 Acceptance: reviewed dummy PHC/TOTP/token fixture policy, semantic and boundary
 replay, rebuilt bounded seeded ASAN and required checks; no auth behavior changes.
-Draft: [identity-parser corpus](../specs/DNS-037-identity-parser-seeds.md).
+Spec: [identity-parser corpus](../specs/DNS-037-identity-parser-seeds.md), separate review after implementation.
+Accepted: fifteen dummy seeds, six exact guard/boundary regressions; seeded ASAN
+56,335,827 runs/601 s exit 0; required gates pass; separate read-only review
+accepted with fixes applied. Evidence: target/review/sprint-09/dns-037/.
 
 ### DNS-038 Seed pure TLS-configuration review coverage — E4 — M
 
-Status: Backlog. Priority: 7. Dependencies: DNS-010. Candidate: Sprint 09 follow-up.
+Status: Done. Priority: 7. Dependencies: DNS-010. Sprint: 09.
 Outcome: explicitly public matching fixture pair reaches both packed server_tls
 modes and meaningful parser/configuration errors, without handshakes or live keys.
 Acceptance: reviewed public-pair construction, exact discriminator/separator replay,
 PEM/chain/boundary tests and rebuilt bounded seeded ASAN; no TLS/trust changes.
-Draft: [TLS-parser corpus](../specs/DNS-038-tls-parser-seeds.md).
+Spec: [TLS-parser corpus](../specs/DNS-038-tls-parser-seeds.md), separate review after implementation.
+Accepted: ten packed seeds with a documented public pair, five ALPN/error/boundary
+regressions; seeded ASAN 27,397,431 runs/601 s exit 0; required gates pass;
+separate read-only review fixes applied. Evidence: target/review/sprint-09/dns-038/.
 
 ## Deferred ideas
 

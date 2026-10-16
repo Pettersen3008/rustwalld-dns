@@ -45,13 +45,35 @@ in deterministic tests. Measure successful branch replay, not campaign iteration
 count as coverage. Those stories remain drafts for the next bounded session;
 representative qualification and sprint closeout are still pending.
 
+## DNS-037 slice (2026-10-16)
+
+- [x] Ground spec against file.rs/crypto.rs (labeled self-review).
+- [x] Add fifteen public dummy seeds and six actual-API replay/boundary tests.
+- [x] Fresh seeded ASAN 56,335,827 runs/601 s, exit 0; fmt, strict Clippy,
+  503 workspace tests, docs and root/fuzz audit/deny pass.
+- [x] Separate read-only review accepted (after implementation); added empty-name
+  and uppercase-digest checks and doc fixes. DNS-037 Done.
+
+## DNS-038 slice (2026-10-16)
+
+- [x] Generate a documented, deliberately public P-256 pair; pack ten seeds.
+- [x] Five actual-API tests: ALPN per mode bit, error categories, 1..8 chain,
+  exact 256-KiB/16-KiB/empty bounds.
+- [x] Seeded ASAN 27,397,431 runs/601 s, exit 0; fmt, strict Clippy, 508
+  workspace tests, docs and root/fuzz audit/deny pass.
+- [x] Separate read-only review accepted (after implementation); provenance,
+  empty-certificate check and stale contract fixes applied. DNS-038 Done.
+
+All three review-brief corpus gaps (lease, identity, server TLS) are now closed.
+Process note: both reviews ran after implementation rather than before Ready; they
+caught only doc/claim issues this time, but run fixture reviews before coding next.
+
 ## Next refinement
 
-DNS-037 and DNS-038 are grounded draft corpus slices for the other two review-brief
-gaps. Public dummy identity data and a deliberately public TLS fixture pair need
-separate readiness review. They are not selected for implementation before the
-current hard stop; reserve verification/closeout time rather than starting a packet
-that cannot be accepted within the window.
+DNS-037 and DNS-038 were accepted on 2026-10-16 (see slices above). No runnable
+in-repository story remains in this sprint: DNS-021 preparation needs actual target
+hardware, routed path and observed workload, and DNS-024 needs an identified
+independent reviewer. Both are external inputs, not agent-runnable work.
 
 ## Later candidate order
 

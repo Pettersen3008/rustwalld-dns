@@ -114,12 +114,16 @@ cargo deny check
 ```
 
 Use the seeded sanitizer procedure in verification.md for affected parsers, plus
-the appropriate table targets. `identity` and `server_tls`
-currently have no checked-in seed directory: prepare bounded public valid/invalid
-fixtures before claiming seeded mutation coverage. Target presence alone is not
-fuzz evidence. Build a cold fuzz target separately; timeout means incomplete.
+the appropriate table targets. Target presence alone is not fuzz evidence. Build
+a cold fuzz target separately; timeout means incomplete.
 `lease_inventory` now has ten synthetic valid/invalid seeds and five actual-parser
 replay/boundary tests; see [DNS-036](../specs/DNS-036-lease-parser-seeds.md).
+`identity` has fifteen public dummy valid/invalid documents and six replay/boundary
+tests; see [DNS-037](../specs/DNS-037-identity-parser-seeds.md). They exercise pure
+validation only, not password verification, sessions, TOTP replay or file modes.
+`server_tls` has ten packed seeds with a deliberately public fixture pair and five
+replay/boundary tests; see [DNS-038](../specs/DNS-038-tls-parser-seeds.md). They
+exercise configuration parsing and ALPN only, not handshakes, trust or key files.
 Console changes need Bun audit and real-daemon HTTP/HTTPS browser/role checks.
 Native destructive fixtures require their explicitly authorized fresh VM; ordinary
 test permission does not authorize production activation or live-data fault tests.

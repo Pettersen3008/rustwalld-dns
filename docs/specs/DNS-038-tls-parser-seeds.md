@@ -1,8 +1,9 @@
 # DNS-038 Prepare public paired TLS parser fixtures
 
-Status: Draft; not selected for implementation in the remaining window.
-Story: DNS-038 in the [backlog](../planning/backlog.md).
-Author: Codex coordinator, 2026-10-15; design review pending.
+Status: Implemented. Story: DNS-038 in the [backlog](../planning/backlog.md).
+Author: Codex coordinator, 2026-10-15; grounded against tls.rs and implemented by
+Claude coordinator, 2026-10-16. Separate read-only agent review accepted with fixes
+2026-10-16, AFTER implementation (deviation from the Ready gate; recorded).
 
 ## Grounding and proposed boundary
 
@@ -20,10 +21,9 @@ VM keys or runtime configuration. Record generation method and public-fixture
 status beside the corpus documentation; no real service may use this key.
 Prefer reusing an existing complete public source fixture if inspection finds one.
 Do not publish an operator certificate/key pair or introduce a trust bypass.
-Proposed worker ownership: new fuzz/seeds/server_tls/ packed inputs (each <=8 KiB,
-aggregate <=64 KiB) and crates/app/tests/server_tls_seeds.rs (<=200 lines).
-Coordinator owns fixture provenance in this spec and shared records; existing TLS
-implementation, credentials and operational files are outside worker ownership.
+Ownership: new fuzz/seeds/server_tls/ packed inputs (each <=8 KiB, aggregate
+<=64 KiB) and crates/app/tests/server_tls_seeds.rs (<=200 lines); existing TLS
+implementation, credentials and operational files stay unchanged.
 
 Seed both mode bits, missing separator, malformed certificate/key, mismatch and
 chain/bound failures. Replay the actual packed-input split and from_pem API to prove
@@ -50,3 +50,29 @@ mutations with explicit input/RSS/timeout/output limits; retain every failure.
 Run required local/security/compatibility checks. This remains parser preparation,
 not independent security review, certificate trust validation or operational TLS
 acceptance. No private material from the existing VM evidence enters the corpus.
+
+## Public fixture provenance
+
+The pair embedded in fuzz/seeds/server_tls/ is DELIBERATELY PUBLIC test data.
+Generated 2026-10-16 with OpenSSL 3.6.4 (default PKCS#8 `PRIVATE KEY` output):
+
+```sh
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 36500 -subj "/CN=server-tls.fixture.test/O=Rustwall public test fixture - not a secret" -addext "subjectAltName=DNS:server-tls.fixture.test" -keyout public-fixture.key -out public-fixture.crt
+```
+
+Each seed is mode byte + certificate PEM + `\0\0` + key PEM. The two corruption
+seeds replace byte 10 of the first base64 line with `!`. The mismatch seed reuses
+the public tls_config resolver.test certificate with this key. The key must never
+configure a listener or be trusted; secret-scanner alerts on it (as on
+web/e2e/fixtures/download-key.pem) are expected false positives.
+
+## Acceptance
+
+Ten packed seeds (10,706 bytes) and five actual-API replay tests: both mode bits
+and a two-certificate chain succeed with ALPN asserted; every invalid seed asserts
+its error category; empty input, 1..8 certificates and 256-KiB/16-KiB bounds are
+exact. Review confirmed byte-identical regeneration and single-character corruption.
+Fresh rebuilt seeded ASAN: 27,397,431 runs/601 s, exit 0, no artifact (coverage 837
+at init, 1,590 final). LibFuzzer's length control reached 173,991 bytes, below
+max_len; the largest-size boundaries are covered by deterministic tests, not mutation.
+Required gates pass. No handshake, trust or independent security review follows.

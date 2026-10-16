@@ -584,6 +584,16 @@ Accepted: ten packed seeds with a documented public pair, five ALPN/error/bounda
 regressions; seeded ASAN 27,397,431 runs/601 s exit 0; required gates pass;
 separate read-only review fixes applied. Evidence: target/review/sprint-09/dns-038/.
 
+### DNS-039 Exercise routed reference-profile mechanics — E4 — M
+
+Status: Ready. Priority: 7. Dependencies: DNS-026, DNS-031. Sprint: 10.
+Outcome: the existing appliance/driver/collector pipeline works unchanged when the
+client and upstream fixture sit behind a routed hop on disposable VMs.
+Acceptance: path and admission proof, pilot, <=15-minute 20/100-QPS qualification,
+wrong-oracle, cancellation and routed-link fault/recovery runs, offline verification
+and verified teardown. Does not satisfy DNS-021's representative criterion.
+Spec: [routed mechanics](../specs/DNS-039-routed-reference-mechanics.md).
+
 ## Deferred ideas
 
 DoQ/DNSCrypt, automatic HA, external identity and firewall bypass prevention are

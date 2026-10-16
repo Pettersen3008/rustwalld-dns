@@ -16,7 +16,7 @@ product direction, external releases, deployment and contributor merge approval.
 | Local acceptance commands | [Verification](engineering/verification.md) |
 | Performance experiments | [Performance](engineering/performance.md) |
 | UI and interaction acceptance | [Design](engineering/design.md) |
-| Milestones and next work | [Roadmap](roadmap.md), [backlog](planning/backlog.md), [Sprint 09](planning/sprints/sprint-09.md) |
+| Milestones and next work | [Roadmap](roadmap.md), [backlog](planning/backlog.md), [Sprint 10](planning/sprints/sprint-10.md) |
 | Short implementation design | [Filter ownership](specs/DNS-005-filter-ownership.md), [templates](templates/story.md) |
 | Durable decisions | [ADR 0004](decisions/0004-agent-workflow.md) |
 | Review and learning | [Latest completed review](reviews/sprint-09.md) |

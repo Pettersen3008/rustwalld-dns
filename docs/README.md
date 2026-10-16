@@ -19,7 +19,7 @@ product direction, external releases, deployment and contributor merge approval.
 | Milestones and next work | [Roadmap](roadmap.md), [backlog](planning/backlog.md), [Sprint 09](planning/sprints/sprint-09.md) |
 | Short implementation design | [Filter ownership](specs/DNS-005-filter-ownership.md), [templates](templates/story.md) |
 | Durable decisions | [ADR 0004](decisions/0004-agent-workflow.md) |
-| Review and learning | [Latest completed review](reviews/sprint-08.md) |
+| Review and learning | [Latest completed review](reviews/sprint-09.md) |
 | Documentation recovery and old paths | [Cleanup map](archive.md) |
 
 ## Behavior contracts

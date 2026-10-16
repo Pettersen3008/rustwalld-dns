@@ -1,7 +1,7 @@
 # Sprint 09 Qualify representative reliability prerequisites
 
 Planning window: 2026-10-19–25; dates do not schedule execution.
-Status: Active preparation. Goal: close runnable security-review fixture gaps and
+Status: Closed 2026-10-16; see [review](../../reviews/sprint-09.md). Goal: close runnable security-review fixture gaps and
 prepare grounded representative qualification, preserving all M2 gates.
 DNS-036 executes in the remaining 2026-10-15 two-hour window; dates above are a
 planning horizon, not a scheduled run or velocity estimate.

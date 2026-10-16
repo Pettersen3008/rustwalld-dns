@@ -549,6 +549,8 @@ async fn real_process_https_management_and_dot_doh_enforce_identity_policy_and_p
         422
     );
     policy.allowed_clients = vec!["::1/128".parse().unwrap()];
+    // `client` deliberately reuses its pooled DoH connection opened before this
+    // change: open connections get per-request 403, new ones close before TLS.
     assert_eq!(
         admin
             .put(format!("{base}/api/v1/config"))
@@ -572,6 +574,44 @@ async fn real_process_https_management_and_dot_doh_enforce_identity_policy_and_p
             .unwrap()
             .status(),
         403
+    );
+    // Fresh encrypted DNS connections from the now non-admitted source close
+    // before a handshake; the management API is never filtered by DNS admission.
+    let fresh = reqwest::Client::builder()
+        .no_proxy()
+        .add_root_certificate(reqwest::Certificate::from_pem(cert.pem().as_bytes()).unwrap())
+        .resolve("dns.test", doh)
+        .build()
+        .unwrap();
+    assert!(
+        fresh
+            .post(&endpoint)
+            .header("Content-Type", "application/dns-message")
+            .body(query("ads.test"))
+            .send()
+            .await
+            .is_err()
+    );
+    let mut closed = tokio::net::TcpStream::connect(dot).await.unwrap();
+    let mut byte = [0; 1];
+    let read = tokio::time::timeout(Duration::from_secs(2), closed.read(&mut byte))
+        .await
+        .unwrap(); // Elapsed means the non-admitted DoT peer was held open.
+    assert!(matches!(read, Ok(0) | Err(_)), "{read:?}");
+    let management = reqwest::Client::builder()
+        .no_proxy()
+        .add_root_certificate(reqwest::Certificate::from_pem(cert.pem().as_bytes()).unwrap())
+        .resolve("dns.test", config.api_listen)
+        .build()
+        .unwrap();
+    assert_eq!(
+        management
+            .get(format!("{base}/api/v1/auth/info"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
     );
 }
 #[test]

@@ -128,12 +128,15 @@ type Connection = (
     ManagedStream<TlsStream<tokio::net::TcpStream>>,
     std::net::SocketAddr,
 );
+/// Source admission checked before a slot or TLS handshake is spent.
+pub type Admission = Arc<dyn Fn(std::net::IpAddr) -> bool + Send + Sync>;
 /// Handshakes proceed concurrently; one slow TLS peer cannot stall all accepts.
 pub struct SecureListener {
     inner: TcpListener,
     acceptor: TlsAcceptor,
     slots: Arc<Semaphore>,
     pending: JoinSet<Option<Connection>>,
+    admission: Option<Admission>,
 }
 impl SecureListener {
     pub fn new(inner: TcpListener, acceptor: TlsAcceptor, connections: usize) -> Self {
@@ -142,7 +145,15 @@ impl SecureListener {
             acceptor,
             slots: Arc::new(Semaphore::new(connections)),
             pending: JoinSet::new(),
+            admission: None,
         }
+    }
+    /// Close peers the predicate rejects at accept, before any handshake.
+    /// Use only for DNS ingress; management access has its own authentication.
+    #[must_use]
+    pub fn with_admission(mut self, admission: Admission) -> Self {
+        self.admission = Some(admission);
+        self
     }
 }
 impl Listener for SecureListener {
@@ -154,6 +165,7 @@ impl Listener for SecureListener {
                 result=self.pending.join_next(),if !self.pending.is_empty()=>{if let Some(Ok(Some(connection)))=result{return connection;}},
                 incoming=self.inner.accept(),if self.slots.available_permits()>0=>{
                     let Ok((stream,address))=incoming else {tokio::time::sleep(Duration::from_millis(100)).await;continue;};
+                    if self.admission.as_ref().is_some_and(|admits| !admits(address.ip())) {continue;}
                     let Ok(permit)=self.slots.clone().try_acquire_owned() else {continue;};let acceptor=self.acceptor.clone();
                     self.pending.spawn(async move {
                         let stream=tokio::time::timeout(Duration::from_secs(5),acceptor.accept(stream)).await.ok()?.ok()?;

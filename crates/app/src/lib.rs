@@ -107,12 +107,15 @@ pub async fn run(
         requests,
         vec![],
     );
+    let engine = runtime.control().engine().clone();
+    let admission: tls::Admission = Arc::new(move |peer| engine.active().permits(peer));
     if let (Some(config), Some(acceptor)) = (dot_config, dot_tls) {
         let listener = tls::SecureListener::new(
             TcpListener::bind(config.listen).await?,
             acceptor,
             config.max_connections,
-        );
+        )
+        .with_admission(admission.clone());
         let state = secure_state
             .clone()
             .with_hostnames(config.certificate.hostnames);
@@ -123,7 +126,8 @@ pub async fn run(
             TcpListener::bind(config.listen).await?,
             acceptor,
             config.max_connections,
-        );
+        )
+        .with_admission(admission);
         let state = secure_state
             .clone()
             .with_hostnames(config.certificate.hostnames);

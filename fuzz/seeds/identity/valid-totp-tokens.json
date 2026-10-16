@@ -1,0 +1,33 @@
+{
+ "schema": 1,
+ "revision": 18446744073709551615,
+ "user": {
+  "name": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+  "password_hash": "$argon2id$v=19$m=32768,t=3,p=1$AAECAwQFBgcICQoLDA0ODw$ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8",
+  "totp_secret": "AAAQEAYEAUDAOCAJBIFQYDIOB4IBCEQT",
+  "last_totp_step": 0
+ },
+ "tokens": [
+  {
+   "id": "00000000000000000000000000000001",
+   "name": "fixture-token-1",
+   "role": "read_only",
+   "expires_at": 1,
+   "digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
+  {
+   "id": "00000000000000000000000000000002",
+   "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "role": "operator",
+   "expires_at": 4102444800,
+   "digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
+  {
+   "id": "00000000000000000000000000000003",
+   "name": "fixture-token-3",
+   "role": "administrator",
+   "expires_at": 253402300799,
+   "digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  }
+ ]
+}

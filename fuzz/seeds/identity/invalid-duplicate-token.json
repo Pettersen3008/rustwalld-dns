@@ -1,0 +1,26 @@
+{
+ "schema": 1,
+ "revision": 1,
+ "user": {
+  "name": "fixture-admin",
+  "password_hash": "$argon2id$v=19$m=32768,t=3,p=1$AAECAwQFBgcICQoLDA0ODw$ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8",
+  "totp_secret": null,
+  "last_totp_step": null
+ },
+ "tokens": [
+  {
+   "id": "00000000000000000000000000000001",
+   "name": "fixture-token-1",
+   "role": "read_only",
+   "expires_at": 4102444800,
+   "digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
+  {
+   "id": "00000000000000000000000000000001",
+   "name": "fixture-token-1",
+   "role": "operator",
+   "expires_at": 4102444800,
+   "digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  }
+ ]
+}

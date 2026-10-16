@@ -1,8 +1,9 @@
 # DNS-037 Prepare public identity-document parser fixtures
 
-Status: Draft; not selected for implementation in the remaining window.
-Story: DNS-037 in the [backlog](../planning/backlog.md).
-Author: Codex coordinator, 2026-10-15; design review pending.
+Status: Implemented. Story: DNS-037 in the [backlog](../planning/backlog.md).
+Author: Codex coordinator, 2026-10-15; coordinator self-review against file.rs/
+crypto.rs 2026-10-16. Separate read-only agent review accepted 2026-10-16, AFTER
+implementation (deviation from the Ready gate below; recorded, not hidden).
 
 ## Grounding and proposed boundary
 
@@ -18,9 +19,8 @@ string reaches the successful branch. Construct dummy fixed salt/output bytes in
 the supported Argon2id v19 PHC shape (m=32768,t=3,p=1), without deriving a password.
 Use exactly 16 decoded salt bytes and 32 output bytes.
 All bytes are public test data and must never initialize a running identity store.
-Proposed worker ownership: new fuzz/seeds/identity/ inputs (each <=4 KiB,
-aggregate <=32 KiB) and crates/app/tests/identity_seeds.rs (<=200 lines).
-Coordinator owns this spec and shared records; no existing auth code is worker-owned.
+Ownership: new fuzz/seeds/identity/ inputs (each <=4 KiB, aggregate <=32 KiB) and
+crates/app/tests/identity_seeds.rs (<=200 lines); no existing auth code changes.
 
 Cover schema/revision, user/token names of 1..128 UTF-8 bytes without controls,
 optional TOTP/replay consistency, each role, unique lowercase token IDs, lowercase
@@ -45,3 +45,11 @@ seed a fresh ignored corpus, bound input/RSS/runtime/output and preserve failure
 Run actual replay plus required local/security/compatibility checks. No independent
 security approval or deployment claim follows. Stop at the session limit rather
 than beginning an unverifiable fixture packet.
+
+Implemented 2026-10-16: fifteen dummy seeds (5,791 bytes) and six actual-API replay
+tests. Both valid seeds pass validate_document; every invalid seed asserts its exact
+guard message; label 128/129, tokens 64/65, TOTP 64/65 decoded bytes, decoded
+salt/output lengths and 65536/65537-byte bounds are exact. Fresh rebuilt seeded
+ASAN: 56,335,827 runs/601 s, exit 0, no artifact (coverage 826 at init, 2,112
+final). Required gates, audit/deny pass. Separate review accepted with doc wording
+fixes and two added checks (empty name, uppercase digest), now included.

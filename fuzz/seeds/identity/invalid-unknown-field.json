@@ -1,0 +1,12 @@
+{
+ "schema": 1,
+ "revision": 1,
+ "user": {
+  "name": "fixture-admin",
+  "password_hash": "$argon2id$v=19$m=32768,t=3,p=1$AAECAwQFBgcICQoLDA0ODw$ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8",
+  "totp_secret": null,
+  "last_totp_step": null,
+  "role": "administrator"
+ },
+ "tokens": []
+}

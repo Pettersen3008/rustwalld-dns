@@ -1,0 +1,6 @@
+{
+ "schema": 1,
+ "revision": 1,
+ "user": {
+  "name": "fixture-admin",
+  "password_hash": "$argon2id$v=19$m=32768,t=3,p=1

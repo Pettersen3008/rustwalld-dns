@@ -199,9 +199,8 @@ there is no plaintext fallback. All listener ports must be distinct. The bearer
 token remains required on management routes. Restrict firewall/VPN access to the
 operator network. Source-IP admission in `policy.allowed_clients` must explicitly
 cover clients of LAN DNS listeners. Bindings select policy; they never grant access.
-Plain UDP from other sources is dropped silently; plain TCP connections from them
-are closed at accept before taking a connection slot. DoT/DoH still complete the
-TLS handshake before admission (DNS-041 tracks moving that check earlier).
+Plain UDP from other sources is dropped silently. Plain TCP, DoT and DoH connections
+from them are closed at accept, before a connection slot or TLS handshake.
 For container deployments mount the private key read-only and publish the chosen
 TCP ports explicitly. Never publish a plaintext management listener to a LAN.
 
@@ -209,7 +208,8 @@ DoH uses `https://dns.home.arpa/dns-query`. POST carries an
 `application/dns-message` body; GET carries unpadded base64url in the `dns`
 parameter. HTTP/2 and HTTP/1.1 are supported. Responses use wire DNS and
 `Cache-Control: no-store`. DNS failures such as SERVFAIL remain DNS responses;
-invalid HTTP bodies, media types, admission and hostnames produce HTTP failures.
+invalid HTTP bodies, media types and hostnames produce HTTP failures. A connection
+whose source stops being admitted after a policy change receives 403.
 POST bodies are limited to 65535 bytes, GET query strings to 8192 bytes.
 `X-Real-IP` and forwarding headers are ignored; a TLS proxy's TCP source identity
 selects its policy, so direct encrypted ingress preserves per-client policies.

@@ -608,7 +608,10 @@ fmt, strict Clippy, 509 workspace tests and secure_ingress pass. Evidence: targe
 
 ### DNS-041 Admit encrypted DNS peers before the TLS handshake — E4 — S
 
-Status: Backlog. Priority: 6. Dependencies: DNS-040.
+Status: Done. Priority: 6. Dependencies: DNS-040. Sprint: 11.
+Spec: [encrypted pre-admission](../specs/DNS-041-encrypted-preadmission.md).
+Accepted: listener and end-to-end wiring regressions fail before and pass after; 510
+workspace tests, strict Clippy and separate security review pass. Evidence: target/review/sprint-10/dns-041/.
 Grounding: SecureListener takes a slot and runs a TLS handshake (up to 5 s) for every
 peer. DoT checks admission after the handshake; DoH checks it per HTTP request (403).
 Non-admitted peers can therefore occupy handshake slots and CPU.

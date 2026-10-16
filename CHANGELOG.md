@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Close DoT/DoH connections from non-admitted sources before a slot or TLS handshake.
+  New non-admitted DoH connections are closed instead of receiving HTTP 403
+  (DNS-041).
 - Close plain DNS-over-TCP connections from sources outside `allowed_clients` at
   accept, so non-admitted peers can no longer hold `max_tcp_connections` slots
   for the idle timeout and starve admitted TCP clients (DNS-040).

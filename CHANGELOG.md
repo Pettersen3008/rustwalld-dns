@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Close plain DNS-over-TCP connections from sources outside `allowed_clients` at
+  accept, so non-admitted peers can no longer hold `max_tcp_connections` slots
+  for the idle timeout and starve admitted TCP clients (DNS-040).
+- Exercise the appliance pipeline across a routed hop on three disposable VMs:
+  path/admission proof, qualification, sentinel, cancellation and a declared
+  routed-link fault with recovery (DNS-039).
+
 - Add bounded offline reconciliation of saved soak reports, distinguishing passing,
   failed and incomplete evidence while retaining provenance/coverage limits.
 - Open native soak run/sample leaves without following symlinks or waiting for FIFO

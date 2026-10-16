@@ -586,13 +586,36 @@ separate read-only review fixes applied. Evidence: target/review/sprint-09/dns-0
 
 ### DNS-039 Exercise routed reference-profile mechanics — E4 — M
 
-Status: Ready. Priority: 7. Dependencies: DNS-026, DNS-031. Sprint: 10.
+Status: Done. Priority: 7. Dependencies: DNS-026, DNS-031. Sprint: 10.
 Outcome: the existing appliance/driver/collector pipeline works unchanged when the
 client and upstream fixture sit behind a routed hop on disposable VMs.
 Acceptance: path and admission proof, pilot, <=15-minute 20/100-QPS qualification,
 wrong-oracle, cancellation and routed-link fault/recovery runs, offline verification
 and verified teardown. Does not satisfy DNS-021's representative criterion.
 Spec: [routed mechanics](../specs/DNS-039-routed-reference-mechanics.md).
+Accepted: all seven items on three disposable VMs; separate evidence review accepted
+with fixes recorded in the spec. Found DNS-040. Evidence: target/review/sprint-10/.
+
+### DNS-040 Close non-admitted plain TCP peers at accept — E4 — S
+
+Status: Done. Priority: 6 (defect found in acceptance). Dependencies: DNS-039. Sprint: 10.
+Defect: the TCP accept loop took a max_tcp_connections slot before admission. A
+source outside allowed_clients could hold every slot for the idle timeout and
+starve admitted TCP clients. Fix: check the active snapshot's permits() at accept;
+per-query admission still applies to policy changes on open connections.
+Accepted: tcp_admission regression fails before the fix (exit 101) and passes after;
+fmt, strict Clippy, 509 workspace tests and secure_ingress pass. Evidence: target/review/sprint-10/dns-040/.
+
+### DNS-041 Admit encrypted DNS peers before the TLS handshake — E4 — S
+
+Status: Backlog. Priority: 6. Dependencies: DNS-040.
+Grounding: SecureListener takes a slot and runs a TLS handshake (up to 5 s) for every
+peer. DoT checks admission after the handshake; DoH checks it per HTTP request (403).
+Non-admitted peers can therefore occupy handshake slots and CPU.
+Proposal: an optional admission predicate on SecureListener for DoT/DoH only, never
+the management API. Acceptance must decide the public DoH contract change: new
+non-admitted connections close instead of receiving HTTP 403, while policy changes on
+an open connection still return 403. Requires a regression and secure_ingress updates.
 
 ## Deferred ideas
 

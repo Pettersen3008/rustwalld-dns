@@ -121,3 +121,13 @@ an independent client on an isolated routed test network, starting with syntheti
 20/100-QPS UDP80/TCP20. The exercised link above is private Ethernet, not that
 routed path; actual household rates/device counts remain unmeasured. No 24-hour
 run or persistent scheduler has started.
+
+## Routed reference-profile mechanics (Sprint 10)
+
+DNS-039 repeated the mechanics across one routed hop on three new disposable guests.
+A filtered router guest connects them through QEMU unix-stream links; there is no NAT
+and no host bridge. Path, admission, qualification, sentinel, cancellation and a
+declared routed-link fault with recovery all passed. See the
+[DNS-039 spec](../specs/DNS-039-routed-reference-mechanics.md) for results and
+limitations. This is still synthetic: it is not the operator's physical path,
+hardware or observed workload, so DNS-021 remains open.

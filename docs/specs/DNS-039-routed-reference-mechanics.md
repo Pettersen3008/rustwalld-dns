@@ -1,6 +1,6 @@
 # DNS-039 Exercise routed reference-profile mechanics
 
-Status: Ready. Story: DNS-039 in the [backlog](../planning/backlog.md).
+Status: Implemented. Story: DNS-039 in the [backlog](../planning/backlog.md).
 Author: Claude coordinator, 2026-10-16; self-reviewed against the DNS-021 spec,
 soak-lab contract and Sprint 07/08 lab tooling; separate read-only design review
 2026-10-16 BEFORE implementation: ready-with-changes, all ten changes applied below.
@@ -87,4 +87,27 @@ and never placed in arguments or the run record.
 
 ## Decisions and outcome
 
-Pending execution.
+Executed 2026-10-16 on 26f5f0b (image rustwalld-dns:routed-26f5f0b) by one worker
+agent; separate read-only evidence review accepted it with wording fixes, recorded here.
+All seven items pass. Pilot 500/500; qualification 3400/3400 (p50 342 us, p99 920 us,
+max 4.6 ms); sentinel `wrong_answer`; cancel `cancelled` with sent 40 and cancelled 0,
+so no in-flight cancellation is claimed. Fault `unexpected_timeout: lane 0, phase
+link-fault`, about 4.0 s into the phase with a 9.3 s outage, then a 500/500 follow-up.
+Verifier exit codes match the table, and teardown and untouched sibling VMs were verified.
+
+Limitations and deviations:
+
+- nftables is absent from the base image. A pinned host bundle was uploaded with
+  hashes checked: Arch nftables 1:1.1.7-3, libnftnl 1.3.2-1, libmnl 1.0.5-2 and
+  jansson 2.15.1-1.
+- The fault reached only a locally answered lane, so no upstream traffic crossed
+  the outage. Lane order is deterministic by weight.
+- The router drop rule was never hit; all admission drops happened at the appliance.
+- Cache peak 128 equals the configured capacity, so that budget is uninformative.
+- Three earlier boot attempts failed on harness defects. The teardown of boot-02
+  was not verified at that time; nothing remained afterwards.
+- The admission request counter moved only for the admitted control query.
+- Non-admitted TCP completed the handshake and then closed with no reply. That
+  exposed slot exhaustion, which is fixed by DNS-040.
+
+Evidence: target/review/sprint-10/routed-lab/ (review/ holds the re-run verifiers).

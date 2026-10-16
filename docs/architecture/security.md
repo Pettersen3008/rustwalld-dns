@@ -199,6 +199,9 @@ there is no plaintext fallback. All listener ports must be distinct. The bearer
 token remains required on management routes. Restrict firewall/VPN access to the
 operator network. Source-IP admission in `policy.allowed_clients` must explicitly
 cover clients of LAN DNS listeners. Bindings select policy; they never grant access.
+Plain UDP from other sources is dropped silently; plain TCP connections from them
+are closed at accept before taking a connection slot. DoT/DoH still complete the
+TLS handshake before admission (DNS-041 tracks moving that check earlier).
 For container deployments mount the private key read-only and publish the chosen
 TCP ports explicitly. Never publish a plaintext management listener to a LAN.
 

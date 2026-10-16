@@ -148,6 +148,11 @@ impl Server {
                             continue;
                         }
                     };
+                    // Close non-admitted peers before they can hold a slot
+                    // that admitted clients need; queries recheck per frame.
+                    if !self.engine.active().permits(client.ip()) {
+                        continue;
+                    }
                     let Ok(permit) = tcp_limit.clone().try_acquire_owned() else {
                         metrics.tcp_overloads.fetch_add(1, Ordering::Relaxed);
                         continue;
